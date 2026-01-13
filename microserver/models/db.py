@@ -11,7 +11,7 @@ def init_db():
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
         conn = sqlite3.connect(
-            current_app.config["DATABASE"],
+            current_app.config["DATABASE_URI"],
             timeout=30,
         )
         conn.row_factory = sqlite3.Row
