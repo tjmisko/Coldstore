@@ -66,12 +66,12 @@ See [architecture.md](architecture.md) for the full system design.
 - [x] Mobile responsive with sidebar overlay on small screens
 - [x] Dev proxy to Go server on :8090
 
-## Phase 6: Polish + Deploy
+## Phase 6: Polish + Deploy [DONE]
 
-- [ ] Embed React build in Go binary (`//go:embed`)
-- [ ] Structured logging with `slog`
-- [ ] Makefile install target
-- [ ] Deploy to microserver, enable systemd unit
+- [x] Embed React build in Go binary (`//go:embed` with SPA fallback routing)
+- [x] Structured logging with `slog` (already used throughout)
+- [x] Makefile: `build` (frontend + Go), `dev`, `dev-web`, `test`, `install`, `clean`
+- [ ] Deploy to microserver, enable systemd unit (manual step)
 
 ## Storage Setup (Manual, One-Time)
 
