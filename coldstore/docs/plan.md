@@ -30,15 +30,17 @@ See [architecture.md](architecture.md) for the full system design.
 - [x] Signal handling, graceful shutdown
 - [x] Tests: offloader/restorer round-trip, cross-fs copy, quota ordering, grace period, persistent paths
 
-## Phase 3: API Server
+## Phase 3: API Server [DONE]
 
-- [ ] HTTP server with `net/http` (Go 1.22+ routing)
-- [ ] File listing with filtering, sorting, pagination
-- [ ] Download endpoint (serve from syncthing dir or cold storage)
-- [ ] Restore endpoint (trigger move back to syncthing)
-- [ ] Folder config CRUD endpoints
-- [ ] Status/dashboard endpoint (storage usage, file counts)
-- [ ] Tests: handler tests with httptest
+- [x] HTTP server with `net/http` (Go 1.22+ routing)
+- [x] File listing with filtering (folder, status, extension, search), sorting, pagination
+- [x] Download endpoint (serves from syncthing dir or cold storage based on status)
+- [x] Restore endpoint (triggers move back to syncthing)
+- [x] Folder config CRUD endpoints
+- [x] Persistent path management (list, add, delete)
+- [x] Status/dashboard endpoint (file counts, folder sizes, cold storage free space)
+- [x] API server wired into daemon main.go (runs in background goroutine)
+- [x] Tests: httptest-based handler tests for all endpoints
 
 ## Phase 4: Thumbnails
 

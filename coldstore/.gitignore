@@ -1,4 +1,4 @@
-coldstore
+/coldstore
 *.db
 *.db-shm
 *.db-wal
