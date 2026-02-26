@@ -11,5 +11,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/v1/folders/{label}/persistent", s.handleAddPersistent)
 	s.mux.HandleFunc("DELETE /api/v1/folders/{label}/persistent/{id}", s.handleDeletePersistent)
 
+	s.mux.HandleFunc("GET /api/v1/thumbnails/", s.handleThumbnail)
+
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 }

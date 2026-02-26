@@ -3,6 +3,7 @@ package catalog
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -259,6 +260,49 @@ func (c *Catalog) LogEvent(eventType, folder, path, details string) error {
 	_, err := c.db.Exec(`INSERT INTO events (event_type, folder, path, details) VALUES (?, ?, ?, ?)`,
 		eventType, folder, path, details)
 	return err
+}
+
+// UpdateThumbnailPath sets the thumbnail_path for a file.
+func (c *Catalog) UpdateThumbnailPath(id int64, thumbPath string) error {
+	_, err := c.db.Exec(`UPDATE files SET thumbnail_path = ? WHERE id = ?`, thumbPath, id)
+	return err
+}
+
+// FilesNeedingThumbnails returns files that have a thumbnailable extension but no thumbnail_path set.
+func (c *Catalog) FilesNeedingThumbnails(extensions []string) ([]FileRecord, error) {
+	if len(extensions) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(extensions))
+	args := make([]any, len(extensions))
+	for i, ext := range extensions {
+		placeholders[i] = "?"
+		args[i] = ext
+	}
+
+	query := `SELECT id, folder_label, relative_path, filename, extension, mime_type,
+	                 size_bytes, file_mtime, first_seen, archived_at, status, thumbnail_path, content_hash
+	          FROM files
+	          WHERE thumbnail_path = '' AND extension IN (` + strings.Join(placeholders, ",") + `)
+	          AND status IN ('synced', 'archived')
+	          ORDER BY file_mtime DESC`
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []FileRecord
+	for rows.Next() {
+		f, err := scanFileRecordRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, *f)
+	}
+	return files, rows.Err()
 }
 
 // FileCount returns the total number of files matching the given status (or all if empty).

@@ -11,9 +11,17 @@ import (
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
+	"github.com/tjmisko/coldstore/internal/thumbnail"
 )
 
 const minFreeSpacePercent = 5.0
+
+// thumbnailExts are all extensions the thumbnail generator supports.
+var thumbnailExts = []string{
+	".jpg", ".jpeg", ".png", ".webp",
+	".heif", ".heic",
+	".mp4", ".mov", ".avi", ".mkv", ".webm",
+}
 
 type Daemon struct {
 	cfg       *config.Config
@@ -22,6 +30,7 @@ type Daemon struct {
 	scanner   *Scanner
 	offloader *Offloader
 	restorer  *Restorer
+	thumbGen  *thumbnail.Generator
 }
 
 func New(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Daemon {
@@ -32,6 +41,7 @@ func New(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Daemon 
 		scanner:   NewScanner(cfg, cat, logger),
 		offloader: NewOffloader(cfg, cat, logger),
 		restorer:  NewRestorer(cfg, cat, logger),
+		thumbGen:  thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger),
 	}
 }
 
@@ -40,6 +50,7 @@ func (d *Daemon) Run() error {
 	if err := d.scanner.ScanAll(); err != nil {
 		d.logger.Error("initial scan failed", "error", err)
 	}
+	d.generateThumbnails()
 
 	scanTicker := time.NewTicker(time.Duration(d.cfg.Daemon.ScanIntervalMinutes) * time.Minute)
 	defer scanTicker.Stop()
@@ -60,6 +71,7 @@ func (d *Daemon) Run() error {
 			if err := d.scanner.ScanAll(); err != nil {
 				d.logger.Error("catalog sync scan failed", "error", err)
 			}
+			d.generateThumbnails()
 		case sig := <-sigCh:
 			d.logger.Info("received signal, shutting down", "signal", sig)
 			return nil
@@ -162,4 +174,36 @@ func (d *Daemon) enforceFolder(folder config.FolderConfig) error {
 	}
 
 	return nil
+}
+
+func (d *Daemon) generateThumbnails() {
+	files, err := d.cat.FilesNeedingThumbnails(thumbnailExts)
+	if err != nil {
+		d.logger.Error("querying files for thumbnails", "error", err)
+		return
+	}
+
+	if len(files) == 0 {
+		return
+	}
+
+	d.logger.Info("generating thumbnails", "count", len(files))
+
+	// Build a map of folder label -> syncthing path for quick lookup
+	folderPaths := make(map[string]string, len(d.cfg.Folders))
+	for _, f := range d.cfg.Folders {
+		folderPaths[f.Label] = f.Path
+	}
+
+	sourcePathFn := func(f *catalog.FileRecord) string {
+		switch f.Status {
+		case catalog.StatusArchived:
+			return filepath.Join(d.cfg.Storage.ColdStoragePath, "archive", f.FolderLabel, f.RelativePath)
+		default:
+			return filepath.Join(folderPaths[f.FolderLabel], f.RelativePath)
+		}
+	}
+
+	d.thumbGen.ProcessQueue(files, sourcePathFn, d.cfg.Daemon.ThumbnailWorkers)
+	d.logger.Info("thumbnail generation complete", "processed", len(files))
 }

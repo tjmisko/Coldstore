@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 )
@@ -82,6 +83,18 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, file.Filename))
 	http.ServeFile(w, r, filePath)
+}
+
+func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	// URL: /api/v1/thumbnails/{folder}/{relative/path}.thumb.jpg
+	thumbPath := strings.TrimPrefix(r.URL.Path, "/api/v1/thumbnails/")
+	if thumbPath == "" {
+		writeError(w, http.StatusBadRequest, "missing thumbnail path")
+		return
+	}
+
+	fullPath := filepath.Join(s.cfg.Storage.ColdStoragePath, "thumbnails", thumbPath)
+	http.ServeFile(w, r, fullPath)
 }
 
 func (s *Server) folderPath(label string) string {
