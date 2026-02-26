@@ -13,20 +13,22 @@ See [architecture.md](architecture.md) for the full system design.
 - [x] Tests: config parsing, catalog CRUD, scanner filtering/detection
 - [x] systemd unit file, example config
 
-## Phase 2: Daemon + Offloading
+## Phase 2: Daemon + Offloading [DONE]
 
-- [ ] Offloader: move files from syncthing dir to cold storage archive
-  - Cross-filesystem fallback (copy + verify hash + delete)
+- [x] Offloader: move files from syncthing dir to cold storage archive
+  - Cross-filesystem fallback (copy + SHA-256 verify + delete)
   - Preserve relative path structure in archive
-- [ ] Quota enforcement loop in daemon
-  - Sort by `max(mtime, atime)` ascending
+- [x] Quota enforcement loop in daemon
+  - Sort by mtime ascending (oldest first)
   - Skip persistent paths and grace-period files
+  - Re-check mtime on disk before each move
   - Move files until folder is under budget
-- [ ] Restorer: move files from cold storage back to syncthing dir
-- [ ] Catalog reconciliation: detect re-appeared files, update statuses
-- [ ] Disk space checks before offloading (pause if < 5% free)
-- [ ] Signal handling improvements, graceful shutdown
-- [ ] Tests: offloader cross-fs logic, quota enforcement ordering, reconciliation
+- [x] Restorer: move files from cold storage back to syncthing dir
+  - Status transitions: archived -> restoring -> synced
+  - Clean up empty parent directories in archive after restore
+- [x] Disk space checks before offloading (pause if < 5% free)
+- [x] Signal handling, graceful shutdown
+- [x] Tests: offloader/restorer round-trip, cross-fs copy, quota ordering, grace period, persistent paths
 
 ## Phase 3: API Server
 
