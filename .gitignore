@@ -1,5 +1,13 @@
 .env
-CLAUDE.md
-instance/database.db
 
-**/__pycache__/
+# Go binary
+/coldstore
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend build artifacts
+internal/api/dist/*
+!internal/api/dist/.gitkeep

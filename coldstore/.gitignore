@@ -1,6 +1,0 @@
-/coldstore
-*.db
-*.db-shm
-*.db-wal
-internal/api/dist/*
-!internal/api/dist/.gitkeep
