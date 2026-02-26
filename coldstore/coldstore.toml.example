@@ -1,0 +1,29 @@
+[storage]
+cold_storage_path = "/srv/coldstore"
+
+[daemon]
+scan_interval_minutes = 15
+catalog_sync_interval_minutes = 30
+thumbnail_workers = 2
+grace_period_minutes = 30
+
+[server]
+listen_addr = "0.0.0.0:8090"
+
+[syncthing]
+api_url = "http://127.0.0.1:8384"
+api_key = ""
+
+[[folders]]
+label = "CameraRoll"
+syncthing_id = "xxxxx-xxxxx"
+path = "/home/tjmisko/CameraRoll"
+budget = "20GB"
+persistent = ["Albums/Starred/*"]
+
+[[folders]]
+label = "Books"
+syncthing_id = "yyyyy-yyyyy"
+path = "/home/tjmisko/Books"
+budget = "20GB"
+persistent = ["Favorites/*"]

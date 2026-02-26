@@ -1,0 +1,15 @@
+[Unit]
+Description=Coldstore - Syncthing Archive Daemon
+After=network.target syncthing.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/coldstore --config /etc/coldstore/coldstore.toml
+Restart=on-failure
+User=tjmisko
+WorkingDirectory=/srv/coldstore
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
