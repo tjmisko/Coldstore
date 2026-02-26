@@ -42,22 +42,29 @@ See [architecture.md](architecture.md) for the full system design.
 - [x] API server wired into daemon main.go (runs in background goroutine)
 - [x] Tests: httptest-based handler tests for all endpoints
 
-## Phase 4: Thumbnails
+## Phase 4: Thumbnails [DONE]
 
-- [ ] Image thumbnails (imaging library, 400px, JPEG q80)
-- [ ] Video frame extraction (ffmpeg)
-- [ ] PDF first-page rendering (pdftoppm)
-- [ ] Worker pool integrated with catalog sync
-- [ ] Thumbnail serving endpoint
+- [x] Image thumbnails (JPEG/PNG/WebP via imaging library, 400px, JPEG q80)
+- [x] HEIF/HEIC support via ffmpeg decoding
+- [x] Video frame extraction via ffmpeg
+- [x] Worker pool integrated with daemon catalog sync (configurable worker count)
+- [x] Thumbnail serving endpoint
+- [x] Generates for both synced and archived files
+- [x] Tests: CanThumbnail, JPEG/PNG generation, ProcessQueue worker pool
 
-## Phase 5: React Frontend
+## Phase 5: React Frontend [DONE]
 
-- [ ] Vite + React + TypeScript project setup
-- [ ] Gallery view with infinite scroll (Camera Roll)
-- [ ] File browser tree/list view (Books/Documents)
-- [ ] File detail modal with restore/download actions
-- [ ] Config panel for budgets and persistent paths
-- [ ] Status bar with storage usage
+- [x] Vite + React + TypeScript + Tailwind CSS (dark mode only)
+- [x] App shell with responsive sidebar (folders + view modes)
+- [x] Gallery view with infinite scroll, thumbnail grid
+- [x] Full-screen lightbox with prev/next, metadata panel, restore/download
+- [x] Keyboard nav: arrows, Escape, Space (toggle info), PageUp/Down, Home/End
+- [x] Touch/swipe support: horizontal swipe prev/next, swipe down to close
+- [x] File browser table view (auto-selected for non-image folders)
+- [x] Config panel with budget display and persistent path editor
+- [x] Status bar with per-folder usage bars, cold storage free space
+- [x] Mobile responsive with sidebar overlay on small screens
+- [x] Dev proxy to Go server on :8090
 
 ## Phase 6: Polish + Deploy
 
