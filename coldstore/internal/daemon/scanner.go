@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
@@ -22,7 +24,10 @@ func NewScanner(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *
 }
 
 // ScanAll walks all configured syncthing folders and populates the catalog.
+// It first recovers any files left in the transient "archiving" state from a
+// previous crash, then scans each folder.
 func (s *Scanner) ScanAll() error {
+	s.recoverArchiving()
 	for _, folder := range s.cfg.Folders {
 		if err := s.ScanFolder(folder); err != nil {
 			s.logger.Error("scan failed for folder", "folder", folder.Label, "error", err)
@@ -30,6 +35,27 @@ func (s *Scanner) ScanAll() error {
 		}
 	}
 	return nil
+}
+
+// recoverArchiving resolves files stuck in "archiving" state after a crash.
+// If the file exists in the archive directory, it's marked "archived".
+// Otherwise, it's reverted to "synced" (the source was never moved).
+func (s *Scanner) recoverArchiving() {
+	files, err := s.cat.ArchivingFiles()
+	if err != nil {
+		s.logger.Error("querying archiving files for recovery", "error", err)
+		return
+	}
+	for _, f := range files {
+		archivePath := filepath.Join(s.cfg.Storage.ColdStoragePath, "archive", f.FolderLabel, f.RelativePath)
+		if _, err := os.Stat(archivePath); err == nil {
+			s.cat.UpdateFileStatus(f.ID, catalog.StatusArchived)
+			s.logger.Info("recovered archiving file as archived", "path", f.RelativePath)
+		} else {
+			s.cat.UpdateFileStatus(f.ID, catalog.StatusSynced)
+			s.logger.Info("recovered archiving file as synced", "path", f.RelativePath)
+		}
+	}
 }
 
 // ScanFolder walks a single syncthing folder, upserting files and marking missing ones.
@@ -85,6 +111,13 @@ func (s *Scanner) ScanFolder(folder config.FolderConfig) error {
 		ext := strings.ToLower(filepath.Ext(info.Name()))
 		mimeType := mime.TypeByExtension(ext)
 
+		// Read atime from the underlying syscall stat.
+		// Accuracy depends on mount options (relatime, noatime, etc.).
+		var atime time.Time
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			atime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
+		}
+
 		record := &catalog.FileRecord{
 			FolderLabel:  folder.Label,
 			RelativePath: relPath,
@@ -93,6 +126,7 @@ func (s *Scanner) ScanFolder(folder config.FolderConfig) error {
 			MimeType:     mimeType,
 			SizeBytes:    info.Size(),
 			FileMtime:    info.ModTime(),
+			FileAtime:    atime,
 			Status:       catalog.StatusSynced,
 		}
 

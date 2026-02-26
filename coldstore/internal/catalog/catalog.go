@@ -34,18 +34,19 @@ func (c *Catalog) Close() error {
 // UpsertFile inserts or updates a file record based on (folder_label, relative_path).
 func (c *Catalog) UpsertFile(f *FileRecord) error {
 	_, err := c.db.Exec(`
-		INSERT INTO files (folder_label, relative_path, filename, extension, mime_type, size_bytes, file_mtime, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO files (folder_label, relative_path, filename, extension, mime_type, size_bytes, file_mtime, file_atime, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(folder_label, relative_path) DO UPDATE SET
 			filename = excluded.filename,
 			size_bytes = excluded.size_bytes,
 			file_mtime = excluded.file_mtime,
+			file_atime = excluded.file_atime,
 			mime_type = excluded.mime_type,
 			status = CASE
-				WHEN files.status = 'missing' THEN 'synced'
+				WHEN files.status IN ('missing', 'archived') THEN 'synced'
 				ELSE files.status
 			END
-	`, f.FolderLabel, f.RelativePath, f.Filename, f.Extension, f.MimeType, f.SizeBytes, f.FileMtime, f.Status)
+	`, f.FolderLabel, f.RelativePath, f.Filename, f.Extension, f.MimeType, f.SizeBytes, f.FileMtime, f.FileAtime, f.Status)
 	return err
 }
 
@@ -53,7 +54,7 @@ func (c *Catalog) UpsertFile(f *FileRecord) error {
 func (c *Catalog) GetFile(folder, relPath string) (*FileRecord, error) {
 	row := c.db.QueryRow(`
 		SELECT id, folder_label, relative_path, filename, extension, mime_type,
-		       size_bytes, file_mtime, first_seen, archived_at, status, thumbnail_path, content_hash
+		       size_bytes, file_mtime, file_atime, first_seen, archived_at, status, thumbnail_path, content_hash
 		FROM files WHERE folder_label = ? AND relative_path = ?
 	`, folder, relPath)
 	return scanFileRecord(row)
@@ -63,7 +64,7 @@ func (c *Catalog) GetFile(folder, relPath string) (*FileRecord, error) {
 func (c *Catalog) GetFileByID(id int64) (*FileRecord, error) {
 	row := c.db.QueryRow(`
 		SELECT id, folder_label, relative_path, filename, extension, mime_type,
-		       size_bytes, file_mtime, first_seen, archived_at, status, thumbnail_path, content_hash
+		       size_bytes, file_mtime, file_atime, first_seen, archived_at, status, thumbnail_path, content_hash
 		FROM files WHERE id = ?
 	`, id)
 	return scanFileRecord(row)
@@ -82,7 +83,7 @@ type FileQuery struct {
 // ListFiles queries files with filtering, sorting, and pagination.
 func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	query := `SELECT id, folder_label, relative_path, filename, extension, mime_type,
-	                 size_bytes, file_mtime, first_seen, archived_at, status, thumbnail_path, content_hash
+	                 size_bytes, file_mtime, file_atime, first_seen, archived_at, status, thumbnail_path, content_hash
 	          FROM files WHERE 1=1`
 	var args []any
 
@@ -147,6 +148,29 @@ func (c *Catalog) UpdateFileStatus(id int64, status FileStatus) error {
 	return err
 }
 
+// ArchivingFiles returns all files stuck in the transient "archiving" state.
+func (c *Catalog) ArchivingFiles() ([]FileRecord, error) {
+	rows, err := c.db.Query(`
+		SELECT id, folder_label, relative_path, filename, extension, mime_type,
+		       size_bytes, file_mtime, file_atime, first_seen, archived_at, status, thumbnail_path, content_hash
+		FROM files WHERE status = 'archiving'
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []FileRecord
+	for rows.Next() {
+		f, err := scanFileRecordRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, *f)
+	}
+	return files, rows.Err()
+}
+
 // MarkMissingSyncedFiles marks all synced files in a folder as missing,
 // used before a scan to detect files that have disappeared.
 func (c *Catalog) MarkMissingSyncedFiles(folder string) error {
@@ -169,10 +193,10 @@ func (c *Catalog) FolderSyncedSize(folder string) (int64, error) {
 func (c *Catalog) OffloadCandidates(folder string) ([]FileRecord, error) {
 	rows, err := c.db.Query(`
 		SELECT id, folder_label, relative_path, filename, extension, mime_type,
-		       size_bytes, file_mtime, first_seen, archived_at, status, thumbnail_path, content_hash
+		       size_bytes, file_mtime, file_atime, first_seen, archived_at, status, thumbnail_path, content_hash
 		FROM files
 		WHERE folder_label = ? AND status = 'synced'
-		ORDER BY file_mtime ASC
+		ORDER BY MAX(file_mtime, file_atime) ASC
 	`, folder)
 	if err != nil {
 		return nil, err
@@ -282,7 +306,7 @@ func (c *Catalog) FilesNeedingThumbnails(extensions []string) ([]FileRecord, err
 	}
 
 	query := `SELECT id, folder_label, relative_path, filename, extension, mime_type,
-	                 size_bytes, file_mtime, first_seen, archived_at, status, thumbnail_path, content_hash
+	                 size_bytes, file_mtime, file_atime, first_seen, archived_at, status, thumbnail_path, content_hash
 	          FROM files
 	          WHERE thumbnail_path = '' AND extension IN (` + strings.Join(placeholders, ",") + `)
 	          AND status IN ('synced', 'archived')
@@ -321,7 +345,7 @@ func scanFileRecord(row *sql.Row) (*FileRecord, error) {
 	var f FileRecord
 	var archivedAt sql.NullTime
 	err := row.Scan(&f.ID, &f.FolderLabel, &f.RelativePath, &f.Filename, &f.Extension,
-		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FirstSeen, &archivedAt,
+		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FileAtime, &f.FirstSeen, &archivedAt,
 		&f.Status, &f.ThumbnailPath, &f.ContentHash)
 	if err != nil {
 		return nil, err
@@ -336,7 +360,7 @@ func scanFileRecordRows(rows *sql.Rows) (*FileRecord, error) {
 	var f FileRecord
 	var archivedAt sql.NullTime
 	err := rows.Scan(&f.ID, &f.FolderLabel, &f.RelativePath, &f.Filename, &f.Extension,
-		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FirstSeen, &archivedAt,
+		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FileAtime, &f.FirstSeen, &archivedAt,
 		&f.Status, &f.ThumbnailPath, &f.ContentHash)
 	if err != nil {
 		return nil, err

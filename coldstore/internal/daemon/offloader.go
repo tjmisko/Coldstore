@@ -38,7 +38,15 @@ func (o *Offloader) Offload(file *catalog.FileRecord, syncthingPath string) erro
 		return fmt.Errorf("creating archive directory: %w", err)
 	}
 
+	// Set transient "archiving" status before the move so crash recovery
+	// can detect incomplete offloads.
+	if err := o.cat.UpdateFileStatus(file.ID, catalog.StatusArchiving); err != nil {
+		return fmt.Errorf("setting archiving status: %w", err)
+	}
+
 	if err := moveFile(src, dst); err != nil {
+		// Revert status on failure
+		o.cat.UpdateFileStatus(file.ID, catalog.StatusSynced)
 		return fmt.Errorf("moving %s -> %s: %w", src, dst, err)
 	}
 

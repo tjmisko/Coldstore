@@ -6,6 +6,7 @@ type FileStatus string
 
 const (
 	StatusSynced    FileStatus = "synced"
+	StatusArchiving FileStatus = "archiving"
 	StatusArchived  FileStatus = "archived"
 	StatusRestoring FileStatus = "restoring"
 	StatusMissing   FileStatus = "missing"
@@ -20,6 +21,7 @@ type FileRecord struct {
 	MimeType      string     `json:"mime_type"`
 	SizeBytes     int64      `json:"size_bytes"`
 	FileMtime     time.Time  `json:"file_mtime"`
+	FileAtime     time.Time  `json:"file_atime"`
 	FirstSeen     time.Time  `json:"first_seen"`
 	ArchivedAt    *time.Time `json:"archived_at,omitempty"`
 	Status        FileStatus `json:"status"`

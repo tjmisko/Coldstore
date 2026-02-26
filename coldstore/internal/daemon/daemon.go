@@ -24,13 +24,14 @@ var thumbnailExts = []string{
 }
 
 type Daemon struct {
-	cfg       *config.Config
-	cat       *catalog.Catalog
-	logger    *slog.Logger
-	scanner   *Scanner
-	offloader *Offloader
-	restorer  *Restorer
-	thumbGen  *thumbnail.Generator
+	cfg                  *config.Config
+	cat                  *catalog.Catalog
+	logger               *slog.Logger
+	scanner              *Scanner
+	offloader            *Offloader
+	restorer             *Restorer
+	thumbGen             *thumbnail.Generator
+	initialScanComplete  bool
 }
 
 func New(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Daemon {
@@ -46,9 +47,22 @@ func New(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Daemon 
 }
 
 func (d *Daemon) Run() error {
-	d.logger.Info("running initial catalog scan")
-	if err := d.scanner.ScanAll(); err != nil {
-		d.logger.Error("initial scan failed", "error", err)
+	// Retry initial scan up to 3 times before entering the main loop.
+	// Quota enforcement is gated on a successful initial scan.
+	const maxRetries = 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		d.logger.Info("running initial catalog scan", "attempt", attempt)
+		if err := d.scanner.ScanAll(); err != nil {
+			d.logger.Error("initial scan failed", "error", err, "attempt", attempt)
+			if attempt < maxRetries {
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			d.logger.Warn("initial scan failed after all retries, starting without offload capability")
+		} else {
+			d.initialScanComplete = true
+		}
+		break
 	}
 	d.generateThumbnails()
 
@@ -64,12 +78,19 @@ func (d *Daemon) Run() error {
 	for {
 		select {
 		case <-scanTicker.C:
+			if !d.initialScanComplete {
+				d.logger.Warn("skipping quota enforcement: initial scan incomplete")
+				continue
+			}
 			d.logger.Info("quota enforcement tick")
-			d.enforceQuotas()
+			d.safeEnforceQuotas()
 		case <-catalogTicker.C:
 			d.logger.Info("catalog sync tick")
 			if err := d.scanner.ScanAll(); err != nil {
 				d.logger.Error("catalog sync scan failed", "error", err)
+			} else if !d.initialScanComplete {
+				d.initialScanComplete = true
+				d.logger.Info("initial scan completed on catalog sync tick")
 			}
 			d.generateThumbnails()
 		case sig := <-sigCh:
@@ -77,6 +98,17 @@ func (d *Daemon) Run() error {
 			return nil
 		}
 	}
+}
+
+// safeEnforceQuotas wraps enforceQuotas with panic recovery so a bug
+// in quota enforcement doesn't crash the entire daemon.
+func (d *Daemon) safeEnforceQuotas() {
+	defer func() {
+		if r := recover(); r != nil {
+			d.logger.Error("panic in quota enforcement", "panic", r)
+		}
+	}()
+	d.enforceQuotas()
 }
 
 func (d *Daemon) enforceQuotas() {
@@ -135,8 +167,12 @@ func (d *Daemon) enforceFolder(folder config.FolderConfig) error {
 			continue
 		}
 
-		// Skip files within grace period
-		if file.FileMtime.After(graceCutoff) {
+		// Skip files within grace period, using max(mtime, atime)
+		lastActivity := file.FileMtime
+		if file.FileAtime.After(lastActivity) {
+			lastActivity = file.FileAtime
+		}
+		if lastActivity.After(graceCutoff) {
 			continue
 		}
 
