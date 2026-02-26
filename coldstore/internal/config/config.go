@@ -30,6 +30,8 @@ type DaemonConfig struct {
 
 type ServerConfig struct {
 	ListenAddr string `toml:"listen_addr"`
+	Username   string `toml:"username"`
+	Password   string `toml:"password"`
 }
 
 type SyncthingConfig struct {

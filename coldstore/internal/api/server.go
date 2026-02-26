@@ -31,12 +31,30 @@ func NewServer(cfg *config.Config, cat *catalog.Catalog, restorer *daemon.Restor
 }
 
 func (s *Server) Handler() http.Handler {
+	if s.cfg.Server.Username != "" && s.cfg.Server.Password != "" {
+		return s.basicAuth(s.mux)
+	}
 	return s.mux
 }
 
+func (s *Server) basicAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != s.cfg.Server.Username || pass != s.cfg.Server.Password {
+			w.Header().Set("WWW-Authenticate", `Basic realm="coldstore"`)
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) ListenAndServe(addr string) error {
+	if s.cfg.Server.Username == "" || s.cfg.Server.Password == "" {
+		s.logger.Warn("API server starting without authentication")
+	}
 	s.logger.Info("API server starting", "addr", addr)
-	return http.ListenAndServe(addr, s.mux)
+	return http.ListenAndServe(addr, s.Handler())
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
