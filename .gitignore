@@ -1,7 +1,8 @@
 .env
 
-# Go binary
+# Go binaries
 /coldstore
+/seed-demo
 
 # SQLite
 *.db
@@ -9,5 +10,7 @@
 *.db-wal
 
 # Frontend build artifacts
-internal/api/dist/*
-!internal/api/dist/.gitkeep
+internal/api/dist/
+
+# Demo config
+coldstore-demo.toml

@@ -1,0 +1,13 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY coldstore /usr/local/bin/coldstore
+COPY tests/fixtures /app/fixtures
+
+ENTRYPOINT ["coldstore"]

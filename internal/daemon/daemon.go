@@ -31,19 +31,26 @@ type Daemon struct {
 	offloader            *Offloader
 	restorer             *Restorer
 	thumbGen             *thumbnail.Generator
+	spaceCheck           func(string) (float64, error)
 	initialScanComplete  bool
 }
 
 func New(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Daemon {
 	return &Daemon{
-		cfg:       cfg,
-		cat:       cat,
-		logger:    logger,
-		scanner:   NewScanner(cfg, cat, logger),
-		offloader: NewOffloader(cfg, cat, logger),
-		restorer:  NewRestorer(cfg, cat, logger),
-		thumbGen:  thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger),
+		cfg:        cfg,
+		cat:        cat,
+		logger:     logger,
+		scanner:    NewScanner(cfg, cat, logger),
+		offloader:  NewOffloader(cfg, cat, logger),
+		restorer:   NewRestorer(cfg, cat, logger),
+		thumbGen:   thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger),
+		spaceCheck: AvailableSpacePercent,
 	}
+}
+
+// SetSpaceCheck replaces the disk space check function, for testing.
+func (d *Daemon) SetSpaceCheck(fn func(string) (float64, error)) {
+	d.spaceCheck = fn
 }
 
 func (d *Daemon) Run() error {
@@ -108,10 +115,11 @@ func (d *Daemon) safeEnforceQuotas() {
 			d.logger.Error("panic in quota enforcement", "panic", r)
 		}
 	}()
-	d.enforceQuotas()
+	d.EnforceQuotas()
 }
 
-func (d *Daemon) enforceQuotas() {
+// EnforceQuotas runs quota enforcement across all configured folders.
+func (d *Daemon) EnforceQuotas() {
 	for _, folder := range d.cfg.Folders {
 		if err := d.enforceFolder(folder); err != nil {
 			d.logger.Error("quota enforcement failed", "folder", folder.Label, "error", err)
@@ -188,7 +196,7 @@ func (d *Daemon) enforceFolder(folder config.FolderConfig) error {
 		}
 
 		// Check cold storage disk space
-		freePercent, err := AvailableSpacePercent(d.cfg.Storage.ColdStoragePath)
+		freePercent, err := d.spaceCheck(d.cfg.Storage.ColdStoragePath)
 		if err != nil {
 			d.logger.Error("cannot check disk space", "error", err)
 			return fmt.Errorf("disk space check: %w", err)

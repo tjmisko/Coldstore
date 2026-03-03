@@ -176,7 +176,7 @@ func TestQuotaEnforcementOrdering(t *testing.T) {
 	}
 
 	d := New(cfg, cat, logger)
-	d.enforceQuotas()
+	d.EnforceQuotas()
 
 	// oldest.txt and middle.txt should be offloaded (9000 - 3000 = 6000, still > 5000, so offload another: 6000 - 3000 = 3000 <= 5000)
 	f1, _ := cat.GetFile("TestFolder", "oldest.txt")
@@ -219,7 +219,7 @@ func TestGracePeriodSkipsRecentFiles(t *testing.T) {
 	cat.UpsertFile(record)
 
 	d := New(cfg, cat, logger)
-	d.enforceQuotas()
+	d.EnforceQuotas()
 
 	// File should NOT be offloaded (within grace period)
 	f, _ := cat.GetFile("TestFolder", "recent.txt")
@@ -257,7 +257,7 @@ func TestPersistentPathsSkipped(t *testing.T) {
 	cat.UpsertFile(record)
 
 	d := New(cfg, cat, logger)
-	d.enforceQuotas()
+	d.EnforceQuotas()
 
 	// File should NOT be offloaded (persistent path)
 	f, _ := cat.GetFile("TestFolder", "Starred/fav.jpg")

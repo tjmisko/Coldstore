@@ -1,0 +1,31 @@
+services:
+  coldstore-test:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.test
+    command: ["--config", "/app/coldstore.toml"]
+    volumes:
+      - shared-sync:/data/sync
+      - cold-storage:/data/cold
+    ports:
+      - "8090:8090"
+    depends_on:
+      syncthing:
+        condition: service_healthy
+
+  syncthing:
+    image: syncthing/syncthing:latest
+    volumes:
+      - shared-sync:/var/syncthing/sync
+    ports:
+      - "8384:8384"
+      - "22000:22000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8384/rest/system/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  shared-sync:
+  cold-storage:
