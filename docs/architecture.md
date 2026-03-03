@@ -39,14 +39,22 @@ coldstore/
       migrations.go              # Schema
       models.go                  # FileRecord, FolderConfig structs
     thumbnail/thumbnail.go       # Image/video/PDF thumbnail generation
-    syncthing/client.go          # Syncthing REST API client
     api/
       server.go                  # HTTP server, middleware, static serving
+      static.go                  # Embedded frontend serving
       routes.go                  # Route registration
       handlers_files.go          # File listing, search, filtering
       handlers_restore.go        # Restore + download
       handlers_config.go         # Folder config CRUD
       handlers_status.go         # Dashboard stats
+      handlers_test.go           # Unit tests for API handlers
+      dist/                      # Embedded React build output
+  tests/
+    e2e/                         # End-to-end tests (Docker-based)
+    fixtures/                    # Test fixture files (images, video)
+  docker/
+    compose.test.yml             # Docker Compose for e2e test environment
+    Dockerfile.test              # Test container image
   web/                           # React frontend (Vite + TS)
   docs/                          # Documentation
   coldstore.toml.example         # Example config
@@ -104,6 +112,7 @@ GET    /api/v1/folders/{label}/persistent
 POST   /api/v1/folders/{label}/persistent
 DELETE /api/v1/folders/{label}/persistent/{id}
 GET    /api/v1/status
+POST   /api/v1/scan
 ```
 
 ## Daemon Loops
@@ -142,11 +151,13 @@ Key settings:
 - `[daemon].grace_period_minutes` -- don't offload files modified within this window
 - `[[folders]]` -- one entry per syncthing folder with label, path, budget, and persistent patterns
 
-## Implementation Phases
+## Implementation History
 
-1. **Skeleton + Catalog** (Phase 1) -- Go module, config parsing, SQLite catalog, filesystem scanner
-2. **Daemon + Offloading** (Phase 2) -- Quota enforcement, file offloader/restorer, catalog reconciliation
-3. **API Server** (Phase 3) -- HTTP server with file listing, download, restore, config CRUD
-4. **Thumbnails** (Phase 4) -- Image/video/PDF thumbnail generation pipeline
-5. **React Frontend** (Phase 5) -- Gallery view, file browser, config panel, status bar
-6. **Polish + Deploy** (Phase 6) -- Embed React in Go binary, structured logging, systemd deployment
+The project was built in six phases:
+
+1. **Skeleton + Catalog** -- Go module, config parsing, SQLite catalog, filesystem scanner
+2. **Daemon + Offloading** -- Quota enforcement, file offloader/restorer, catalog reconciliation
+3. **API Server** -- HTTP server with file listing, download, restore, config CRUD
+4. **Thumbnails** -- Image/video/PDF thumbnail generation pipeline
+5. **React Frontend** -- Gallery view, file browser, config panel, status bar
+6. **Polish + Deploy** -- Embed React in Go binary, structured logging, systemd deployment
