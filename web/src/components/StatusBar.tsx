@@ -8,9 +8,10 @@ function formatSize(bytes: number): string {
 interface StatusBarProps {
   status: StatusResponse | null;
   onRefresh: () => void;
+  onScan: () => Promise<void>;
 }
 
-export function StatusBar({ status, onRefresh }: StatusBarProps) {
+export function StatusBar({ status, onRefresh, onScan }: StatusBarProps) {
   if (!status) return null;
 
   return (
@@ -42,7 +43,13 @@ export function StatusBar({ status, onRefresh }: StatusBarProps) {
 
       <div className="flex justify-between pt-1">
         <span>Cold: {formatSize(status.cold_storage_free_bytes)} free</span>
-        <button onClick={onRefresh} className="text-blue-400 hover:text-blue-300">
+        <button
+          onClick={async () => {
+            await onScan();
+            onRefresh();
+          }}
+          className="text-blue-400 hover:text-blue-300"
+        >
           refresh
         </button>
       </div>

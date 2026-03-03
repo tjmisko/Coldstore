@@ -14,6 +14,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/thumbnails/", s.handleThumbnail)
 
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
+	s.mux.HandleFunc("POST /api/v1/scan", s.handleScan)
 
 	// Serve embedded React frontend as fallback for all non-API routes
 	s.mux.Handle("/", staticHandler())

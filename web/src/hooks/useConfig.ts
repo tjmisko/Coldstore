@@ -17,7 +17,15 @@ export function useStatus() {
     refetch();
   }, [refetch]);
 
-  return { status, refetch };
+  const triggerScan = useCallback(async () => {
+    try {
+      await fetch("/api/v1/scan", { method: "POST" });
+    } catch (err) {
+      console.error("Failed to trigger scan:", err);
+    }
+  }, []);
+
+  return { status, refetch, triggerScan };
 }
 
 export function useFolders() {

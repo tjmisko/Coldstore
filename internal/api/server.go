@@ -14,15 +14,17 @@ type Server struct {
 	cfg      *config.Config
 	cat      *catalog.Catalog
 	restorer *daemon.Restorer
+	scanner  *daemon.Scanner
 	logger   *slog.Logger
 	mux      *http.ServeMux
 }
 
-func NewServer(cfg *config.Config, cat *catalog.Catalog, restorer *daemon.Restorer, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, cat *catalog.Catalog, restorer *daemon.Restorer, scanner *daemon.Scanner, logger *slog.Logger) *Server {
 	s := &Server{
 		cfg:      cfg,
 		cat:      cat,
 		restorer: restorer,
+		scanner:  scanner,
 		logger:   logger,
 		mux:      http.NewServeMux(),
 	}

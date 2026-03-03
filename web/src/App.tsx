@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Gallery } from "./components/Gallery";
 import { FileBrowser } from "./components/FileBrowser";
 import { ConfigPanel } from "./components/ConfigPanel";
@@ -12,11 +12,17 @@ function isImageFolder(label: string): boolean {
 }
 
 export default function App() {
-  const { status, refetch: refetchStatus } = useStatus();
+  const { status, refetch: refetchStatus, triggerScan } = useStatus();
   const folders = status?.folders ?? [];
   const [selectedFolder, setSelectedFolder] = useState<string>("");
   const [view, setView] = useState<View>("gallery");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  useEffect(() => {
+    if (folders.length > 0 && selectedFolder === "") {
+      handleFolderSelect(folders[0].label);
+    }
+  }, [folders]);
 
   const handleFolderSelect = (label: string) => {
     setSelectedFolder(label);
@@ -52,7 +58,7 @@ export default function App() {
               key={f.label}
               onClick={() => {
                 handleFolderSelect(f.label);
-                setSidebarOpen(false);
+                if (window.innerWidth < 768) setSidebarOpen(false);
               }}
               className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
                 selectedFolder === f.label
@@ -70,7 +76,7 @@ export default function App() {
               key={v}
               onClick={() => {
                 setView(v);
-                setSidebarOpen(false);
+                if (window.innerWidth < 768) setSidebarOpen(false);
               }}
               className={`w-full text-left px-3 py-2 rounded-md text-sm capitalize transition-colors ${
                 view === v
@@ -78,12 +84,13 @@ export default function App() {
                   : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
               }`}
             >
+              {view === v && <span className="mr-1.5">&#10003;</span>}
               {v === "config" ? "Settings" : v}
             </button>
           ))}
         </nav>
 
-        <StatusBar status={status} onRefresh={refetchStatus} />
+        <StatusBar status={status} onRefresh={refetchStatus} onScan={triggerScan} />
       </aside>
 
       {/* Overlay for mobile sidebar */}

@@ -41,7 +41,8 @@ func setupTestServer(t *testing.T) (*Server, *catalog.Catalog, string) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	restorer := daemon.NewRestorer(cfg, cat, logger)
-	srv := NewServer(cfg, cat, restorer, logger)
+	scanner := daemon.NewScanner(cfg, cat, logger)
+	srv := NewServer(cfg, cat, restorer, scanner, logger)
 
 	return srv, cat, syncDir
 }

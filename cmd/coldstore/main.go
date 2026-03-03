@@ -46,9 +46,10 @@ func main() {
 	}
 
 	restorer := daemon.NewRestorer(cfg, cat, logger)
+	scanner := daemon.NewScanner(cfg, cat, logger)
 
 	// Start API server in background
-	srv := api.NewServer(cfg, cat, restorer, logger)
+	srv := api.NewServer(cfg, cat, restorer, scanner, logger)
 	go func() {
 		if err := srv.ListenAndServe(cfg.Server.ListenAddr); err != nil {
 			logger.Error("API server error", "error", err)

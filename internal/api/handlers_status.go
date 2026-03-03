@@ -21,6 +21,16 @@ type folderStatus struct {
 	Budget     int64  `json:"budget_bytes"`
 }
 
+func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
+	s.logger.Info("manual scan triggered via API")
+	if err := s.scanner.ScanAll(); err != nil {
+		s.logger.Error("manual scan failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "scan failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	total, _ := s.cat.FileCount("")
 	synced, _ := s.cat.FileCount(catalog.StatusSynced)
