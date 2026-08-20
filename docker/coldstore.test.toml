@@ -1,0 +1,41 @@
+# Config baked into docker/Dockerfile.test at /app/coldstore.toml.
+#
+# This is the configuration the live-integration stack (docker/compose.test.yml) runs
+# the daemon with. It is NOT a deployment template -- see coldstore.toml.example for
+# that. Intervals are deliberately short so a test run observes several ticks.
+#
+# NOTE: every int below is set explicitly and non-zero on purpose. A `0` here would be
+# silently replaced by the built-in default in config.setDefaults(), which makes "scan
+# as fast as possible" impossible to express. See docs/deployment.md, "Zero means
+# default".
+
+[storage]
+# Mounted from the `cold-storage` compose volume. catalog.db, archive/ and thumbnails/
+# all live under this path.
+cold_storage_path = "/data/cold"
+
+[daemon]
+scan_interval_minutes = 1
+catalog_sync_interval_minutes = 1
+thumbnail_workers = 1
+grace_period_minutes = 1
+
+[server]
+listen_addr = "0.0.0.0:8090"
+# Auth is intentionally left off: the compose healthcheck and the live e2e tests both
+# hit /api/v1/status unauthenticated.
+
+[syncthing]
+# Reserved. Neither key is read by any code today -- there is no Syncthing API client.
+# Present only so the parsed shape matches production configs.
+api_url = "http://syncthing:8384"
+api_key = ""
+
+[[folders]]
+label = "TestSync"
+syncthing_id = "test1-test1"
+# Mounted from the `shared-sync` compose volume, which the syncthing service also
+# mounts at /var/syncthing/sync.
+path = "/data/sync"
+budget = "1MB"
+persistent = ["keep/*"]

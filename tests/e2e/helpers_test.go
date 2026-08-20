@@ -142,7 +142,7 @@ func newTestEnv(t *testing.T, opts ...envOption) *testEnv {
 	env.offloader = daemon.NewOffloader(cfg, cat, logger)
 	env.restorer = daemon.NewRestorer(cfg, cat, logger)
 	env.daemon = daemon.New(cfg, cat, logger)
-	env.server = api.NewServer(cfg, cat, env.restorer, logger)
+	env.server = api.NewServer(cfg, cat, env.restorer, env.scanner, logger)
 
 	return env
 }

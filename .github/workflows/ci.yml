@@ -6,7 +6,39 @@ on:
   pull_request:
     branches: [main]
 
+# Superseded runs on the same ref are pointless; cancel them.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# NOTE ON internal/api/dist
+# internal/api/static.go has `//go:embed all:dist`, which fails to compile if that
+# directory does not exist. internal/api/dist/.gitkeep is committed for exactly this
+# reason, so no job here needs to mkdir or touch anything before building. If a job
+# ever starts failing with "pattern all:dist: no matching files found", the stub was
+# deleted -- restore it rather than re-adding a mkdir here.
+
 jobs:
+  frontend:
+    name: frontend (lint + typecheck)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Vite 7 requires ^20.19 || >=22.12; 22 is what the fixes were verified on.
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: Typecheck and build
+        run: npm run build
+
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -14,6 +46,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - run: go build ./...
       - run: go test ./...
 
   e2e:
@@ -36,14 +69,15 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Build binary
-        run: |
-          mkdir -p internal/api/dist
-          touch internal/api/dist/index.html
-          go build -o coldstore ./cmd/coldstore
+        # docker/Dockerfile.test COPYs this binary from the repo root into the image.
+        run: go build -o coldstore ./cmd/coldstore
       - name: Start services
         run: docker compose -f docker/compose.test.yml up -d --build --wait
       - name: Run live e2e tests
         run: go test -tags e2e,e2e_live -count=1 -timeout 300s ./tests/e2e/...
+      - name: Dump container logs
+        if: failure()
+        run: docker compose -f docker/compose.test.yml logs --no-color
       - name: Tear down
         if: always()
         run: docker compose -f docker/compose.test.yml down -v

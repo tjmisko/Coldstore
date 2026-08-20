@@ -3,6 +3,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -10,4 +11,13 @@ WORKDIR /app
 COPY coldstore /usr/local/bin/coldstore
 COPY tests/fixtures /app/fixtures
 
+# The container is started with `--config /app/coldstore.toml`; without this COPY the
+# daemon exits 1 on "failed to load config" before it ever binds a port.
+COPY docker/coldstore.test.toml /app/coldstore.toml
+
+# cold_storage_path and the managed folder path from coldstore.test.toml. Compose
+# mounts volumes over both, but create them so the image also runs standalone.
+RUN mkdir -p /data/cold /data/sync
+
 ENTRYPOINT ["coldstore"]
+CMD ["--config", "/app/coldstore.toml"]

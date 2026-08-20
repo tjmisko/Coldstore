@@ -7,8 +7,20 @@ services:
     volumes:
       - shared-sync:/data/sync
       - cold-storage:/data/cold
+    # Host port is overridable: the deployment host itself already runs a coldstore on
+    # 8090, so `COLDSTORE_TEST_PORT=18090 make test-e2e-live` works there too.
     ports:
-      - "8090:8090"
+      - "${COLDSTORE_TEST_PORT:-8090}:8090"
+    # Without a healthcheck, `docker compose up --wait` returns as soon as the
+    # container is *running*, which is true for a container that is about to exit 1.
+    # This makes --wait block until the API actually answers, so a broken image fails
+    # the target instead of silently passing it.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8090/api/v1/status"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
     depends_on:
       syncthing:
         condition: service_healthy
@@ -17,14 +29,20 @@ services:
     image: syncthing/syncthing:latest
     volumes:
       - shared-sync:/var/syncthing/sync
-    ports:
-      - "8384:8384"
-      - "22000:22000"
+    # Deliberately no published host ports. Only coldstore-test talks to syncthing, and
+    # it does so over the compose network. Publishing 8384/22000 made the stack fail to
+    # start on any machine already running Syncthing -- i.e. the deployment host.
+    expose:
+      - "8384"
+    # /rest/system/ping requires an API key and answers 403 to an unauthenticated
+    # probe, so the old healthcheck could never pass and coldstore-test -- which
+    # depends on service_healthy -- was never started at all.
+    # /rest/noauth/health is the endpoint Syncthing exposes for exactly this.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8384/rest/system/ping"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8384/rest/noauth/health"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
 
 volumes:
   shared-sync:
