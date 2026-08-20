@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,6 +23,17 @@ func NewRestorer(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) 
 
 // Restore moves a file from cold storage back to its syncthing folder.
 func (r *Restorer) Restore(file *catalog.FileRecord) error {
+	return r.RestoreContext(context.Background(), file)
+}
+
+// RestoreContext is Restore with cancellation. A cancelled context aborts the
+// copy and reverts the catalog row to "archived"; the archive copy is only
+// removed once the restored file is verified and durable.
+func (r *Restorer) RestoreContext(ctx context.Context, file *catalog.FileRecord) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("restore cancelled before start: %w", err)
+	}
+
 	if file.Status != catalog.StatusArchived {
 		return fmt.Errorf("file %d is not archived (status: %s)", file.ID, file.Status)
 	}
@@ -40,11 +52,12 @@ func (r *Restorer) Restore(file *catalog.FileRecord) error {
 		return fmt.Errorf("setting restoring status: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+	if err := mkdirAllSync(filepath.Dir(dst), 0755); err != nil {
+		r.cat.UpdateFileStatus(file.ID, catalog.StatusArchived)
 		return fmt.Errorf("creating syncthing directory: %w", err)
 	}
 
-	if err := moveFile(src, dst); err != nil {
+	if err := moveFile(ctx, src, dst, r.logger); err != nil {
 		// Revert status on failure
 		r.cat.UpdateFileStatus(file.ID, catalog.StatusArchived)
 		return fmt.Errorf("moving %s -> %s: %w", src, dst, err)

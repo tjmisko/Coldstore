@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +11,11 @@ import (
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 )
+
+// testLogger keeps test output quiet unless something actually goes wrong.
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
 
 func setupTestEnv(t *testing.T) (syncDir, coldDir string, cfg *config.Config, cat *catalog.Catalog) {
 	t.Helper()
@@ -123,7 +129,7 @@ func TestCrossDeviceMove(t *testing.T) {
 	os.WriteFile(src, content, 0644)
 
 	// crossDeviceMove should work even on same device (it's a copy+delete)
-	if err := crossDeviceMove(src, dst); err != nil {
+	if err := crossDeviceMove(context.Background(), src, dst, testLogger()); err != nil {
 		t.Fatal(err)
 	}
 
