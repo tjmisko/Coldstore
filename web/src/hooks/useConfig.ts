@@ -1,6 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import type { FolderConfig, PersistentPath, StatusResponse } from "../types/api";
 
+// Each hook below loads once on mount and exposes `refetch` for callers.
+//
+// The mount effects deliberately `await refetch()` inside an async IIFE instead of
+// calling `refetch()` directly. The state update inside refetch always happens after
+// `await fetch(...)`, so it was never actually synchronous, but calling an async
+// function straight from an effect body trips react-hooks/set-state-in-effect. The IIFE
+// makes the asynchrony explicit to the linter. Runtime behavior is unchanged: one fetch
+// per mount, state set when it resolves.
+
 export function useStatus() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
 
@@ -14,7 +23,9 @@ export function useStatus() {
   }, []);
 
   useEffect(() => {
-    refetch();
+    void (async () => {
+      await refetch();
+    })();
   }, [refetch]);
 
   const triggerScan = useCallback(async () => {
@@ -41,7 +52,9 @@ export function useFolders() {
   }, []);
 
   useEffect(() => {
-    refetch();
+    void (async () => {
+      await refetch();
+    })();
   }, [refetch]);
 
   const updateFolder = useCallback(
@@ -73,7 +86,9 @@ export function usePersistentPaths(folderLabel: string) {
   }, [folderLabel]);
 
   useEffect(() => {
-    refetch();
+    void (async () => {
+      await refetch();
+    })();
   }, [refetch]);
 
   const addPath = useCallback(

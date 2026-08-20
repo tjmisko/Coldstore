@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Gallery } from "./components/Gallery";
 import { FileBrowser } from "./components/FileBrowser";
 import { ConfigPanel } from "./components/ConfigPanel";
@@ -18,11 +18,18 @@ export default function App() {
   const [view, setView] = useState<View>("gallery");
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  useEffect(() => {
-    if (folders.length > 0 && selectedFolder === "") {
-      handleFolderSelect(folders[0].label);
-    }
-  }, [folders]);
+  // Auto-select the first folder the moment status arrives. This is React's documented
+  // "adjusting state during render" pattern rather than a useEffect: the guard flips
+  // false as soon as it runs, React re-renders before painting, and the resulting state
+  // transitions are exactly the ones the old effect produced -- without the cascading
+  // render the effect version caused (react-hooks/set-state-in-effect).
+  // The `label !== ""` guard is what makes the loop terminate: a folder with an empty
+  // label would leave the condition true forever. Config requires a non-empty label,
+  // so this is belt-and-braces against a malformed /api/v1/status payload.
+  if (selectedFolder === "" && folders.length > 0 && folders[0].label !== "") {
+    setSelectedFolder(folders[0].label);
+    setView(isImageFolder(folders[0].label) ? "gallery" : "files");
+  }
 
   const handleFolderSelect = (label: string) => {
     setSelectedFolder(label);
