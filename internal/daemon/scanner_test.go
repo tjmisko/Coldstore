@@ -35,7 +35,7 @@ func TestIsPersistent(t *testing.T) {
 
 func TestScanFolder(t *testing.T) {
 	// Create a temp directory structure
-	dir := t.TempDir()
+	dir := newSyncthingFolder(t, t.TempDir())
 	subdir := filepath.Join(dir, "2024", "01")
 	os.MkdirAll(subdir, 0755)
 
@@ -56,19 +56,12 @@ func TestScanFolder(t *testing.T) {
 	}
 	defer cat.Close()
 
-	cfg := &config.Config{
-		Folders: []config.FolderConfig{
-			{
-				Label: "TestFolder",
-				Path:  dir,
-			},
-		},
-	}
+	folder := declareFolder(t, cat, "TestFolder", dir)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	scanner := NewScanner(cfg, cat, logger)
+	scanner := NewScanner(&config.Config{}, cat, logger)
 
-	if err := scanner.ScanFolder(cfg.Folders[0]); err != nil {
+	if err := scanner.ScanFolder(folder); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,7 +91,7 @@ func TestScanFolder(t *testing.T) {
 }
 
 func TestScanDetectsMissingFiles(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSyncthingFolder(t, t.TempDir())
 	os.WriteFile(filepath.Join(dir, "exists.txt"), make([]byte, 100), 0644)
 	os.WriteFile(filepath.Join(dir, "willdelete.txt"), make([]byte, 100), 0644)
 
@@ -109,21 +102,19 @@ func TestScanDetectsMissingFiles(t *testing.T) {
 	}
 	defer cat.Close()
 
-	cfg := &config.Config{
-		Folders: []config.FolderConfig{{Label: "Test", Path: dir}},
-	}
+	folder := declareFolder(t, cat, "Test", dir)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	scanner := NewScanner(cfg, cat, logger)
+	scanner := NewScanner(&config.Config{}, cat, logger)
 
 	// First scan
-	scanner.ScanFolder(cfg.Folders[0])
+	scanner.ScanFolder(folder)
 
 	// Delete a file
 	os.Remove(filepath.Join(dir, "willdelete.txt"))
 
 	// Second scan
-	scanner.ScanFolder(cfg.Folders[0])
+	scanner.ScanFolder(folder)
 
 	// The deleted file should be marked missing
 	f, err := cat.GetFile("Test", "willdelete.txt")

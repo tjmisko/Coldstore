@@ -24,12 +24,10 @@ func TestOffloadMovesToArchivePath(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "2024/01/photo.jpg", Filename: "photo.jpg",
 		Extension: ".jpg", SizeBytes: int64(len(content)), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "2024/01/photo.jpg")
 
-	if err := env.offloader.Offload(file, env.syncDir); err != nil {
-		t.Fatal(err)
-	}
+	env.archive(t, file.ID)
 
 	// Source should be gone
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
@@ -57,10 +55,10 @@ func TestOffloadCatalogUpdated(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "doc.pdf", Filename: "doc.pdf",
 		Extension: ".pdf", SizeBytes: 11, FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "doc.pdf")
 
-	env.offloader.Offload(file, env.syncDir)
+	env.archive(t, file.ID)
 
 	updated, _ := env.cat.GetFile("TestFolder", "doc.pdf")
 	if updated.Status != catalog.StatusArchived {
@@ -82,12 +80,10 @@ func TestOffloadCreatesDirectoryStructure(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "a/b/c/deep.txt", Filename: "deep.txt",
 		Extension: ".txt", SizeBytes: 4, FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "a/b/c/deep.txt")
 
-	if err := env.offloader.Offload(file, env.syncDir); err != nil {
-		t.Fatal(err)
-	}
+	env.archive(t, file.ID)
 
 	archivePath := filepath.Join(env.coldDir, "archive", "TestFolder", "a", "b", "c", "deep.txt")
 	if _, err := os.Stat(archivePath); err != nil {
@@ -105,10 +101,10 @@ func TestOffloadEventLogged(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "logged.txt", Filename: "logged.txt",
 		Extension: ".txt", SizeBytes: 6, FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "logged.txt")
 
-	env.offloader.Offload(file, env.syncDir)
+	env.archive(t, file.ID)
 
 	// Verify event was logged by checking catalog (events table)
 	// The offloader calls cat.LogEvent("archive", ...) on success

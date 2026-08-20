@@ -27,7 +27,7 @@ func fakeFFmpeg(t *testing.T, body string) string {
 // ffmpeg never looks at them.
 func seedVideo(t *testing.T, cat *catalog.Catalog, rel string) *catalog.FileRecord {
 	t.Helper()
-	if err := cat.UpsertFile(&catalog.FileRecord{
+	if _, err := cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel:  "Videos",
 		RelativePath: rel,
 		Filename:     filepath.Base(rel),
@@ -35,7 +35,7 @@ func seedVideo(t *testing.T, cat *catalog.Catalog, rel string) *catalog.FileReco
 		SizeBytes:    1024,
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
-	}); err != nil {
+	}, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 	f, err := cat.GetFile("Videos", rel)
@@ -125,7 +125,7 @@ func TestProcessQueueShouldStopRetryingWhenAFileHasFailedTooManyTimes(t *testing
 	exts := []string{".mp4"}
 
 	for pass := 1; pass <= 4; pass++ {
-		queued, err := cat.FilesNeedingThumbnailsLimited(exts, 10)
+		queued, err := cat.FilesNeedingThumbnails(exts, 10)
 		if err != nil {
 			t.Fatal(err)
 		}

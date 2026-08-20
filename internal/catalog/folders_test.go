@@ -311,17 +311,17 @@ func TestMarkFilesMissingBeforeGenerationShouldSweepOnlyTheRowsTheWalkDidNotTouc
 
 	seen := &FileRecord{FolderLabel: "Photos", RelativePath: "seen.jpg", Filename: "seen.jpg",
 		SizeBytes: 1, FileMtime: now, FileAtime: now, Status: StatusSynced}
-	if err := cat.UpsertFileSeen(seen, gen); err != nil {
+	if _, err := cat.UpsertFile(seen, gen); err != nil {
 		t.Fatal(err)
 	}
 	stale := &FileRecord{FolderLabel: "Photos", RelativePath: "stale.jpg", Filename: "stale.jpg",
 		SizeBytes: 1, FileMtime: now, FileAtime: now, Status: StatusSynced}
-	if err := cat.UpsertFileSeen(stale, gen-100); err != nil {
+	if _, err := cat.UpsertFile(stale, gen-100); err != nil {
 		t.Fatal(err)
 	}
 	inFlight := &FileRecord{FolderLabel: "Photos", RelativePath: "moving.jpg", Filename: "moving.jpg",
 		SizeBytes: 1, FileMtime: now, FileAtime: now, Status: StatusSynced}
-	if err := cat.UpsertFileSeen(inFlight, gen-100); err != nil {
+	if _, err := cat.UpsertFile(inFlight, gen-100); err != nil {
 		t.Fatal(err)
 	}
 	moving, err := cat.GetFile("Photos", "moving.jpg")
@@ -369,10 +369,10 @@ func TestUpsertFileSeenShouldAdvanceTheGenerationWhenAPathIsSeenAgain(t *testing
 
 	rec := &FileRecord{FolderLabel: "Photos", RelativePath: "a.jpg", Filename: "a.jpg",
 		SizeBytes: 1, FileMtime: now, FileAtime: now, Status: StatusSynced}
-	if err := cat.UpsertFileSeen(rec, 1000); err != nil {
+	if _, err := cat.UpsertFile(rec, 1000); err != nil {
 		t.Fatal(err)
 	}
-	if err := cat.UpsertFileSeen(rec, 2000); err != nil {
+	if _, err := cat.UpsertFile(rec, 2000); err != nil {
 		t.Fatal(err)
 	}
 

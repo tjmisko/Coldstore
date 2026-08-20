@@ -22,6 +22,19 @@ listen_addr = "0.0.0.0:8090"
 api_url = "http://127.0.0.1:8384"
 api_key = ""
 
+# A [[folders]] block DECLARES a folder. Its label and path are infrastructure:
+# adding a folder means editing this file and restarting the daemon, and the
+# label is the key everything else hangs off, so it must be unique and the path
+# must be absolute.
+#
+# `budget` and [daemon] grace_period_minutes are SEED VALUES ONLY. They are
+# written to the catalog the FIRST time a folder is seen and never again;
+# from then on the budget and the grace period are edited in the web UI and
+# take effect on the next enforcement tick with no restart. Changing `budget`
+# here after the first run has NO effect. Removing a [[folders]] block does not
+# delete anything: the folder is flagged as no longer declared, stops being
+# scanned and enforced, and keeps its budget, its pins and its files.
+
 [[folders]]
 label = "CameraRoll"
 syncthing_id = "xxxxx-xxxxx"

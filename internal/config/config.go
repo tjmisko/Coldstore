@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -87,10 +88,27 @@ func (c *Config) setDefaults() error {
 		c.Server.ListenAddr = "0.0.0.0:8090"
 	}
 
+	// A folder is INFRASTRUCTURE (D1): the label is the primary key of the
+	// policy table and the path is the only thing that says where the folder
+	// physically is. Both are validated here, at load, so a typo cannot reach
+	// the reconciler and quietly merge two folders into one row or resolve a
+	// relative path against whatever directory systemd happened to start in.
+	seen := make(map[string]bool, len(c.Folders))
 	for i := range c.Folders {
+		label := c.Folders[i].Label
+		if seen[label] {
+			return fmt.Errorf("folder %q is declared more than once", label)
+		}
+		seen[label] = true
+
+		if !filepath.IsAbs(c.Folders[i].Path) {
+			return fmt.Errorf("folder %q: path %q must be absolute",
+				label, c.Folders[i].Path)
+		}
+
 		budget, err := ParseBudget(c.Folders[i].Budget)
 		if err != nil {
-			return fmt.Errorf("folder %q: %w", c.Folders[i].Label, err)
+			return fmt.Errorf("folder %q: %w", label, err)
 		}
 		c.Folders[i].BudgetBytes = budget
 	}

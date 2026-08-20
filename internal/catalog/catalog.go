@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,12 @@ import (
 // carries the requested label.
 var ErrNoSuchFolder = errors.New("no such folder")
 
+// ErrNoSuchFile is returned by the single-row file lookups when the id or the
+// (folder, path) pair matches nothing. It exists so that callers outside this
+// package can tell "no such file" (a 404) from a database failure (a 500)
+// without importing database/sql.
+var ErrNoSuchFile = errors.New("no such file")
+
 // defaultOffloadCandidateLimit caps how many candidate rows one enforcement
 // pass materialises. Candidates are consumed oldest-first and the loop stops
 // at the budget, so this is always more than one pass needs; a pass that
@@ -25,6 +32,10 @@ const defaultOffloadCandidateLimit = 5000
 // maxThumbnailAttempts is how many times a file whose thumbnail generation
 // failed is retried before it drops out of the queue for good.
 const maxThumbnailAttempts = 3
+
+// defaultThumbnailLimit caps how many files one FilesNeedingThumbnails call
+// materialises when the caller does not say.
+const defaultThumbnailLimit = 200
 
 // idChunkSize caps how many ids go into a single IN (...) clause.
 const idChunkSize = 500
@@ -84,38 +95,76 @@ func (c *Catalog) Close() error {
 // ---------------------------------------------------------------------------
 
 // UpsertFile inserts or updates a file record based on (folder_label,
-// relative_path), stamping last_seen with the current time.
+// relative_path), stamping last_seen with scanGeneration.
 //
-// Scanners must call UpsertFileSeen instead, so that every row they touch
-// carries the generation of the walk that observed it.
-func (c *Catalog) UpsertFile(f *FileRecord) error {
-	return c.UpsertFileSeen(f, time.Now().Unix())
-}
-
-// UpsertFileSeen is UpsertFile with an explicit scan generation. scanGeneration
-// is the epoch second at which the walk that observed this file started; the
-// missing-detection sweep uses it to find rows the walk did not touch.
+// scanGeneration identifies the walk that observed this file; the
+// missing-detection sweep uses it to find rows the walk did not touch. Every
+// caller passes one -- there is no generation-less variant, because a row
+// upserted without the current generation is a row the next sweep wrongly
+// declares missing.
 //
 // The ON CONFLICT list deliberately does NOT mention pinned, pinned_at,
 // pin_source or thumb_attempts: a rescan must never clear a pin or reset a
 // thumbnail's failure count.
-func (c *Catalog) UpsertFileSeen(f *FileRecord, scanGeneration int64) error {
-	_, err := c.db.Exec(`
+//
+// It also refuses to adopt an ARCHIVED row's path (design section 4.1b). The
+// old 'archived' arm of the status CASE was a silent data-loss engine: when a
+// path under an archived row reappeared in the folder -- a photo recovered
+// from Recently Deleted, a laptop reconnecting with an offline edit, a Receive
+// Only folder's "Revert Local Changes" -- the row flipped to synced and
+// overwrote size_bytes and file_mtime, leaving the cold-storage copy
+// referenced by NO row: invisible to every listing, every job and every
+// cleanup, and destroyed outright the next time that path was offloaded.
+//
+// Now an archived row keeps its status and every one of its recorded
+// attributes; only last_seen is refreshed, and conflict is returned true so the
+// scanner can make the collision loud and the owner can resolve it through
+// POST /api/v1/files/{id}/resolve.
+func (c *Catalog) UpsertFile(f *FileRecord, scanGeneration int64) (conflict bool, err error) {
+	// RETURNING gives the row's status AFTER the write. Only a pre-existing
+	// archived row can come back 'archived': an INSERT writes 'synced', and
+	// the CASE below never moves a row INTO 'archived'.
+	var status string
+	err = c.db.QueryRow(`
 		INSERT INTO files (folder_label, relative_path, filename, extension, mime_type, size_bytes, file_mtime, file_atime, status, last_seen)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(folder_label, relative_path) DO UPDATE SET
-			filename = excluded.filename,
-			size_bytes = excluded.size_bytes,
-			file_mtime = excluded.file_mtime,
-			file_atime = excluded.file_atime,
-			mime_type = excluded.mime_type,
-			last_seen = excluded.last_seen,
+			filename   = CASE WHEN files.status = 'archived' THEN files.filename   ELSE excluded.filename   END,
+			size_bytes = CASE WHEN files.status = 'archived' THEN files.size_bytes ELSE excluded.size_bytes END,
+			file_mtime = CASE WHEN files.status = 'archived' THEN files.file_mtime ELSE excluded.file_mtime END,
+			file_atime = CASE WHEN files.status = 'archived' THEN files.file_atime ELSE excluded.file_atime END,
+			mime_type  = CASE WHEN files.status = 'archived' THEN files.mime_type  ELSE excluded.mime_type  END,
+			last_seen  = excluded.last_seen,
 			status = CASE
-				WHEN files.status IN ('missing', 'archived') THEN 'synced'
+				WHEN files.status = 'missing' THEN 'synced'
 				ELSE files.status
 			END
-	`, f.FolderLabel, f.RelativePath, f.Filename, f.Extension, f.MimeType, f.SizeBytes, f.FileMtime, f.FileAtime, f.Status, scanGeneration)
-	return err
+		RETURNING status
+	`, f.FolderLabel, f.RelativePath, f.Filename, f.Extension, f.MimeType, f.SizeBytes, f.FileMtime, f.FileAtime, f.Status, scanGeneration).Scan(&status)
+	if err != nil {
+		return false, err
+	}
+	return FileStatus(status) == StatusArchived, nil
+}
+
+// AdoptDeviceCopy resolves a section 4.1b conflict in the device's favour: the
+// row stops being archived and takes the metadata of the file actually sitting
+// at the syncthing path. last_seen is stamped for the same reason
+// ClaimFileOnDevice stamps it. Returns false if the row was not archived.
+func (c *Catalog) AdoptDeviceCopy(id, sizeBytes int64, mtime, atime time.Time) (bool, error) {
+	res, err := c.db.Exec(`
+		UPDATE files SET status = 'synced', archived_at = NULL,
+			size_bytes = ?, file_mtime = ?, file_atime = ?, last_seen = ?
+		WHERE id = ? AND status = 'archived'`,
+		sizeBytes, mtime, atime, time.Now().UnixNano(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // GetFile retrieves a file by folder and relative path.
@@ -191,9 +240,16 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	where, args := q.filter()
 	query := `SELECT ` + fileColumns + ` FROM files WHERE 1=1` + where
 
+	// The ids branch returns exactly the requested rows that still exist, in
+	// id order, with no pagination at all (design section 6.1). Applying the
+	// default page size here is how a 120-id selection came back as 50
+	// records: the SelectionBar patched 50 rows after a bulk restore and the
+	// rest went on rendering as archived. The caller caps the id list.
+	if len(q.IDs) > 0 {
+		return c.queryFiles(query+" ORDER BY id ASC", args...)
+	}
+
 	switch {
-	case len(q.IDs) > 0:
-		query += " ORDER BY id ASC"
 	case q.SortBy == "size":
 		query += " ORDER BY size_bytes DESC"
 	case q.SortBy == "name":
@@ -273,6 +329,30 @@ func (c *Catalog) ClaimFile(id int64, from, to FileStatus) (bool, error) {
 	return n == 1, nil
 }
 
+// ClaimFileOnDevice is ClaimFile for the transitions that put a file BACK on
+// the device without a scan having seen it there: the archiving -> synced
+// revert after a failed offload, and adopting a device copy that turned up
+// under an archived row.
+//
+// It stamps last_seen for the reason MarkRestored does. A walk that is already
+// running holds a generation older than now, and its closing sweep marks every
+// synced row whose last_seen predates that generation missing. A row flipped
+// to synced mid-walk without a fresh last_seen is swept even though the file is
+// on disk, which costs its bytes from the folder footprint and 409s every read
+// of it until the next scan.
+func (c *Catalog) ClaimFileOnDevice(id int64, from, to FileStatus) (bool, error) {
+	res, err := c.db.Exec(`UPDATE files SET status = ?, last_seen = ? WHERE id = ? AND status = ?`,
+		to, time.Now().UnixNano(), id, from)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 // ClaimUnpinnedFile is the CAS the AUTOMATIC offload path uses, and the only
 // one it may use. A pin that commits before the claim makes the claim fail,
 // which is the authoritative third layer of D2's pin protection.
@@ -307,18 +387,27 @@ func (c *Catalog) MarkArchived(id int64, at time.Time) (bool, error) {
 	return n == 1, nil
 }
 
-// MarkRestored commits a completed restore: status, archived_at and the pin in
-// ONE statement, so a crash can never leave a restored file unpinned and
-// immediately re-archivable (D2).
+// MarkRestored commits a completed restore: status, archived_at, the pin and
+// last_seen in ONE statement, so a crash can never leave a restored file
+// unpinned and immediately re-archivable (D2).
 //
 // It sets pin_source='restore' only if the file was not already pinned by the
 // user; a user pin is never downgraded to an auto-pin.
+//
+// last_seen is stamped for the same reason the pin is: a walk that started
+// before this commit holds a generation older than now, and its end-of-walk
+// sweep asks only "status='synced' AND last_seen < generation". Without the
+// stamp a file restored during a walk -- minutes long on a real folder, and
+// every file of a bulk restore that overlaps the catalog tick -- is declared
+// missing while it sits on disk: 409 on download, 409 on restore, and its
+// bytes vanish from the footprint enforcement budgets against.
 func (c *Catalog) MarkRestored(id int64, at int64) (bool, error) {
 	res, err := c.db.Exec(`
 		UPDATE files SET status = 'synced', archived_at = NULL, pinned = 1,
 			pinned_at = COALESCE(pinned_at, ?),
-			pin_source = CASE WHEN pin_source = 'user' THEN 'user' ELSE 'restore' END
-		WHERE id = ? AND status = 'restoring'`, at, id)
+			pin_source = CASE WHEN pin_source = 'user' THEN 'user' ELSE 'restore' END,
+			last_seen = ?
+		WHERE id = ? AND status = 'restoring'`, at, time.Now().UnixNano(), id)
 	if err != nil {
 		return false, err
 	}
@@ -407,16 +496,6 @@ func (c *Catalog) RestoringFiles() ([]FileRecord, error) {
 	return c.queryFiles(`SELECT ` + fileColumns + ` FROM files WHERE status = 'restoring'`)
 }
 
-// MarkMissingSyncedFiles marks all synced files in a folder as missing.
-//
-// Deprecated: this is the mark-then-restore sweep. It blinds every CAS and
-// every size aggregate for the whole duration of a walk. Use UpsertFileSeen
-// with a scan generation and then MarkFilesMissingBeforeGeneration.
-func (c *Catalog) MarkMissingSyncedFiles(folder string) error {
-	_, err := c.db.Exec(`UPDATE files SET status = 'missing' WHERE folder_label = ? AND status = 'synced'`, folder)
-	return err
-}
-
 // MarkFilesMissingBeforeGeneration marks as missing every synced file in a
 // folder that the scan identified by scanGeneration did not touch. It must be
 // called only after a walk that COMPLETED without error; an aborted or
@@ -432,15 +511,6 @@ func (c *Catalog) MarkFilesMissingBeforeGeneration(folder string, scanGeneration
 		return 0, err
 	}
 	return res.RowsAffected()
-}
-
-// FolderSyncedSize returns the total size of synced files in a folder.
-//
-// Deprecated: use FolderSizes, which reports the pinned subset alongside the
-// total and counts the two transient on-device states.
-func (c *Catalog) FolderSyncedSize(folder string) (int64, error) {
-	total, _, err := c.FolderSizes(folder)
-	return total, err
 }
 
 // FolderSizes returns the folder's on-device footprint and the pinned subset
@@ -503,6 +573,44 @@ func (c *Catalog) FolderSizesForIDs(ids []int64) (map[string]int64, error) {
 	return sizes, nil
 }
 
+// FolderLabelsForIDs returns the distinct folders the given file ids belong
+// to, sorted by label. Ids that match nothing contribute nothing. It backs the
+// bulk pin response, which reports one folder block per folder it touched.
+func (c *Catalog) FolderLabelsForIDs(ids []int64) ([]string, error) {
+	seen := make(map[string]bool)
+	for _, chunk := range chunkIDs(ids) {
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := c.db.Query(`SELECT DISTINCT folder_label FROM files
+			WHERE id IN (`+placeholders(len(chunk))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var label string
+			if err := rows.Scan(&label); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			seen[label] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+
+	labels := make([]string, 0, len(seen))
+	for label := range seen {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return labels, nil
+}
+
 // CountUnpinnedSyncedOldestUpTo reports how many files the daemon would have to
 // offload, oldest first, to free the given number of bytes. capped is true when
 // the scan hit its 50,000-row ceiling before reaching the target.
@@ -540,6 +648,11 @@ func (c *Catalog) CountUnpinnedSyncedOldestUpTo(folder string, bytes int64) (cou
 }
 
 // FolderCounts returns the per-status file tally for a folder.
+//
+// Pinned counts only files that are ON THE DEVICE, matching FolderSizes: a pin
+// on an archived row is a latent instruction that takes effect on restore, and
+// counting it here would make "N pinned" disagree with the pinned segment of
+// the budget bar the same response draws.
 func (c *Catalog) FolderCounts(folder string) (FolderCounts, error) {
 	var fc FolderCounts
 	err := c.db.QueryRow(`
@@ -547,26 +660,24 @@ func (c *Catalog) FolderCounts(folder string) (FolderCounts, error) {
 		       COALESCE(SUM(CASE WHEN status = 'synced' THEN 1 ELSE 0 END), 0),
 		       COALESCE(SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END), 0),
 		       COALESCE(SUM(CASE WHEN status = 'missing' THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN pinned = 1 THEN 1 ELSE 0 END), 0)
+		       COALESCE(SUM(CASE WHEN pinned = 1
+		                          AND status IN ('synced','archiving','restoring')
+		                     THEN 1 ELSE 0 END), 0)
 		FROM files WHERE folder_label = ?`, folder).
 		Scan(&fc.Total, &fc.Synced, &fc.Archived, &fc.Missing, &fc.Pinned)
 	return fc, err
 }
 
 // OffloadCandidates returns unpinned synced files in a folder, oldest first by
-// max(mtime, atime), capped at defaultOffloadCandidateLimit rows.
+// max(mtime, atime), capped at limit rows. A limit of zero or less means
+// defaultOffloadCandidateLimit. The cap is mandatory and there is deliberately
+// no unbounded variant: without it a 50,000-file camera roll materialises
+// 50,000 records on every tick.
 //
 // Persistent-glob filtering and the grace cutoff happen in the caller, in Go:
 // file_mtime and file_atime are TEXT columns, so comparing a bound Go time
 // against them is a string comparison with a timezone-dependent result.
-func (c *Catalog) OffloadCandidates(folder string) ([]FileRecord, error) {
-	return c.OffloadCandidatesLimited(folder, defaultOffloadCandidateLimit)
-}
-
-// OffloadCandidatesLimited is OffloadCandidates with an explicit row cap. A
-// limit of zero or less means the default. The cap is mandatory: without it a
-// 50,000-file camera roll materialises 50,000 records on every tick.
-func (c *Catalog) OffloadCandidatesLimited(folder string, limit int) ([]FileRecord, error) {
+func (c *Catalog) OffloadCandidates(folder string, limit int) ([]FileRecord, error) {
 	if limit <= 0 {
 		limit = defaultOffloadCandidateLimit
 	}
@@ -602,20 +713,18 @@ func (c *Catalog) UpdateThumbnailPath(id int64, thumbPath string) error {
 }
 
 // FilesNeedingThumbnails returns files that have a thumbnailable extension but
-// no thumbnail_path set, capped at 200 rows per call.
-func (c *Catalog) FilesNeedingThumbnails(extensions []string) ([]FileRecord, error) {
-	return c.FilesNeedingThumbnailsLimited(extensions, 200)
-}
-
-// FilesNeedingThumbnailsLimited is FilesNeedingThumbnails with an explicit row
-// cap. Files that have already failed maxThumbnailAttempts times are excluded,
-// so a permanently unreadable file is not retried forever.
-func (c *Catalog) FilesNeedingThumbnailsLimited(extensions []string, limit int) ([]FileRecord, error) {
+// no thumbnail_path set, capped at limit rows; a limit of zero or less means
+// defaultThumbnailLimit. Files that have already failed maxThumbnailAttempts
+// times are excluded, so a permanently unreadable file is not retried forever.
+//
+// As with OffloadCandidates the cap is mandatory and there is no unbounded
+// variant to reach for by accident.
+func (c *Catalog) FilesNeedingThumbnails(extensions []string, limit int) ([]FileRecord, error) {
 	if len(extensions) == 0 {
 		return nil, nil
 	}
 	if limit <= 0 {
-		limit = 200
+		limit = defaultThumbnailLimit
 	}
 
 	args := make([]any, 0, len(extensions)+2)
@@ -866,6 +975,34 @@ func (c *Catalog) ListPersistentPaths(folder string) ([]PersistentPath, error) {
 	return paths, rows.Err()
 }
 
+// OnDeviceRelativePaths returns the relative paths of every file a folder
+// currently holds on the device. It backs the persistent-glob match_count: a
+// pattern that protects nothing looks identical to one that protects
+// everything, and the editor has to be able to tell the owner which they just
+// typed (design section 4.1a).
+//
+// The glob matcher lives in internal/daemon, which imports this package, so the
+// counting itself is done by the caller over this one pass rather than by a
+// query per pattern.
+func (c *Catalog) OnDeviceRelativePaths(folder string) ([]string, error) {
+	rows, err := c.db.Query(`SELECT relative_path FROM files
+		WHERE folder_label = ? AND status IN ('synced','archiving','restoring')`, folder)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	paths := []string{}
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
+}
+
 // DeletePersistentPath removes a persistent path by ID.
 func (c *Catalog) DeletePersistentPath(id int64) error {
 	_, err := c.db.Exec(`DELETE FROM persistent_paths WHERE id = ?`, id)
@@ -881,6 +1018,63 @@ func (c *Catalog) LogEvent(eventType, folder, path, details string) error {
 	_, err := c.db.Exec(`INSERT INTO events (event_type, folder, path, details) VALUES (?, ?, ?, ?)`,
 		eventType, folder, path, details)
 	return err
+}
+
+// EventClassWarning selects every event type EXCEPT the three routine
+// per-file ones. A single enforcement pass writes hundreds of archive rows, so
+// an unfiltered "last 10 events for this folder" would never once show the
+// wedge warning, the cold-storage warning or the stray-archive report -- the
+// three things the list exists to show (design section 6.12).
+const EventClassWarning = "warning"
+
+// routineEventTypes are the types EventClassWarning filters out.
+var routineEventTypes = []string{"archive", "restore", "folder_seeded"}
+
+// ListEvents reads the audit log newest first. folder and eventType are exact
+// matches and are ignored when empty; class is either "" or EventClassWarning.
+// limit is clamped to [1, 500]. The slice is never nil.
+func (c *Catalog) ListEvents(folder, eventType, class string, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 500 {
+		limit = 500
+	}
+
+	query := `SELECT id, timestamp, event_type, folder, path, details FROM events WHERE 1=1`
+	var args []any
+	if folder != "" {
+		query += ` AND folder = ?`
+		args = append(args, folder)
+	}
+	if eventType != "" {
+		query += ` AND event_type = ?`
+		args = append(args, eventType)
+	}
+	if class == EventClassWarning {
+		query += ` AND event_type NOT IN (` + placeholders(len(routineEventTypes)) + `)`
+		for _, t := range routineEventTypes {
+			args = append(args, t)
+		}
+	}
+	query += ` ORDER BY id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []Event{}
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.EventType, &e.Folder, &e.Path, &e.Details); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 // LogEventDeduped inserts an event only if no event with the same type and
@@ -919,6 +1113,9 @@ func scanFile(s fileScanner) (*FileRecord, error) {
 		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FileAtime, &f.FirstSeen, &archivedAt,
 		&f.Status, &f.ThumbnailPath, &f.ContentHash, &f.Pinned, &pinnedAt, &f.PinSource,
 		&f.LastSeen, &f.ThumbAttempts, &lastAttempt, &f.ThumbError)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNoSuchFile
+	}
 	if err != nil {
 		return nil, err
 	}

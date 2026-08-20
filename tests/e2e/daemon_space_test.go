@@ -22,7 +22,7 @@ func TestLowDiskPausesOffload(t *testing.T) {
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "big.txt", Filename: "big.txt",
 		Extension: ".txt", SizeBytes: 5000, FileMtime: old, Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	// Inject low disk space
 	env.daemon.SetSpaceCheck(func(string) (float64, error) {
@@ -48,7 +48,7 @@ func TestOffloadResumesWhenSpaceAvailable(t *testing.T) {
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "resume.txt", Filename: "resume.txt",
 		Extension: ".txt", SizeBytes: 5000, FileMtime: old, Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	// First: low disk — should not offload
 	env.daemon.SetSpaceCheck(func(string) (float64, error) {

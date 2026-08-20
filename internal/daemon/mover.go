@@ -1,0 +1,533 @@
+package daemon
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/tjmisko/coldstore/internal/catalog"
+	"github.com/tjmisko/coldstore/internal/config"
+)
+
+// minFreeSpacePercent is the cold-storage floor. Below it no file is moved in,
+// whether by the quota tick, a manual archive or a job.
+const minFreeSpacePercent = 5.0
+
+var (
+	// ErrFileStateChanged means the row was not in the status the move
+	// required, either when it was re-read or when the compare-and-swap ran.
+	// Something else -- the quota tick, another request, a pin -- got there
+	// first. It is a 409, never a 500.
+	ErrFileStateChanged = errors.New("file state changed before the move could start")
+
+	// ErrColdStorageFull means cold storage is below minFreeSpacePercent.
+	ErrColdStorageFull = errors.New("cold storage below 5% free")
+
+	// ErrInvalidResolution means POST /files/{id}/resolve was given a `keep`
+	// that is neither of the two legal values. It is a 400, not a 409.
+	ErrInvalidResolution = errors.New(`keep must be "device" or "archive"`)
+)
+
+// The two directions a section 4.1b conflict can be resolved in.
+const (
+	ResolveKeepDevice  = "device"
+	ResolveKeepArchive = "archive"
+)
+
+// Mover is the ONE place a file changes status, changes place, or changes its
+// pin. Every entry point -- the quota tick, the restore endpoint, the archive
+// endpoint, the pin endpoints, and later the job worker -- goes through it and
+// takes its mutex.
+//
+// The mutex is what makes D2's promise true. A pin request that arrives while
+// the daemon is already copying that file blocks until the move finishes and
+// then commits against the settled row, so the owner is never shown a filled
+// pin badge on a file that is about to leave. Without a single serialisation
+// point the pin and the move race and the move wins silently.
+//
+// There must be exactly ONE Mover per process: main constructs it and injects
+// the same pointer into the daemon and the API server. Two Movers over one
+// catalog are two mutexes and no serialisation at all.
+type Mover struct {
+	mu sync.Mutex
+
+	cat       *catalog.Catalog
+	cfg       *config.Config
+	logger    *slog.Logger
+	offloader *Offloader
+	restorer  *Restorer
+
+	// Injectable seams. Tests replace them; production uses the defaults.
+	spaceCheck func(string) (float64, error)
+	moveOut    func(src, dst string) error
+	moveIn     func(src, dst, archiveRoot string) error
+}
+
+func NewMover(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Mover {
+	offloader := NewOffloader(cfg, logger)
+	restorer := NewRestorer(cfg, logger)
+	return &Mover{
+		cat:        cat,
+		cfg:        cfg,
+		logger:     logger,
+		offloader:  offloader,
+		restorer:   restorer,
+		spaceCheck: AvailableSpacePercent,
+		moveOut:    offloader.MoveOut,
+		moveIn:     restorer.MoveIn,
+	}
+}
+
+// SetSpaceCheck replaces the cold-storage free-space probe, for testing.
+func (m *Mover) SetSpaceCheck(fn func(string) (float64, error)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.spaceCheck = fn
+}
+
+// SetMoveFuncs replaces the two filesystem moves, for testing. A test that
+// needs to observe what happens DURING a move -- a pin arriving mid-copy, say
+// -- installs a move that blocks, and gets the real ordering rather than a
+// simulated one.
+func (m *Mover) SetMoveFuncs(out func(src, dst string) error, in func(src, dst, archiveRoot string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if out != nil {
+		m.moveOut = out
+	}
+	if in != nil {
+		m.moveIn = in
+	}
+}
+
+// ---------------------------------------------------------------------------
+// pins
+
+// SetPinned writes one file's pin and returns the settled row.
+//
+// It takes the mover mutex, so it cannot commit while a move of that file is
+// in flight; it waits for the move and then writes against whatever the move
+// left behind. Pinning is legal in every status, including archived (where the
+// pin is a latent instruction that takes effect on restore) and missing.
+func (m *Mover) SetPinned(id int64, pinned bool) (*catalog.FileRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, err := m.cat.GetFileByID(id); err != nil {
+		return nil, err
+	}
+	if err := m.cat.SetPinned(id, pinned, catalog.PinSourceUser, time.Now().Unix()); err != nil {
+		return nil, err
+	}
+	return m.cat.GetFileByID(id)
+}
+
+// SetPinnedBulk is SetPinned over many ids under a single mutex acquisition.
+// It returns the number of rows written; ids that match nothing are simply not
+// counted.
+func (m *Mover) SetPinnedBulk(ids []int64, pinned bool) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cat.SetPinnedBulk(ids, pinned, catalog.PinSourceUser, time.Now().Unix())
+}
+
+// ---------------------------------------------------------------------------
+// moves
+
+// ArchiveByID moves one synced file to cold storage on explicit instruction.
+//
+// It bypasses the grace period and the budget -- a manual or job-driven
+// archive is something the owner asked for -- but it applies the free-space
+// guard, and it CLEARS THE PIN first: the user who selects a pinned file and
+// presses Archive means it (design section 4.6 rule 3).
+func (m *Mover) ArchiveByID(id int64) (*catalog.FileRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.archiveLocked(id, true)
+}
+
+// ArchiveAutomatic is the quota tick's variant. It differs from ArchiveByID in
+// exactly two ways, both of them load-bearing for D2: it never clears the pin,
+// and it claims the row with ClaimUnpinnedFile, so a pin that commits between
+// the candidate query and the claim makes the claim fail and the file stays.
+// That is the third and authoritative layer of pin protection.
+func (m *Mover) ArchiveAutomatic(id int64) (*catalog.FileRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.archiveLocked(id, false)
+}
+
+func (m *Mover) archiveLocked(id int64, explicit bool) (*catalog.FileRecord, error) {
+	// Re-read inside the lock; never trust what the caller was holding.
+	rec, err := m.cat.GetFileByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Status == catalog.StatusArchived {
+		return rec, nil // invariant 12: already there, no-op success
+	}
+	if rec.Status != catalog.StatusSynced {
+		return nil, fmt.Errorf("%w: file %d is %s", ErrFileStateChanged, id, rec.Status)
+	}
+
+	fc, err := m.folderForMove(rec.FolderLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	free, err := m.spaceCheck(m.cfg.Storage.ColdStoragePath)
+	if err != nil {
+		return nil, fmt.Errorf("checking cold storage space: %w", err)
+	}
+	if free < minFreeSpacePercent {
+		m.cat.LogEventDeduped("cold_storage_low", rec.FolderLabel, "",
+			fmt.Sprintf("offload paused: cold storage at %.1f%% free", free), 60)
+		m.logger.Warn("cold storage below 5% free, refusing to archive",
+			"folder", rec.FolderLabel, "free_percent", free)
+		return nil, ErrColdStorageFull
+	}
+
+	src := filepath.Join(fc.SyncthingPath, rec.RelativePath)
+	dst := m.offloader.ArchivePath(rec.FolderLabel, rec.RelativePath)
+
+	// The guard against archiving an in-flight Syncthing transfer. A manual
+	// archive skips the grace period by design, so this stat inside the lock
+	// is the only thing between a bulk Archive and a file Syncthing is still
+	// writing: renaming an active download into cold storage makes Syncthing's
+	// pull fail with ENOENT and restart the transfer from block zero, and
+	// leaves a fragment in the archive that looks like a restorable file
+	// (design section 5.9).
+	if err := m.sourceUnchanged(src, rec); err != nil {
+		return nil, err
+	}
+
+	// Design section 4.6 rule 3: an explicit archive clears the pin before it
+	// claims, because the user who selects a pinned file and presses Archive
+	// means it. But the clear must be UNDONE on every failure path. The caller
+	// gets a 409 or a 500 and reasonably concludes nothing happened, and if
+	// the pin stayed cleared the next quota tick would take the file the owner
+	// had pinned -- the one piece of state D2 promises is held until they
+	// unpin it.
+	restorePin := func() {}
+	if explicit {
+		restorePin = m.pinRestorer(rec)
+		if err := m.cat.SetPinned(id, false, "", 0); err != nil {
+			return nil, fmt.Errorf("clearing pin before archive: %w", err)
+		}
+	}
+
+	claimed, err := m.claimForArchive(id, explicit)
+	if err != nil {
+		restorePin()
+		return nil, err
+	}
+	if !claimed {
+		restorePin()
+		return nil, fmt.Errorf("%w: file %d could not be claimed for archiving", ErrFileStateChanged, id)
+	}
+
+	if err := m.moveOut(src, dst); err != nil {
+		// ClaimFileOnDevice, not ClaimFile: the file is still sitting in the
+		// folder, and a walk that started before this revert would otherwise
+		// sweep the row to missing on its way out.
+		if _, rerr := m.cat.ClaimFileOnDevice(id, catalog.StatusArchiving, catalog.StatusSynced); rerr != nil {
+			m.logger.Error("cannot revert a failed archive to synced",
+				"id", id, "path", rec.RelativePath, "error", rerr)
+		}
+		restorePin()
+		if errors.Is(err, ErrSourceChanged) {
+			m.cat.LogEvent("source_changed", rec.FolderLabel, rec.RelativePath,
+				"the file was rewritten while it was being archived; both copies kept")
+		}
+		return nil, err
+	}
+
+	ok, err := m.cat.MarkArchived(id, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("recording archive: %w", err)
+	}
+	if !ok {
+		// Invariant 11. The bytes moved but the row says something else.
+		m.logger.Error("MarkArchived affected 0 rows after a completed move",
+			"id", id, "path", rec.RelativePath, "dst", dst)
+		m.cat.LogEvent("archive_unconfirmed", rec.FolderLabel, rec.RelativePath,
+			"file moved to cold storage but the catalog row was not in 'archiving'")
+		return nil, fmt.Errorf("archive of %d completed but could not be recorded", id)
+	}
+
+	m.cat.LogEvent("archive", rec.FolderLabel, rec.RelativePath,
+		fmt.Sprintf("offloaded %d bytes", rec.SizeBytes))
+	m.logger.Info("offloaded file",
+		"folder", rec.FolderLabel, "path", rec.RelativePath, "size", rec.SizeBytes)
+
+	return m.cat.GetFileByID(id)
+}
+
+// pinRestorer captures a file's pin as it was before an explicit archive
+// cleared it, and returns a function that puts it back. An unpinned file
+// yields a no-op, so callers can invoke the result unconditionally.
+func (m *Mover) pinRestorer(rec *catalog.FileRecord) func() {
+	if !rec.Pinned {
+		return func() {}
+	}
+	source := rec.PinSource
+	if source != catalog.PinSourceUser && source != catalog.PinSourceRestore {
+		source = catalog.PinSourceUser
+	}
+	at := time.Now().Unix()
+	if rec.PinnedAt != nil {
+		at = *rec.PinnedAt
+	}
+	return func() {
+		if err := m.cat.SetPinned(rec.ID, true, source, at); err != nil {
+			m.logger.Error("cannot restore the pin an abandoned archive cleared",
+				"id", rec.ID, "path", rec.RelativePath, "error", err)
+		}
+	}
+}
+
+func (m *Mover) claimForArchive(id int64, explicit bool) (bool, error) {
+	if explicit {
+		return m.cat.ClaimFile(id, catalog.StatusSynced, catalog.StatusArchiving)
+	}
+	return m.cat.ClaimUnpinnedFile(id)
+}
+
+// RestoreByID moves one archived file back to its syncthing folder and pins it.
+func (m *Mover) RestoreByID(id int64) (*catalog.FileRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rec, err := m.cat.GetFileByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Status == catalog.StatusSynced {
+		return rec, nil // invariant 12: already here, no-op success
+	}
+	if rec.Status != catalog.StatusArchived {
+		return nil, fmt.Errorf("%w: file %d is %s", ErrFileStateChanged, id, rec.Status)
+	}
+
+	fc, err := m.folderForMove(rec.FolderLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	src := m.restorer.ColdPath(rec.FolderLabel, rec.RelativePath)
+	dst := filepath.Join(fc.SyncthingPath, rec.RelativePath)
+
+	// A file can legitimately reappear at the destination while the row still
+	// says archived: that is what Syncthing does when a device that edited it
+	// offline reconnects with a version vector that outranks coldstore's
+	// deletion. Restoring over it would push September's bytes to every
+	// device as an ordinary local edit, producing no conflict file anywhere.
+	// So: adopt what is on the device, keep the archived copy beside it, and
+	// report the conflict (design section 5.2).
+	if _, err := os.Lstat(dst); err == nil {
+		return nil, m.adoptDeviceCopy(rec, catalog.StatusArchived, src, dst)
+	}
+
+	ok, err := m.cat.ClaimFile(id, catalog.StatusArchived, catalog.StatusRestoring)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: file %d could not be claimed for restoring", ErrFileStateChanged, id)
+	}
+
+	if err := m.moveIn(src, dst, m.restorer.ArchiveRoot(rec.FolderLabel)); err != nil {
+		// The destination was clear when we looked and was taken while the
+		// copy ran -- the same reconnecting-device case as above, only later.
+		// crossDeviceMove refused to overwrite it and left the cold copy
+		// intact, so the resolution is identical.
+		if errors.Is(err, ErrDestinationExists) {
+			return nil, m.adoptDeviceCopy(rec, catalog.StatusRestoring, src, dst)
+		}
+		if _, rerr := m.cat.ClaimFile(id, catalog.StatusRestoring, catalog.StatusArchived); rerr != nil {
+			m.logger.Error("cannot revert a failed restore to archived",
+				"id", id, "path", rec.RelativePath, "error", rerr)
+		}
+		return nil, err
+	}
+
+	// MarkRestored, not UpdateFileStatus(synced): it commits the status and the
+	// pin in ONE statement, so a crash can never leave a restored file unpinned
+	// and immediately re-archivable by the next quota tick (D2).
+	ok, err = m.cat.MarkRestored(id, time.Now().Unix())
+	if err != nil {
+		return nil, fmt.Errorf("recording restore: %w", err)
+	}
+	if !ok {
+		m.logger.Error("MarkRestored affected 0 rows after a completed move",
+			"id", id, "path", rec.RelativePath, "dst", dst)
+		m.cat.LogEvent("archive_unconfirmed", rec.FolderLabel, rec.RelativePath,
+			"file moved back to the folder but the catalog row was not in 'restoring'")
+		return nil, fmt.Errorf("restore of %d completed but could not be recorded", id)
+	}
+
+	m.cat.LogEvent("restore", rec.FolderLabel, rec.RelativePath,
+		fmt.Sprintf("restored %d bytes", rec.SizeBytes))
+	m.logger.Info("restored file",
+		"folder", rec.FolderLabel, "path", rec.RelativePath, "size", rec.SizeBytes)
+
+	return m.cat.GetFileByID(id)
+}
+
+// adoptDeviceCopy is the restore-conflict resolution: a file has reappeared at
+// the syncthing path under a row coldstore believed was archived.
+//
+// Restoring over it would push the archived bytes to every device as an
+// ordinary local edit, producing no conflict file anywhere. So the on-device
+// copy wins, the archived copy is kept beside it under .coldstore-superseded,
+// and the caller gets ErrDestinationExists, which the API renders as a 409.
+//
+// from is whatever status the row is actually in when this runs: 'archived' on
+// the pre-move check, 'restoring' when the collision happened mid-copy.
+func (m *Mover) adoptDeviceCopy(rec *catalog.FileRecord, from catalog.FileStatus, src, dst string) error {
+	if _, err := os.Lstat(src); err == nil {
+		aside := asidePath(src)
+		if rerr := os.Rename(src, aside); rerr != nil {
+			m.logger.Error("cannot set the archived copy aside",
+				"src", src, "aside", aside, "error", rerr)
+		}
+	}
+	// ClaimFileOnDevice: the file IS on the device now, so last_seen has to
+	// say so or a walk already in flight sweeps the row straight to missing.
+	if _, cerr := m.cat.ClaimFileOnDevice(rec.ID, from, catalog.StatusSynced); cerr != nil {
+		m.logger.Error("cannot adopt the on-device copy", "id", rec.ID, "error", cerr)
+	}
+	m.cat.LogEvent("restore_conflict", rec.FolderLabel, rec.RelativePath,
+		"a copy already existed in the folder; coldstore adopted it and set the "+
+			"archived copy aside as "+supersededSuffix)
+	return fmt.Errorf("%w: %s", ErrDestinationExists, dst)
+}
+
+// ResolveConflict settles a section 4.1b conflict -- an archived row whose path
+// has reappeared in the Syncthing folder -- in whichever direction the owner
+// chose. It runs through the mover for the same reason every other transition
+// does: nothing may change this row's status or place while a move of it is in
+// flight.
+//
+//   - keep == "device": delete the cold-storage copy and adopt the file on
+//     disk, taking its real size and timestamps.
+//   - keep == "archive": rename the device file aside as
+//     .coldstore-superseded and leave the row archived, so the next restore
+//     puts the archived copy back.
+//
+// Nothing is ever deleted in the "archive" direction: the device copy is set
+// aside, not removed. In the "device" direction the cold copy IS deleted,
+// because that is exactly what the owner asked for and the bytes they are
+// keeping are the ones already in the folder.
+func (m *Mover) ResolveConflict(id int64, keep string) (*catalog.FileRecord, error) {
+	if keep != ResolveKeepDevice && keep != ResolveKeepArchive {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidResolution, keep)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rec, err := m.cat.GetFileByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Status != catalog.StatusArchived {
+		return nil, fmt.Errorf("%w: file %d is %s, not archived", ErrFileStateChanged, id, rec.Status)
+	}
+
+	fc, err := m.folderForMove(rec.FolderLabel)
+	if err != nil {
+		return nil, err
+	}
+
+	devicePath := filepath.Join(fc.SyncthingPath, rec.RelativePath)
+	coldPath := m.restorer.ColdPath(rec.FolderLabel, rec.RelativePath)
+
+	info, err := os.Lstat(devicePath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: nothing at %s to resolve against", ErrFileStateChanged, devicePath)
+	}
+
+	if keep == ResolveKeepArchive {
+		aside := asidePath(devicePath)
+		if err := os.Rename(devicePath, aside); err != nil {
+			return nil, fmt.Errorf("setting the device copy aside: %w", err)
+		}
+		m.cat.LogEvent("conflict", rec.FolderLabel, rec.RelativePath,
+			"resolved in favour of the archived copy; the device copy was kept as "+
+				filepath.Base(aside))
+		return m.cat.GetFileByID(id)
+	}
+
+	// keep == device. Set the cold copy aside first and only then unlink it,
+	// so a failure between the two leaves bytes rather than losing them.
+	if _, err := os.Lstat(coldPath); err == nil {
+		if err := os.Remove(coldPath); err != nil {
+			return nil, fmt.Errorf("removing the cold copy: %w", err)
+		}
+	}
+
+	atime := info.ModTime()
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		atime = time.Unix(st.Atim.Sec, st.Atim.Nsec)
+	}
+	ok, err := m.cat.AdoptDeviceCopy(id, info.Size(), info.ModTime(), atime)
+	if err != nil {
+		return nil, fmt.Errorf("adopting the device copy: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: file %d left 'archived' while it was being resolved",
+			ErrFileStateChanged, id)
+	}
+	m.cat.LogEvent("conflict", rec.FolderLabel, rec.RelativePath,
+		"resolved in favour of the device copy; the cold-storage copy was deleted")
+	return m.cat.GetFileByID(id)
+}
+
+// folderForMove resolves a folder and refuses the move unless its root is
+// really there. An orphaned folder is refused too: coldstore stops moving
+// files for a folder the owner has removed from coldstore.toml, while keeping
+// what it already knows browsable.
+func (m *Mover) folderForMove(label string) (*catalog.FolderConfigRecord, error) {
+	fc, err := m.cat.FolderConfigByLabel(label)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrFolderUnavailable, label)
+	}
+	if !fc.PresentInTOML {
+		return nil, fmt.Errorf("%w: %s is no longer declared in coldstore.toml",
+			ErrFolderUnavailable, label)
+	}
+	if err := FolderReady(fc.SyncthingPath); err != nil {
+		return nil, err
+	}
+	return fc, nil
+}
+
+// sourceUnchanged refuses a move whose source no longer matches the catalog
+// row: a different size, or an mtime that has moved FORWARD past the one the
+// catalog recorded.
+//
+// Forward, not merely different, and whole seconds, not nanoseconds. The row
+// is written after the file is read, so a catalogued timestamp a fraction of a
+// second ahead of the disk is ordinary and says nothing; only an mtime that
+// has advanced past it means somebody has touched the file since. A file
+// Syncthing is actively writing fails both halves of this test.
+func (m *Mover) sourceUnchanged(src string, rec *catalog.FileRecord) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("%w: cannot stat %s: %v", ErrFileStateChanged, src, err)
+	}
+	if info.Size() != rec.SizeBytes || info.ModTime().Unix() > rec.FileMtime.Unix() {
+		m.cat.LogEvent("source_changed", rec.FolderLabel, rec.RelativePath,
+			fmt.Sprintf("on disk %d bytes at %s, catalogued %d bytes at %s",
+				info.Size(), info.ModTime().UTC().Format(time.RFC3339),
+				rec.SizeBytes, rec.FileMtime.UTC().Format(time.RFC3339)))
+		return fmt.Errorf("%w: %s", ErrSourceChanged, src)
+	}
+	return nil
+}

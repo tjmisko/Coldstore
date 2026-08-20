@@ -12,11 +12,11 @@ import (
 
 // seedScannedFolder catalogs two synced files under a real folder root and
 // returns the catalog plus the scanner and folder config pointing at it.
-func seedScannedFolder(t *testing.T) (*catalog.Catalog, *Scanner, config.FolderConfig, string) {
+func seedScannedFolder(t *testing.T) (*catalog.Catalog, *Scanner, catalog.FolderConfigRecord, string) {
 	t.Helper()
 
 	root := filepath.Join(t.TempDir(), "photos")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".stfolder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"one.jpg", "two.jpg"} {
@@ -29,9 +29,8 @@ func seedScannedFolder(t *testing.T) (*catalog.Catalog, *Scanner, config.FolderC
 	}
 	t.Cleanup(func() { cat.Close() })
 
-	folder := config.FolderConfig{Label: "Photos", Path: root}
-	cfg := &config.Config{Folders: []config.FolderConfig{folder}}
-	scanner := NewScanner(cfg, cat, testLogger())
+	folder := declareFolder(t, cat, "Photos", root)
+	scanner := NewScanner(&config.Config{}, cat, testLogger())
 
 	if err := scanner.ScanFolder(folder); err != nil {
 		t.Fatal(err)
@@ -74,7 +73,7 @@ func TestScanFolderShouldAbortWithoutMarkingAnythingMissingWhenRootIsAbsent(t *t
 }
 
 func TestScanFolderShouldAbortWhenRootIsAFileRatherThanADirectory(t *testing.T) {
-	dir := t.TempDir()
+	dir := newSyncthingFolder(t, t.TempDir())
 	notADir := filepath.Join(dir, "photos")
 	os.WriteFile(notADir, []byte("this is not a folder"), 0o644)
 
@@ -84,9 +83,8 @@ func TestScanFolderShouldAbortWhenRootIsAFileRatherThanADirectory(t *testing.T) 
 	}
 	defer cat.Close()
 
-	folder := config.FolderConfig{Label: "Photos", Path: notADir}
-	cfg := &config.Config{Folders: []config.FolderConfig{folder}}
-	scanner := NewScanner(cfg, cat, testLogger())
+	folder := declareFolder(t, cat, "Photos", notADir)
+	scanner := NewScanner(&config.Config{}, cat, testLogger())
 
 	if err := scanner.ScanFolder(folder); err == nil {
 		t.Fatal("scanning a root that is not a directory should return an error")
@@ -120,7 +118,7 @@ func TestScanFolderShouldAbortWhenRootIsUnreadable(t *testing.T) {
 
 func TestScanAllShouldKeepScanningOtherFoldersWhenOneRootIsAbsent(t *testing.T) {
 	goodRoot := filepath.Join(t.TempDir(), "good")
-	os.MkdirAll(goodRoot, 0o755)
+	os.MkdirAll(filepath.Join(goodRoot, ".stfolder"), 0o755)
 	os.WriteFile(filepath.Join(goodRoot, "kept.jpg"), make([]byte, 50), 0o644)
 
 	missingRoot := filepath.Join(t.TempDir(), "never-created")
@@ -131,11 +129,9 @@ func TestScanAllShouldKeepScanningOtherFoldersWhenOneRootIsAbsent(t *testing.T) 
 	}
 	defer cat.Close()
 
-	cfg := &config.Config{Folders: []config.FolderConfig{
-		{Label: "Absent", Path: missingRoot},
-		{Label: "Good", Path: goodRoot},
-	}}
-	scanner := NewScanner(cfg, cat, testLogger())
+	declareFolder(t, cat, "Absent", missingRoot)
+	declareFolder(t, cat, "Good", goodRoot)
+	scanner := NewScanner(&config.Config{}, cat, testLogger())
 
 	if err := scanner.ScanAll(); err != nil {
 		t.Fatalf("ScanAll should tolerate one unavailable folder: %v", err)
@@ -158,6 +154,7 @@ func TestScanFolderShouldNotMarkFilesMissingWhenASubdirectoryIsUnreadable(t *tes
 	root := filepath.Join(t.TempDir(), "photos")
 	sub := filepath.Join(root, "2024")
 	os.MkdirAll(sub, 0o755)
+	newSyncthingFolder(t, root)
 	os.WriteFile(filepath.Join(root, "top.jpg"), make([]byte, 100), 0o644)
 	os.WriteFile(filepath.Join(sub, "inner.jpg"), make([]byte, 100), 0o644)
 
@@ -167,9 +164,8 @@ func TestScanFolderShouldNotMarkFilesMissingWhenASubdirectoryIsUnreadable(t *tes
 	}
 	defer cat.Close()
 
-	folder := config.FolderConfig{Label: "Photos", Path: root}
-	cfg := &config.Config{Folders: []config.FolderConfig{folder}}
-	scanner := NewScanner(cfg, cat, testLogger())
+	folder := declareFolder(t, cat, "Photos", root)
+	scanner := NewScanner(&config.Config{}, cat, testLogger())
 
 	if err := scanner.ScanFolder(folder); err != nil {
 		t.Fatal(err)
@@ -197,7 +193,7 @@ func TestScanFolderShouldNotMarkFilesMissingWhenASubdirectoryIsUnreadable(t *tes
 
 func TestScanFolderShouldMarkOnlyDeletedFilesMissingWhenRescannedTwiceInTheSameSecond(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "photos")
-	os.MkdirAll(root, 0o755)
+	os.MkdirAll(filepath.Join(root, ".stfolder"), 0o755)
 	os.WriteFile(filepath.Join(root, "stays.jpg"), make([]byte, 100), 0o644)
 	deleted := filepath.Join(root, "goes.jpg")
 	os.WriteFile(deleted, make([]byte, 100), 0o644)
@@ -208,9 +204,8 @@ func TestScanFolderShouldMarkOnlyDeletedFilesMissingWhenRescannedTwiceInTheSameS
 	}
 	defer cat.Close()
 
-	folder := config.FolderConfig{Label: "Photos", Path: root}
-	cfg := &config.Config{Folders: []config.FolderConfig{folder}}
-	scanner := NewScanner(cfg, cat, testLogger())
+	folder := declareFolder(t, cat, "Photos", root)
+	scanner := NewScanner(&config.Config{}, cat, testLogger())
 
 	start := time.Now()
 	if err := scanner.ScanFolder(folder); err != nil {
@@ -230,5 +225,35 @@ func TestScanFolderShouldMarkOnlyDeletedFilesMissingWhenRescannedTwiceInTheSameS
 	}
 	if got["stays.jpg"] != catalog.StatusSynced {
 		t.Errorf("stays.jpg status = %q, want synced", got["stays.jpg"])
+	}
+}
+
+// An unmounted mountpoint is the case a bare os.Stat cannot see: the directory
+// exists, it is readable, and it is empty. Reading that as "every file was
+// deleted" marks the whole folder missing, which breaks downloads and restores
+// and drops the folder's bytes out of the enforcement budget until someone
+// notices. Syncthing's .stfolder marker is what tells the two apart, so the
+// scanner has to consult it before it trusts an empty walk (design 3.6).
+func TestScanFolderShouldNotMarkFilesMissingWhenTheRootIsAnUnmountedMountpoint(t *testing.T) {
+	cat, scanner, folder, root := seedScannedFolder(t)
+
+	// Wipe the root the way an unmounted volume presents: the directory is
+	// still there and still readable, but the marker and the files are not.
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scanner.ScanFolder(folder); err == nil {
+		t.Fatal("scanning an unmounted root should return an error, not report an empty folder")
+	}
+
+	for name, status := range statusesOf(t, cat, "Photos", "one.jpg", "two.jpg") {
+		if status != catalog.StatusSynced {
+			t.Errorf("%s status = %q, want synced: an empty directory with no .stfolder is an unmounted volume, not a deletion",
+				name, status)
+		}
 	}
 }

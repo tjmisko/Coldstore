@@ -80,7 +80,7 @@ func TestCrossDeviceMoveShouldFsyncDestinationAndItsDirectoryBeforeRemovingSourc
 		return origDir(path)
 	}
 
-	if err := crossDeviceMove(context.Background(), src, dst, testLogger()); err != nil {
+	if err := crossDeviceMove(src, dst, testLogger()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +116,7 @@ func TestCrossDeviceMoveShouldKeepSourceWhenDestinationFsyncFails(t *testing.T) 
 	t.Cleanup(func() { syncFile = orig })
 	syncFile = func(f *os.File) error { return errors.New("simulated disk failure") }
 
-	err := crossDeviceMove(context.Background(), src, dst, testLogger())
+	err := crossDeviceMove(src, dst, testLogger())
 	if err == nil {
 		t.Fatal("move should fail when the destination cannot be made durable")
 	}
@@ -133,42 +133,11 @@ func TestCrossDeviceMoveShouldKeepSourceWhenDestinationFsyncFails(t *testing.T) 
 	}
 }
 
-func TestCrossDeviceMoveShouldKeepSourceWhenContextIsCancelledMidCopy(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "big.bin")
-	dst := filepath.Join(dir, "big.archived.bin")
-
-	// Large enough that io.Copy makes many 32 KiB reads, so cancellation is
-	// observed part-way through rather than after the whole file.
-	content := make([]byte, 4<<20)
-	for i := range content {
-		content[i] = byte(i)
-	}
-	os.WriteFile(src, content, 0o644)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := crossDeviceMove(ctx, src, dst, testLogger())
-	if err == nil {
-		t.Fatal("cancelled move should fail")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want it to wrap context.Canceled", err)
-	}
-	if _, statErr := os.Stat(src); statErr != nil {
-		t.Errorf("source must survive a cancelled move: %v", statErr)
-	}
-	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
-		t.Error("partial destination should be cleaned up")
-	}
-}
-
-func TestOffloadShouldLeaveFileSyncedWhenContextIsCancelled(t *testing.T) {
+func TestArchiveShouldLeaveTheFileSyncedWhenTheMoveFails(t *testing.T) {
 	syncDir, _, cfg, cat := setupTestEnv(t)
 
 	path := filepath.Join(syncDir, "photo.jpg")
-	content := make([]byte, 2<<20)
+	content := make([]byte, 2<<10)
 	os.WriteFile(path, content, 0o644)
 
 	cat.UpsertFile(&catalog.FileRecord{
@@ -179,15 +148,16 @@ func TestOffloadShouldLeaveFileSyncedWhenContextIsCancelled(t *testing.T) {
 		SizeBytes:    int64(len(content)),
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := cat.GetFile("TestFolder", "photo.jpg")
+	declarePolicy(t, cfg, cat)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	mover := NewMover(cfg, cat, testLogger())
+	mover.SetSpaceCheck(plentyOfSpace)
+	mover.SetMoveFuncs(func(src, dst string) error { return errors.New("simulated move failure") }, nil)
 
-	offloader := NewOffloader(cfg, cat, testLogger())
-	if err := offloader.OffloadContext(ctx, file, syncDir); err == nil {
-		t.Fatal("cancelled offload should return an error")
+	if _, err := mover.ArchiveByID(file.ID); err == nil {
+		t.Fatal("a failed move must return an error")
 	}
 
 	after, err := cat.GetFile("TestFolder", "photo.jpg")
@@ -195,15 +165,15 @@ func TestOffloadShouldLeaveFileSyncedWhenContextIsCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if after.Status != catalog.StatusSynced {
-		t.Errorf("status = %q, want synced (an interrupted offload must not strand a file in 'archiving')",
+		t.Errorf("status = %q, want synced (a failed archive must not strand a file in 'archiving')",
 			after.Status)
 	}
 	if _, err := os.Stat(path); err != nil {
-		t.Errorf("source file must still be on disk after a cancelled offload: %v", err)
+		t.Errorf("source file must still be on disk after a failed archive: %v", err)
 	}
 }
 
-func TestRestoreShouldLeaveFileArchivedWhenContextIsCancelled(t *testing.T) {
+func TestRestoreShouldLeaveTheFileArchivedWhenTheMoveFails(t *testing.T) {
 	syncDir, coldDir, cfg, cat := setupTestEnv(t)
 
 	// Put the file straight into the archive, as an offload would have.
@@ -219,17 +189,18 @@ func TestRestoreShouldLeaveFileArchivedWhenContextIsCancelled(t *testing.T) {
 		SizeBytes:    1024,
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := cat.GetFile("TestFolder", "photo.jpg")
 	cat.UpdateFileStatus(file.ID, catalog.StatusArchived)
-	file, _ = cat.GetFile("TestFolder", "photo.jpg")
+	declarePolicy(t, cfg, cat)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	mover := NewMover(cfg, cat, testLogger())
+	mover.SetMoveFuncs(nil, func(src, dst, archiveRoot string) error {
+		return errors.New("simulated move failure")
+	})
 
-	restorer := NewRestorer(cfg, cat, testLogger())
-	if err := restorer.RestoreContext(ctx, file); err == nil {
-		t.Fatal("cancelled restore should return an error")
+	if _, err := mover.RestoreByID(file.ID); err == nil {
+		t.Fatal("a failed move must return an error")
 	}
 
 	after, err := cat.GetFile("TestFolder", "photo.jpg")
@@ -237,11 +208,11 @@ func TestRestoreShouldLeaveFileArchivedWhenContextIsCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if after.Status != catalog.StatusArchived {
-		t.Errorf("status = %q, want archived (an interrupted restore must not strand a file in 'restoring')",
+		t.Errorf("status = %q, want archived (a failed restore must not strand a file in 'restoring')",
 			after.Status)
 	}
 	if _, err := os.Stat(archived); err != nil {
-		t.Errorf("the archive copy must survive a cancelled restore: %v", err)
+		t.Errorf("the archive copy must survive a failed restore: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(syncDir, "photo.jpg")); !os.IsNotExist(err) {
 		t.Error("a partial restored file should not be left in the syncthing folder")
@@ -251,7 +222,9 @@ func TestRestoreShouldLeaveFileArchivedWhenContextIsCancelled(t *testing.T) {
 func TestEnforceQuotasShouldStopOffloadingWhenContextIsCancelled(t *testing.T) {
 	syncDir, _, cfg, cat := setupTestEnv(t)
 
-	cfg.Folders[0].BudgetBytes = 0
+	// Small but positive: a non-positive budget means "unset" and is skipped
+	// outright, which would make this test pass without exercising anything.
+	cfg.Folders[0].BudgetBytes = 1
 	cfg.Daemon.GracePeriodMinutes = 0
 
 	old := time.Now().Add(-24 * time.Hour)
@@ -267,10 +240,12 @@ func TestEnforceQuotasShouldStopOffloadingWhenContextIsCancelled(t *testing.T) {
 			SizeBytes:    1000,
 			FileMtime:    old,
 			Status:       catalog.StatusSynced,
-		})
+		}, time.Now().UnixNano())
 	}
 
-	d := New(cfg, cat, testLogger())
+	declarePolicy(t, cfg, cat)
+
+	d := newTestDaemon(t, cfg, cat, testLogger())
 	d.SetSpaceCheck(func(string) (float64, error) { return 90.0, nil })
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -296,8 +271,9 @@ func TestRunContextShouldReturnPromptlyWhenContextIsCancelled(t *testing.T) {
 	// Tickers far enough out that the loop can only exit via the context.
 	cfg.Daemon.ScanIntervalMinutes = 60
 	cfg.Daemon.CatalogSyncIntervalMinutes = 60
+	declarePolicy(t, cfg, cat)
 
-	d := New(cfg, cat, testLogger())
+	d := newTestDaemon(t, cfg, cat, testLogger())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -314,5 +290,50 @@ func TestRunContextShouldReturnPromptlyWhenContextIsCancelled(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunContext did not return within 5s of cancellation")
+	}
+}
+
+func TestEnforcementShouldCountAMoveInFlightWhenMeasuringTheFolderAgainstItsBudget(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+
+	cfg.Folders[0].BudgetBytes = 5000
+	cfg.Daemon.GracePeriodMinutes = 0
+
+	old := time.Now().Add(-24 * time.Hour)
+	for _, name := range []string{"inflight.txt", "eligible.txt"} {
+		p := filepath.Join(syncDir, name)
+		os.WriteFile(p, make([]byte, 3000), 0o644)
+		os.Chtimes(p, old, old)
+		cat.UpsertFile(&catalog.FileRecord{
+			FolderLabel:  "TestFolder",
+			RelativePath: name,
+			Filename:     name,
+			Extension:    ".txt",
+			SizeBytes:    3000,
+			FileMtime:    old,
+			FileAtime:    old,
+			Status:       catalog.StatusSynced,
+		}, time.Now().UnixNano())
+	}
+
+	// A file whose move out has been claimed but not committed still occupies
+	// the device, so the folder is at 6000 against a 5000 budget. Counting
+	// only 'synced' would report 3000 and archive nothing at all.
+	inflight, _ := cat.GetFile("TestFolder", "inflight.txt")
+	cat.UpdateFileStatus(inflight.ID, catalog.StatusArchiving)
+
+	declarePolicy(t, cfg, cat)
+
+	d := newTestDaemon(t, cfg, cat, testLogger())
+	d.SetSpaceCheck(func(string) (float64, error) { return 90.0, nil })
+	d.EnforceQuotas()
+
+	eligible, err := cat.GetFile("TestFolder", "eligible.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eligible.Status != catalog.StatusArchived {
+		t.Errorf("status = %q, want archived: the in-flight file's bytes count against the budget",
+			eligible.Status)
 	}
 }

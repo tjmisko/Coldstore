@@ -19,5 +19,11 @@ COPY docker/coldstore.test.toml /app/coldstore.toml
 # mounts volumes over both, but create them so the image also runs standalone.
 RUN mkdir -p /data/cold /data/sync
 
-ENTRYPOINT ["coldstore"]
+# The marker has to be created at START, not at build time: compose mounts the
+# shared-sync volume over /data/sync, which hides anything the image put there.
+# Without it FolderReady treats the folder as unmounted -- correctly, since that is
+# exactly what an empty mount looks like -- and the daemon moves nothing all run.
+# The real Syncthing service creates .stfolder for folders it manages; this stack
+# gives coldstore a directory Syncthing has not been told about.
+ENTRYPOINT ["/bin/sh", "-c", "mkdir -p /data/sync/.stfolder && exec coldstore \"$@\"", "--"]
 CMD ["--config", "/app/coldstore.toml"]

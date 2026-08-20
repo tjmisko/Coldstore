@@ -65,7 +65,11 @@ const { status, refetch, triggerScan } = useStatus();
 ```
 
 Fetches `GET /api/v1/status` once on mount. Returns `StatusResponse | null`.
-Also exposes `triggerScan` which POSTs to `/api/v1/scan`.
+Also exposes `triggerScan` which POSTs to `/api/v1/scan`. That endpoint no longer walks
+the tree inline: it answers `202 {job_id, action, state, total}` and the scan runs on the
+job queue, so a refresh returns immediately and can be followed with
+`GET /api/v1/jobs/{job_id}`. The current hook ignores the response body, which is why the
+change did not break it.
 
 ### useFolders (`web/src/hooks/useConfig.ts:31-60`)
 

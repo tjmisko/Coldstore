@@ -19,7 +19,7 @@ func addFile(t *testing.T, cat *Catalog, folder, relPath string, size int64, mti
 		FileAtime:    mtime,
 		Status:       StatusSynced,
 	}
-	if err := cat.UpsertFile(rec); err != nil {
+	if _, err := cat.UpsertFile(rec, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := cat.GetFile(folder, relPath)
@@ -40,7 +40,7 @@ func TestOffloadCandidatesShouldSkipAFileWhenItIsPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	candidates, err := cat.OffloadCandidates("Photos")
+	candidates, err := cat.OffloadCandidates("Photos", defaultOffloadCandidateLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestOffloadCandidatesShouldReturnOldestFirstWhenSeveralAreEligible(t *testi
 	addFile(t, cat, "Photos", "oldest.jpg", 1, base)
 	addFile(t, cat, "Photos", "middle.jpg", 1, base.Add(time.Hour))
 
-	candidates, err := cat.OffloadCandidates("Photos")
+	candidates, err := cat.OffloadCandidates("Photos", defaultOffloadCandidateLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestOffloadCandidatesShouldStopAtTheLimitWhenTheFolderHasMoreEligibleFiles(
 		addFile(t, cat, "Photos", string(rune('a'+i))+".jpg", 1, base.Add(time.Duration(i)*time.Minute))
 	}
 
-	candidates, err := cat.OffloadCandidatesLimited("Photos", 3)
+	candidates, err := cat.OffloadCandidates("Photos", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestUpsertFileShouldPreserveThePinWhenTheSamePathIsRescanned(t *testing.T) 
 	}
 
 	// A rescan sees the same path with fresh metadata.
-	if err := cat.UpsertFile(&FileRecord{
+	if _, err := cat.UpsertFile(&FileRecord{
 		FolderLabel:  "Photos",
 		RelativePath: "a.jpg",
 		Filename:     "a.jpg",
@@ -116,7 +116,7 @@ func TestUpsertFileShouldPreserveThePinWhenTheSamePathIsRescanned(t *testing.T) 
 		FileMtime:    mtime.Add(time.Minute),
 		FileAtime:    mtime.Add(time.Minute),
 		Status:       StatusSynced,
-	}); err != nil {
+	}, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,11 +147,11 @@ func TestUpsertFileShouldPreserveThumbnailFailuresWhenTheSamePathIsRescanned(t *
 		t.Fatal(err)
 	}
 
-	if err := cat.UpsertFile(&FileRecord{
+	if _, err := cat.UpsertFile(&FileRecord{
 		FolderLabel: "Photos", RelativePath: "a.jpg", Filename: "a.jpg",
 		Extension: ".jpg", SizeBytes: 100, FileMtime: mtime, FileAtime: mtime,
 		Status: StatusSynced,
-	}); err != nil {
+	}, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -280,7 +280,7 @@ func TestMarkRestoredShouldPinTheFileWhenTheRestoreCommits(t *testing.T) {
 	}
 
 	// The whole point: it is no longer an offload candidate.
-	candidates, err := cat.OffloadCandidates("Photos")
+	candidates, err := cat.OffloadCandidates("Photos", defaultOffloadCandidateLimit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,4 +551,76 @@ func itoa(i int) string {
 		i /= 10
 	}
 	return string(digits)
+}
+
+func TestFolderCountsShouldNotCountAPinWhenTheFileIsAlreadyInColdStorage(t *testing.T) {
+	cat := setupTestCatalog(t)
+	now := time.Now().UTC()
+
+	onDevice := addFile(t, cat, "Photos", "here.jpg", 100, now)
+	inCold := addFile(t, cat, "Photos", "gone.jpg", 900, now)
+	if err := cat.UpdateFileStatus(inCold.ID, StatusArchived); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{onDevice.ID, inCold.ID} {
+		if err := cat.SetPinned(id, true, PinSourceUser, now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	counts, err := cat.FolderCounts("Photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pinned COUNT has to agree with the pinned BYTES the same response
+	// carries, and FolderSizes excludes archived rows: an archived pin is a
+	// latent instruction, not a claim on the device.
+	if counts.Pinned != 1 {
+		t.Errorf("counts.Pinned = %d, want 1 (an archived pin occupies no space on the device)",
+			counts.Pinned)
+	}
+
+	_, pinnedBytes, err := cat.FolderSizes("Photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinnedBytes != 100 {
+		t.Errorf("pinned bytes = %d, want 100", pinnedBytes)
+	}
+}
+
+func TestFolderLabelsForIDsShouldNameEveryFolderTheSelectionTouches(t *testing.T) {
+	cat := setupTestCatalog(t)
+	now := time.Now().UTC()
+
+	a := addFile(t, cat, "Photos", "a.jpg", 1, now)
+	b := addFile(t, cat, "Docs", "b.pdf", 1, now)
+	c := addFile(t, cat, "Photos", "c.jpg", 1, now)
+
+	labels, err := cat.FolderLabelsForIDs([]int64{a.ID, b.ID, c.ID, 99999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != 2 || labels[0] != "Docs" || labels[1] != "Photos" {
+		t.Errorf("labels = %v, want [Docs Photos] (sorted, deduplicated, unknown ids dropped)", labels)
+	}
+}
+
+func TestHumanSIShouldMatchTheUnitsTheOwnerWroteInTheirConfig(t *testing.T) {
+	cases := []struct {
+		bytes int64
+		want  string
+	}{
+		{0, "0 B"},
+		{999, "999 B"},
+		{20_000_000_000, "20 GB"},
+		{24_100_000_000, "24.1 GB"},
+		{1_500_000, "1.5 MB"},
+		{2_000_000_000_000, "2 TB"},
+	}
+	for _, tc := range cases {
+		if got := HumanSI(tc.bytes); got != tc.want {
+			t.Errorf("HumanSI(%d) = %q, want %q", tc.bytes, got, tc.want)
+		}
+	}
 }

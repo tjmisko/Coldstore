@@ -13,7 +13,7 @@ func TestFilesNeedingThumbnailsShouldStopAtTheLimitWhenTheQueueIsLarge(t *testin
 		addFile(t, cat, "Photos", "f"+itoa(i)+".jpg", 1, now.Add(-time.Duration(i)*time.Minute))
 	}
 
-	files, err := cat.FilesNeedingThumbnailsLimited([]string{".jpg"}, 200)
+	files, err := cat.FilesNeedingThumbnails([]string{".jpg"}, 200)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestFilesNeedingThumbnailsShouldDropAFileWhenItHasFailedTheMaximumNumberOfT
 	healthy := addFile(t, cat, "Photos", "healthy.jpg", 1, now)
 
 	for attempt := 1; attempt <= maxThumbnailAttempts; attempt++ {
-		files, err := cat.FilesNeedingThumbnailsLimited([]string{".jpg"}, 100)
+		files, err := cat.FilesNeedingThumbnails([]string{".jpg"}, 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -42,7 +42,7 @@ func TestFilesNeedingThumbnailsShouldDropAFileWhenItHasFailedTheMaximumNumberOfT
 		}
 	}
 
-	files, err := cat.FilesNeedingThumbnailsLimited([]string{".jpg"}, 100)
+	files, err := cat.FilesNeedingThumbnails([]string{".jpg"}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestFilesNeedingThumbnailsShouldSkipAFileWhenItAlreadyHasAThumbnail(t *test
 		t.Fatal(err)
 	}
 
-	files, err := cat.FilesNeedingThumbnailsLimited([]string{".jpg"}, 100)
+	files, err := cat.FilesNeedingThumbnails([]string{".jpg"}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestResetThumbnailFailuresShouldRequeueAFolderWhenTheOwnerAsksForARetry(t *
 		t.Errorf("reset %d rows, want 1", reset)
 	}
 
-	files, err := cat.FilesNeedingThumbnailsLimited([]string{".jpg"}, 100)
+	files, err := cat.FilesNeedingThumbnails([]string{".jpg"}, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

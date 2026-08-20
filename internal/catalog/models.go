@@ -1,6 +1,10 @@
 package catalog
 
-import "time"
+import (
+	"fmt"
+	"math"
+	"time"
+)
 
 type FileStatus string
 
@@ -88,6 +92,36 @@ func (b FolderBudget) OverBudget() bool { return b.BudgetBytes > 0 && b.TotalByt
 // every unpinned file in the folder cannot converge (D3).
 func (b FolderBudget) Wedged() bool { return b.BudgetBytes > 0 && b.PinnedBytes > b.BudgetBytes }
 
+// HumanSI renders a byte count the way the owner set their budget: in SI units,
+// because "20 GB" in coldstore.toml means 20,000,000,000 bytes. It lives here
+// next to FolderBudget so the wedge warning the daemon logs and the wedge
+// warning the pin endpoint returns are worded identically.
+func HumanSI(bytes int64) string {
+	const unit = 1000
+	if bytes < 0 {
+		return "-" + HumanSI(-bytes)
+	}
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	value := float64(bytes)
+	units := []string{"kB", "MB", "GB", "TB", "PB"}
+	var suffix string
+	for _, u := range units {
+		value /= unit
+		suffix = u
+		if value < unit {
+			break
+		}
+	}
+	// A whole number reads better without a trailing ".0": "20 GB", not
+	// "20.0 GB", which is what the design's example warning text says.
+	if rounded := math.Round(value*10) / 10; rounded == math.Trunc(rounded) {
+		return fmt.Sprintf("%.0f %s", rounded, suffix)
+	}
+	return fmt.Sprintf("%.1f %s", value, suffix)
+}
+
 // FolderCounts is the per-folder file tally the status API reports.
 type FolderCounts struct {
 	Total    int64 `json:"total"`
@@ -123,6 +157,10 @@ type PersistentPath struct {
 	ID          int64  `json:"id"`
 	FolderLabel string `json:"folder_label"`
 	Pattern     string `json:"pattern"`
+	// MatchCount is how many of the folder's on-device files this pattern
+	// currently protects. It is computed per request by the handler, not
+	// stored, and is zero on the write paths that do not compute it.
+	MatchCount int64 `json:"match_count"`
 }
 
 type Event struct {

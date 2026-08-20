@@ -242,7 +242,7 @@ func TestMigrateShouldChangeNothingWhenTheDatabaseIsAlreadyCurrent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := first.UpsertFile(&FileRecord{
+	if _, err := first.UpsertFile(&FileRecord{
 		FolderLabel:  "Photos",
 		RelativePath: "a.jpg",
 		Filename:     "a.jpg",
@@ -250,7 +250,7 @@ func TestMigrateShouldChangeNothingWhenTheDatabaseIsAlreadyCurrent(t *testing.T)
 		SizeBytes:    10,
 		FileMtime:    time.Now().UTC(),
 		Status:       StatusSynced,
-	}); err != nil {
+	}, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 	first.Close()

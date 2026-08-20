@@ -27,7 +27,7 @@ func TestQuotaOffloadsOldestFirst(t *testing.T) {
 		env.cat.UpsertFile(&catalog.FileRecord{
 			FolderLabel: "TestFolder", RelativePath: name, Filename: name,
 			Extension: ".txt", SizeBytes: 3000, FileMtime: mtime, Status: catalog.StatusSynced,
-		})
+		}, time.Now().UnixNano())
 	}
 
 	env.daemon.SetSpaceCheck(func(string) (float64, error) { return 50.0, nil })
@@ -59,7 +59,7 @@ func TestQuotaRespectsGracePeriod(t *testing.T) {
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "recent.txt", Filename: "recent.txt",
 		Extension: ".txt", SizeBytes: 5000, FileMtime: time.Now().UTC(), Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	env.daemon.SetSpaceCheck(func(string) (float64, error) { return 50.0, nil })
 	env.daemon.EnforceQuotas()
@@ -88,7 +88,7 @@ func TestQuotaRespectsPersistentPatterns(t *testing.T) {
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "Starred/fav.jpg", Filename: "fav.jpg",
 		Extension: ".jpg", SizeBytes: 5000, FileMtime: old, Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	env.daemon.SetSpaceCheck(func(string) (float64, error) { return 50.0, nil })
 	env.daemon.EnforceQuotas()
@@ -128,7 +128,7 @@ func TestQuotaMaxMtimeAtimeOrdering(t *testing.T) {
 			FolderLabel: "TestFolder", RelativePath: f.name, Filename: f.name,
 			Extension: ".txt", SizeBytes: 2000, FileMtime: f.mtime, FileAtime: f.atime,
 			Status: catalog.StatusSynced,
-		})
+		}, time.Now().UnixNano())
 	}
 
 	env.daemon.SetSpaceCheck(func(string) (float64, error) { return 50.0, nil })
@@ -141,8 +141,12 @@ func TestQuotaMaxMtimeAtimeOrdering(t *testing.T) {
 	}
 }
 
-func TestQuotaBudgetZeroOffloadsAll(t *testing.T) {
-	env := newTestEnv(t, withBudget("TestFolder", 0), withGracePeriod(0))
+// A zero budget is an UNSET budget, not "archive everything". The old
+// behaviour emptied a folder the moment its budget column was left at the
+// default, which is the most destructive possible reading of a missing value.
+func TestQuotaShouldOffloadNothingWhenTheBudgetIsUnset(t *testing.T) {
+	env := newTestEnv(t, withGracePeriod(0))
+	setPolicy(t, env, "TestFolder", int64Ptr(0), nil, nil)
 
 	old := time.Now().Add(-2 * time.Hour)
 	for i := 0; i < 3; i++ {
@@ -154,24 +158,33 @@ func TestQuotaBudgetZeroOffloadsAll(t *testing.T) {
 		env.cat.UpsertFile(&catalog.FileRecord{
 			FolderLabel: "TestFolder", RelativePath: name, Filename: name,
 			Extension: ".txt", SizeBytes: 1000, FileMtime: old, Status: catalog.StatusSynced,
-		})
+		}, time.Now().UnixNano())
 	}
 
 	env.daemon.SetSpaceCheck(func(string) (float64, error) { return 50.0, nil })
 	env.daemon.EnforceQuotas()
 
 	synced, _ := env.cat.ListFiles(catalog.FileQuery{Folder: "TestFolder", Status: catalog.StatusSynced, Limit: 100})
-	if len(synced) != 0 {
-		t.Errorf("with budget=0, expected 0 synced files, got %d", len(synced))
+	if len(synced) != 3 {
+		t.Errorf("with an unset budget, expected all 3 files still synced, got %d", len(synced))
+	}
+
+	// The folder was still looked at, so the UI does not report a dead daemon.
+	fc, err := env.cat.FolderConfigByLabel("TestFolder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc.LastEnforcedAt == nil {
+		t.Error("last_enforced_at should be stamped even when the budget is unset")
 	}
 }
 
 func TestQuotaMultiFolderIndependence(t *testing.T) {
 	env := newTestEnv(t, withMultiFolders(2), withGracePeriod(0))
 
-	// Set different budgets
-	env.cfg.Folders[0].BudgetBytes = 3000
-	env.cfg.Folders[1].BudgetBytes = 100000 // big budget
+	// Set different budgets, in the database, the way the UI would.
+	setPolicy(t, env, "FolderA", int64Ptr(3000), nil, nil)
+	setPolicy(t, env, "FolderB", int64Ptr(100000), nil, nil)
 
 	old := time.Now().Add(-2 * time.Hour)
 
@@ -185,7 +198,7 @@ func TestQuotaMultiFolderIndependence(t *testing.T) {
 		env.cat.UpsertFile(&catalog.FileRecord{
 			FolderLabel: "FolderA", RelativePath: name, Filename: name,
 			Extension: ".txt", SizeBytes: 2000, FileMtime: old, Status: catalog.StatusSynced,
-		})
+		}, time.Now().UnixNano())
 	}
 
 	// FolderB: under budget
@@ -198,7 +211,7 @@ func TestQuotaMultiFolderIndependence(t *testing.T) {
 		env.cat.UpsertFile(&catalog.FileRecord{
 			FolderLabel: "FolderB", RelativePath: name, Filename: name,
 			Extension: ".txt", SizeBytes: 2000, FileMtime: old, Status: catalog.StatusSynced,
-		})
+		}, time.Now().UnixNano())
 	}
 
 	env.daemon.SetSpaceCheck(func(string) (float64, error) { return 50.0, nil })

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -138,5 +139,57 @@ budget = "1GB"
 	}
 	if cfg.Server.ListenAddr != "0.0.0.0:8090" {
 		t.Errorf("default ListenAddr = %q, want 0.0.0.0:8090", cfg.Server.ListenAddr)
+	}
+}
+
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "coldstore.toml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A folder label is the primary key of the policy table, so two folders
+// sharing one would silently merge into a single row with a single budget.
+func TestLoadShouldRejectTheConfigWhenTwoFoldersShareALabel(t *testing.T) {
+	path := writeConfig(t, `
+[[folders]]
+label = "Photos"
+path = "/srv/sync/photos"
+budget = "10GB"
+
+[[folders]]
+label = "Photos"
+path = "/srv/sync/other"
+budget = "5GB"
+`)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("want an error for a duplicate folder label")
+	}
+	if !strings.Contains(err.Error(), "declared more than once") {
+		t.Errorf("error = %q, want it to name the duplicate", err)
+	}
+}
+
+// A relative path resolves against whatever directory the daemon was started
+// in, which for a systemd unit is not the one the owner had in mind.
+func TestLoadShouldRejectTheConfigWhenAFolderPathIsRelative(t *testing.T) {
+	path := writeConfig(t, `
+[[folders]]
+label = "Photos"
+path = "sync/photos"
+budget = "10GB"
+`)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("want an error for a relative folder path")
+	}
+	if !strings.Contains(err.Error(), "must be absolute") {
+		t.Errorf("error = %q, want it to say the path must be absolute", err)
 	}
 }

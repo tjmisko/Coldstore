@@ -27,6 +27,11 @@ func main() {
 		filepath.Join(demoRoot, "thumbnails", "Documents"),
 		filepath.Join(demoRoot, "sync", "CameraRoll"),
 		filepath.Join(demoRoot, "sync", "Documents"),
+		// FolderReady refuses to move anything into or out of a folder with no
+		// .stfolder marker, so the demo folders need the one Syncthing would
+		// have created or nothing in the demo can be archived or restored.
+		filepath.Join(demoRoot, "sync", "CameraRoll", ".stfolder"),
+		filepath.Join(demoRoot, "sync", "Documents", ".stfolder"),
 	} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			logger.Error("mkdir failed", "path", dir, "error", err)
@@ -174,7 +179,7 @@ func seedCameraRoll(cat *catalog.Catalog, logger *slog.Logger) []seededFile {
 			FileAtime:    mtime,
 			Status:       catalog.StatusSynced,
 		}
-		if err := cat.UpsertFile(&rec); err != nil {
+		if _, err := cat.UpsertFile(&rec, time.Now().UnixNano()); err != nil {
 			logger.Error("failed to upsert file", "path", spec.name, "error", err)
 			os.Exit(1)
 		}
@@ -239,7 +244,7 @@ func seedDocuments(cat *catalog.Catalog, logger *slog.Logger) {
 			FileAtime:    mtime,
 			Status:       catalog.StatusSynced,
 		}
-		if err := cat.UpsertFile(&rec); err != nil {
+		if _, err := cat.UpsertFile(&rec, time.Now().UnixNano()); err != nil {
 			logger.Error("failed to upsert file", "path", spec.name, "error", err)
 			os.Exit(1)
 		}

@@ -96,8 +96,66 @@ Each `[[folders]]` block defines a Syncthing folder to manage.
 | `label` | string | required | Human-readable folder name. Used as the top-level directory name inside the archive and thumbnails trees. Must be unique across all folders. |
 | `syncthing_id` | string | required | The Syncthing folder ID (e.g., `xxxxx-xxxxx`). |
 | `path` | string | required | Absolute path to the Syncthing folder on disk. |
-| `budget` | string | required | Maximum size of synced files before offloading begins. |
-| `persistent` | string[] | `[]` | Glob patterns for files that must never be offloaded. |
+| `budget` | string | required | **Seed value only.** Maximum size of synced files before offloading begins, written to the catalog the first time this folder is seen and ignored on every later start. See "Who owns which setting" below. |
+| `persistent` | string[] | `[]` | **Seed value only.** Glob patterns for files that must never be offloaded, copied into the catalog on first sighting. |
+
+A duplicate `label`, or a `path` that is not absolute, fails config loading outright:
+the label is the key the whole policy table hangs off, and a relative path would
+resolve against whatever directory systemd happened to start the daemon in.
+
+**`path` must contain Syncthing's `.stfolder` marker.** Before moving anything into or
+out of a folder, coldstore checks for it, and refuses the move if it is missing. This is
+the guard against an unmounted mountpoint: an unmounted drive leaves an empty directory
+that `stat` happily accepts, and without the check a restore would write hundreds of
+files onto the root filesystem and delete the cold-storage copies as it went. Syncthing
+creates `.stfolder` itself; if it is absent, the drive is not mounted or the path is not
+a Syncthing folder. Enforcement logs a `folder_unavailable` event (deduped to one an
+hour) and skips the folder; the restore and archive endpoints answer `409`.
+
+### Who owns which setting
+
+`coldstore.toml` **declares** folders; the catalog database **owns** their policy.
+
+| Setting | Owner | Edited where | Takes effect |
+|---|---|---|---|
+| `label`, `path`, `syncthing_id` | `coldstore.toml` | over SSH | on restart |
+| budget | database | web UI | next enforcement tick, no restart |
+| grace period | database | web UI | next enforcement tick, no restart |
+| enabled/disabled | database | web UI | next enforcement tick, no restart |
+| persistent globs | database | web UI | next enforcement tick, no restart |
+| pins | database | web UI | immediately |
+
+**Pins (D2/D3).** A pinned file is never an offload candidate, whatever its age or the
+budget pressure, until the owner unpins it. Restoring a file pins it automatically, with
+`pin_source = "restore"`, which is what stops the next quota tick taking it straight back
+-- an explicit user pin is never downgraded to that automatic one. Pinning moves nothing
+and is legal in every status, including archived, where it takes effect on restore.
+
+**Pins count against the budget.** The budget is a hard cap on what sits on the device,
+because its whole purpose is controlling space on the owner's phone, so pinning does not
+buy extra room. `GET /api/v1/status` reports `pinned_bytes` alongside `synced_size_bytes`
+(a subset of it, never an addend), plus `over_budget` and `wedged`. When pinned bytes
+*alone* exceed the budget the folder is **wedged**: the daemon sheds every unpinned
+eligible file, cannot converge, and logs one `folder_wedged` event -- latched in the
+database so a restart does not re-flood the log, refreshed once a day while it lasts, and
+cleared with a `folder_unwedged` event when it resolves. Pinning past the budget is
+allowed and warns.
+
+At startup the daemon reconciles the folders in `coldstore.toml` into the catalog:
+
+- **A folder it has never seen** gets a new row, seeded with the TOML `budget`, the
+  `[daemon] grace_period_minutes`, and the TOML `persistent` globs.
+- **A folder it already knows** has only its `syncthing_id` and `path` refreshed from
+  TOML. Its budget, grace period, enabled flag and persistent globs are left exactly as
+  the UI set them. **Editing `budget` in `coldstore.toml` after the first run does
+  nothing.**
+- **A folder that has disappeared from TOML** is not deleted. It is flagged
+  `present_in_toml: false`, drops out of scanning and enforcement, and keeps its budget,
+  its pins and its catalogued files, which stay browsable and downloadable. Putting the
+  block back restores it with the owner's tuning intact.
+
+Reconciliation failing is fatal: a daemon that cannot establish its policy table does
+not start.
 
 ### Zero means default, not zero
 
@@ -294,20 +352,24 @@ This walks all configured Syncthing folders and populates the catalog. However, 
 
 ## Troubleshooting
 
-### Files stuck in `archiving` state
+### Files stuck in `archiving` or `restoring` state
 
-The `archiving` status is a transient state set just before a file is moved to cold storage. If the daemon crashes mid-move, files can get stuck in this state.
+`archiving` and `restoring` are transient states set just before a file is moved. If the daemon is killed mid-move, rows can be left in one of them.
 
-**Automatic recovery:** On every scan (startup and periodic), the scanner calls `recoverArchiving()`. For each file in `archiving` state:
+**Automatic recovery:** the daemon resolves them once at startup, in `RecoverStartupState`, before the API server or any mover exists. It deliberately does **not** run on the periodic scan: recovery writes the filesystem without the mover lock, so running it alongside an in-flight move could delete the only copy of a file.
 
-- If the file exists in the archive directory, its status is updated to `archived`.
-- If the file does not exist in the archive directory, its status is reverted to `synced`.
+A move writes its destination to a `.coldstore-tmp` sibling and commits it with a rename, so at every instant the destination path is either absent or a complete, verified copy. That makes recovery decidable:
+
+- **`archiving`** -- a complete archive copy is promoted to `archived` (and a leftover source with matching size and mtime is removed); no archive copy means the row reverts to `synced`; a copy that is a truncated prefix of the source is deleted; anything else that does not match is renamed aside as `.coldstore-superseded` and reported as a `conflict` event.
+- **`restoring`** -- the cold-storage copy is authoritative. A truncated file at the Syncthing path is deleted and the row reverts to `archived`, because committing it would let Syncthing propagate the truncation to every device. A complete file at the Syncthing path commits the restore (and pins it).
+
+Nothing is ever deleted to tidy the bookkeeping: any copy that could hold unique bytes is kept, renamed to `.coldstore-superseded`.
 
 **Manual recovery:** If automatic recovery is not triggering (e.g., the daemon won't start), query the catalog directly:
 
 ```sql
 -- Find stuck files
-SELECT id, folder_label, relative_path FROM files WHERE status = 'archiving';
+SELECT id, folder_label, relative_path, status FROM files WHERE status IN ('archiving', 'restoring');
 
 -- If the file is in the archive, mark it archived
 UPDATE files SET status = 'archived', archived_at = datetime('now') WHERE id = ?;
@@ -342,7 +404,7 @@ VALUES ('CameraRoll', 'DCIM/IMG_0001.jpg', 'IMG_0001.jpg', '.jpg', 4194304, '202
 
 ### Files not being offloaded
 
-1. Verify the folder is over budget: check `FolderSyncedSize` in the logs.
+1. Verify the folder is over budget: the enforcement log line reports the folder's on-device size (`FolderSizes`) against its budget.
 2. Check if files match a persistent pattern (config `persistent` array or `persistent_paths` table).
 3. Check the grace period: files with recent mtime or atime (within `grace_period_minutes`) are skipped.
 4. Check cold storage free space: offloading pauses below 5% free.

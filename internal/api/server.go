@@ -10,23 +10,47 @@ import (
 	"github.com/tjmisko/coldstore/internal/daemon"
 )
 
-type Server struct {
-	cfg      *config.Config
-	cat      *catalog.Catalog
-	restorer *daemon.Restorer
-	scanner  *daemon.Scanner
-	logger   *slog.Logger
-	mux      *http.ServeMux
+// Deps is what the API server needs to do its job. It is a struct rather than
+// a positional parameter list because that list has already broken the e2e
+// helper once and this work keeps adding to it (design section 6.14).
+type Deps struct {
+	Cfg   *config.Config
+	Cat   *catalog.Catalog
+	Mover *daemon.Mover
+	// Worker is needed only for the enqueue poke. It must be the SAME worker
+	// the daemon is running, or POST /jobs wakes a goroutine nobody started and
+	// every job waits for the running worker's 2 s ticker instead.
+	Worker  *daemon.Worker
+	Scanner *daemon.Scanner
+	Logger  *slog.Logger
 }
 
-func NewServer(cfg *config.Config, cat *catalog.Catalog, restorer *daemon.Restorer, scanner *daemon.Scanner, logger *slog.Logger) *Server {
+type Server struct {
+	cfg *config.Config
+	cat *catalog.Catalog
+	// mover is the process-wide serialisation point. The server must be
+	// handed the SAME one the daemon uses, or a pin arriving over HTTP is no
+	// longer serialised against the quota tick's move.
+	mover  *daemon.Mover
+	worker *daemon.Worker
+	// scanner is held for design section 6.14's Deps shape. Nothing in the API
+	// calls it any more: POST /api/v1/scan enqueues a job and the worker runs
+	// the walk, which is what removed the unguarded inline scan from the
+	// request path.
+	scanner *daemon.Scanner
+	logger  *slog.Logger
+	mux     *http.ServeMux
+}
+
+func NewServer(d Deps) *Server {
 	s := &Server{
-		cfg:      cfg,
-		cat:      cat,
-		restorer: restorer,
-		scanner:  scanner,
-		logger:   logger,
-		mux:      http.NewServeMux(),
+		cfg:     d.Cfg,
+		cat:     d.Cat,
+		mover:   d.Mover,
+		worker:  d.Worker,
+		scanner: d.Scanner,
+		logger:  d.Logger,
+		mux:     http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s

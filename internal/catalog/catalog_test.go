@@ -32,7 +32,7 @@ func TestUpsertAndGetFile(t *testing.T) {
 		Status:       StatusSynced,
 	}
 
-	if err := cat.UpsertFile(record); err != nil {
+	if _, err := cat.UpsertFile(record, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,13 +68,13 @@ func TestUpsertFileConflictUpdate(t *testing.T) {
 		FileMtime:    now,
 		Status:       StatusSynced,
 	}
-	if err := cat.UpsertFile(record); err != nil {
+	if _, err := cat.UpsertFile(record, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
 	// Upsert again with different size
 	record.SizeBytes = 2000
-	if err := cat.UpsertFile(record); err != nil {
+	if _, err := cat.UpsertFile(record, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -99,7 +99,7 @@ func TestUpdateFileStatus(t *testing.T) {
 		FileMtime:    time.Now().UTC(),
 		Status:       StatusSynced,
 	}
-	if err := cat.UpsertFile(record); err != nil {
+	if _, err := cat.UpsertFile(record, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,7 +140,7 @@ func TestListFilesFiltering(t *testing.T) {
 		{FolderLabel: "Docs", RelativePath: "d.pdf", Filename: "d.pdf", Extension: ".pdf", SizeBytes: 400, FileMtime: time.Now().UTC(), Status: StatusSynced},
 	}
 	for i := range files {
-		if err := cat.UpsertFile(&files[i]); err != nil {
+		if _, err := cat.UpsertFile(&files[i], time.Now().UnixNano()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -182,7 +182,7 @@ func TestListFilesFiltering(t *testing.T) {
 	}
 }
 
-func TestFolderSyncedSize(t *testing.T) {
+func TestFolderSizesShouldExcludeArchivedBytesWhenSummingTheFolder(t *testing.T) {
 	cat := setupTestCatalog(t)
 
 	files := []FileRecord{
@@ -191,39 +191,67 @@ func TestFolderSyncedSize(t *testing.T) {
 		{FolderLabel: "Photos", RelativePath: "c.jpg", Filename: "c.jpg", Extension: ".jpg", SizeBytes: 500, FileMtime: time.Now().UTC(), Status: StatusArchived},
 	}
 	for i := range files {
-		cat.UpsertFile(&files[i])
+		cat.UpsertFile(&files[i], time.Now().UnixNano())
 	}
 
-	size, err := cat.FolderSyncedSize("Photos")
+	size, _, err := cat.FolderSizes("Photos")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if size != 3000 {
-		t.Errorf("FolderSyncedSize = %d, want 3000", size)
+		t.Errorf("FolderSizes total = %d, want 3000", size)
 	}
 }
 
-func TestMarkMissingSyncedFiles(t *testing.T) {
+// MarkMissingSyncedFiles is gone (design section 5.9): it flipped every synced
+// row in a folder to missing and relied on the walk to put them back, which
+// blinded every mover CAS and every size aggregate for the whole duration of
+// the walk. Missing detection is now the single end-of-walk statement below.
+func TestShouldMarkOnlyUntouchedRowsMissingWhenAWalkCompletes(t *testing.T) {
 	cat := setupTestCatalog(t)
 
-	record := &FileRecord{
+	const gen = 5000
+	for _, name := range []string{"here.jpg", "gone.jpg"} {
+		if _, err := cat.UpsertFile(&FileRecord{
+			FolderLabel:  "Photos",
+			RelativePath: name,
+			Filename:     name,
+			Extension:    ".jpg",
+			SizeBytes:    100,
+			FileMtime:    time.Now().UTC(),
+			Status:       StatusSynced,
+		}, gen-100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The new walk sees only one of the two.
+	if _, err := cat.UpsertFile(&FileRecord{
 		FolderLabel:  "Photos",
-		RelativePath: "gone.jpg",
-		Filename:     "gone.jpg",
+		RelativePath: "here.jpg",
+		Filename:     "here.jpg",
 		Extension:    ".jpg",
 		SizeBytes:    100,
 		FileMtime:    time.Now().UTC(),
 		Status:       StatusSynced,
-	}
-	cat.UpsertFile(record)
-
-	if err := cat.MarkMissingSyncedFiles("Photos"); err != nil {
+	}, gen); err != nil {
 		t.Fatal(err)
+	}
+
+	swept, err := cat.MarkFilesMissingBeforeGeneration("Photos", gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if swept != 1 {
+		t.Errorf("swept %d rows, want 1", swept)
 	}
 
 	got, _ := cat.GetFile("Photos", "gone.jpg")
 	if got.Status != StatusMissing {
-		t.Errorf("Status = %q, want missing", got.Status)
+		t.Errorf("gone.jpg status = %q, want missing", got.Status)
+	}
+	stayed, _ := cat.GetFile("Photos", "here.jpg")
+	if stayed.Status != StatusSynced {
+		t.Errorf("here.jpg status = %q, want synced", stayed.Status)
 	}
 }
 
@@ -297,7 +325,7 @@ func TestFileCount(t *testing.T) {
 		{FolderLabel: "Photos", RelativePath: "b.jpg", Filename: "b.jpg", Extension: ".jpg", SizeBytes: 200, FileMtime: time.Now().UTC(), Status: StatusArchived},
 	}
 	for i := range files {
-		cat.UpsertFile(&files[i])
+		cat.UpsertFile(&files[i], time.Now().UnixNano())
 	}
 
 	total, _ := cat.FileCount("")

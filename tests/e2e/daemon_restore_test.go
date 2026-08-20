@@ -26,13 +26,11 @@ func TestRestoreRoundTrip(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "restore_me.txt", Filename: "restore_me.txt",
 		Extension: ".txt", SizeBytes: int64(len(content)), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "restore_me.txt")
 
 	// Offload
-	if err := env.offloader.Offload(file, env.syncDir); err != nil {
-		t.Fatal(err)
-	}
+	env.archive(t, file.ID)
 
 	// Verify source gone
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
@@ -41,9 +39,7 @@ func TestRestoreRoundTrip(t *testing.T) {
 
 	// Restore
 	file, _ = env.cat.GetFile("TestFolder", "restore_me.txt")
-	if err := env.restorer.Restore(file); err != nil {
-		t.Fatal(err)
-	}
+	env.restore(t, file.ID)
 
 	// Verify content
 	got, err := os.ReadFile(p)
@@ -72,14 +68,14 @@ func TestRestoreCleansEmptyArchiveDirs(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "x/y/only.txt", Filename: "only.txt",
 		Extension: ".txt", SizeBytes: 9, FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "x/y/only.txt")
 
-	env.offloader.Offload(file, env.syncDir)
+	env.archive(t, file.ID)
 
 	// Restore
 	file, _ = env.cat.GetFile("TestFolder", "x/y/only.txt")
-	env.restorer.Restore(file)
+	env.restore(t, file.ID)
 
 	// Archive subdirectories should be cleaned up
 	archiveSubdir := filepath.Join(env.coldDir, "archive", "TestFolder", "x", "y")
@@ -88,19 +84,28 @@ func TestRestoreCleansEmptyArchiveDirs(t *testing.T) {
 	}
 }
 
-func TestRestoreRejectsNonArchived(t *testing.T) {
+func TestRestoreShouldMoveNothingWhenTheFileIsAlreadySynced(t *testing.T) {
 	env := newTestEnv(t)
 
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "synced.txt", Filename: "synced.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "synced.txt")
 
-	err := env.restorer.Restore(file)
-	if err == nil {
-		t.Error("restoring a synced file should fail")
+	// Invariant 12: a restore of a file that is already where the owner wants
+	// it is a no-op SUCCESS, not an error. There is nothing to report and
+	// nothing to undo.
+	got, err := env.mover.RestoreByID(file.ID)
+	if err != nil {
+		t.Fatalf("restoring an already-synced file should succeed: %v", err)
+	}
+	if got.Status != catalog.StatusSynced {
+		t.Errorf("status = %q, want synced", got.Status)
+	}
+	if got.Pinned {
+		t.Error("a no-op restore must not pin: nothing was restored")
 	}
 }
 
@@ -115,11 +120,11 @@ func TestRestoreAPIRoundTrip(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "api_restore.txt", Filename: "api_restore.txt",
 		Extension: ".txt", SizeBytes: int64(len(content)), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "api_restore.txt")
 
 	// Offload first
-	env.offloader.Offload(file, env.syncDir)
+	env.archive(t, file.ID)
 
 	// Restore via API
 	file, _ = env.cat.GetFile("TestFolder", "api_restore.txt")
@@ -145,5 +150,47 @@ func TestRestoreAPIRoundTrip(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp.Status != catalog.StatusSynced {
 		t.Errorf("API response status = %q, want synced", resp.Status)
+	}
+}
+
+func TestRestoredFileShouldStayOnDeviceWhenTheNextQuotaTickRuns(t *testing.T) {
+	env := newTestEnv(t, withBudget("TestFolder", 10), withGracePeriod(0))
+
+	content := make([]byte, 2000)
+	p := filepath.Join(env.syncDir, "wanted.txt")
+	os.WriteFile(p, content, 0644)
+	old := time.Now().Add(-24 * time.Hour)
+	os.Chtimes(p, old, old)
+
+	env.cat.UpsertFile(&catalog.FileRecord{
+		FolderLabel: "TestFolder", RelativePath: "wanted.txt", Filename: "wanted.txt",
+		Extension: ".txt", SizeBytes: int64(len(content)), FileMtime: old, FileAtime: old,
+		Status: catalog.StatusSynced,
+	}, time.Now().UnixNano())
+	file, _ := env.cat.GetFile("TestFolder", "wanted.txt")
+
+	env.archive(t, file.ID)
+	file, _ = env.cat.GetFile("TestFolder", "wanted.txt")
+	env.restore(t, file.ID)
+
+	file, _ = env.cat.GetFile("TestFolder", "wanted.txt")
+	if !file.Pinned {
+		t.Fatal("a restored file must be pinned, or the daemon takes it straight back")
+	}
+	if file.PinSource != catalog.PinSourceRestore {
+		t.Errorf("pin_source = %q, want %q", file.PinSource, catalog.PinSourceRestore)
+	}
+
+	// The folder is far over budget and the file is well outside the grace
+	// window, so only the pin can save it.
+	env.daemon.SetSpaceCheck(func(string) (float64, error) { return 90.0, nil })
+	env.daemon.EnforceQuotas()
+
+	file, _ = env.cat.GetFile("TestFolder", "wanted.txt")
+	if file.Status != catalog.StatusSynced {
+		t.Errorf("status = %q, want synced: the restore was undone by the next tick", file.Status)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("the restored file must still be on disk: %v", err)
 	}
 }
