@@ -38,7 +38,7 @@ coldstore/
       catalog.go                 # SQLite operations
       migrations.go              # Schema
       models.go                  # FileRecord, FolderConfig structs
-    thumbnail/thumbnail.go       # Image/video/PDF thumbnail generation
+    thumbnail/thumbnail.go       # Image/video thumbnail generation
     api/
       server.go                  # HTTP server, middleware, static serving
       static.go                  # Embedded frontend serving
@@ -125,14 +125,23 @@ POST   /api/v1/scan
 
 **Catalog sync** (every 30 min):
 1. Walk syncthing folders, reconcile with DB (new files -> `synced`, missing files -> `missing`, re-appeared archived files -> `synced`)
-2. Enqueue thumbnail generation for new image/video/PDF files (2-worker pool)
+2. Enqueue thumbnail generation for new image/video files (2-worker pool)
 
 ## Thumbnail Pipeline
 
-- **Images** (JPEG, PNG, WebP, HEIF): `imaging` library, 400px longest edge, JPEG q80
-- **Videos** (MP4, MOV): `ffmpeg -vf "thumbnail,scale=400:-1" -frames:v 1`
-- **PDFs**: `pdftoppm -jpeg -f 1 -singlefile -scale-to 400`
-- Other types: no thumbnail, UI shows file-type icon
+The supported set is defined by `imageExts`, `heifExts` and `videoExts` in
+`internal/thumbnail/thumbnail.go`; `CanThumbnail(ext)` is the single source of truth.
+
+- **Images** (`.jpg`, `.jpeg`, `.png`, `.webp`): `imaging` library, 400px longest edge, JPEG q80. Pure Go, no external binary.
+- **HEIF/HEIC** (`.heif`, `.heic`): `ffmpeg` decodes to PNG on stdout, then the same Go resize path. Requires `ffmpeg` on `PATH`.
+- **Videos** (`.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`): `ffmpeg -vf "thumbnail,scale=400:-1" -frames:v 1`.
+- **Everything else, PDFs included**: no thumbnail. The UI shows a file-type icon.
+
+**PDFs are not thumbnailed.** Earlier revisions of this document described a
+`pdftoppm -jpeg -f 1 -singlefile -scale-to 400` path for them. That was never
+implemented -- there is no `pdftoppm` call anywhere in the tree, `poppler-utils` is not
+a dependency, and `internal/thumbnail/thumbnail_test.go` asserts
+`CanThumbnail(".pdf") == false`. Books folders will show icons, not page previews.
 
 ## Key Edge Cases
 
@@ -158,6 +167,6 @@ The project was built in six phases:
 1. **Skeleton + Catalog** -- Go module, config parsing, SQLite catalog, filesystem scanner
 2. **Daemon + Offloading** -- Quota enforcement, file offloader/restorer, catalog reconciliation
 3. **API Server** -- HTTP server with file listing, download, restore, config CRUD
-4. **Thumbnails** -- Image/video/PDF thumbnail generation pipeline
+4. **Thumbnails** -- Image/video thumbnail generation pipeline
 5. **React Frontend** -- Gallery view, file browser, config panel, status bar
 6. **Polish + Deploy** -- Embed React in Go binary, structured logging, systemd deployment

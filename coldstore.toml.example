@@ -2,6 +2,11 @@
 cold_storage_path = "/srv/coldstore"
 
 [daemon]
+# WARNING: 0 means "use the default", not 0. Go cannot tell an explicit `0` from an
+# absent key, so every int below falls back to its built-in default when set to 0.
+# In particular `grace_period_minutes = 0` does NOT disable the grace period -- it
+# becomes 30. Use 1 for the shortest grace period expressible here.
+# See docs/deployment.md, "Zero means default, not zero".
 scan_interval_minutes = 15
 catalog_sync_interval_minutes = 30
 thumbnail_workers = 2
@@ -10,6 +15,9 @@ grace_period_minutes = 30
 [server]
 listen_addr = "0.0.0.0:8090"
 
+# RESERVED -- neither key is read by any code today. There is no Syncthing API client
+# in coldstore; it integrates with Syncthing purely through the filesystem. Setting
+# these does nothing; omitting them breaks nothing.
 [syncthing]
 api_url = "http://127.0.0.1:8384"
 api_key = ""

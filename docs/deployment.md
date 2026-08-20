@@ -69,12 +69,23 @@ cp coldstore.toml.example /etc/coldstore/coldstore.toml
 | `username` | string | `""` | If non-empty, enables HTTP Basic Auth on all API routes. Both `username` and `password` must be set. |
 | `password` | string | `""` | Password for HTTP Basic Auth. |
 
-#### `[syncthing]`
+#### `[syncthing]` -- reserved, currently unused
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `api_url` | string | `""` | Syncthing REST API base URL (e.g., `http://127.0.0.1:8384`). |
-| `api_key` | string | `""` | Syncthing API key (found in Syncthing's settings). |
+> **Neither key does anything today.** `api_url` and `api_key` are parsed into
+> `config.SyncthingConfig` and then never read: there is no Syncthing API client
+> anywhere in the codebase (`rg -n 'Syncthing\.API' internal/` returns nothing outside
+> `config.go`). Coldstore integrates with Syncthing purely through the filesystem -- it
+> moves files in and out of the folder path and lets Syncthing's own watcher propagate
+> the change. Setting these keys will not make coldstore talk to Syncthing, and leaving
+> them unset breaks nothing.
+>
+> They are kept in the schema because a future version may query Syncthing for folder
+> IDs, pause/resume state, or scan triggers. Treat them as reserved.
+
+| Field | Type | Default | Status | Description |
+|---|---|---|---|---|
+| `api_url` | string | `""` | Reserved -- not read | Intended as the Syncthing REST API base URL (e.g., `http://127.0.0.1:8384`). |
+| `api_key` | string | `""` | Reserved -- not read | Intended as the Syncthing API key (found in Syncthing's settings). |
 
 #### `[[folders]]` (array of tables)
 
@@ -87,6 +98,35 @@ Each `[[folders]]` block defines a Syncthing folder to manage.
 | `path` | string | required | Absolute path to the Syncthing folder on disk. |
 | `budget` | string | required | Maximum size of synced files before offloading begins. |
 | `persistent` | string[] | `[]` | Glob patterns for files that must never be offloaded. |
+
+### Zero means default, not zero
+
+`config.setDefaults()` fills in a value for every `int` in `[daemon]` that comes out of
+TOML parsing as `0`. Go cannot distinguish "the user wrote `0`" from "the key was
+absent", so both take the default:
+
+| Setting | Written as `0` | Actually used |
+|---|---|---|
+| `scan_interval_minutes` | `0` | `15` |
+| `catalog_sync_interval_minutes` | `0` | `30` |
+| `thumbnail_workers` | `0` | `2` |
+| `grace_period_minutes` | `0` | `30` |
+
+The one most likely to bite: **`grace_period_minutes = 0` does not disable the grace
+period.** It silently becomes 30 minutes, so files touched in the last half hour stay
+put and a folder that looks over budget will appear not to offload. If you want the
+shortest possible grace period, write `grace_period_minutes = 1`. There is currently no
+way to express "no grace period at all" through the config file.
+
+The same rule applies to the string fields, though the consequences are milder:
+`cold_storage_path = ""` becomes `/srv/coldstore` and `listen_addr = ""` becomes
+`0.0.0.0:8090`.
+
+`[[folders]].budget` is the exception -- it is **not** defaulted. A missing or empty
+`budget` fails config loading outright (`folder "X": empty budget string`), as does an
+unparseable one (`no recognized unit (B, KB, MB, GB, TB)`); either way the daemon exits
+1 before binding a port. That is deliberate: a silently-defaulted budget would decide
+how much of the user's data gets moved.
 
 ### Budget string format
 
