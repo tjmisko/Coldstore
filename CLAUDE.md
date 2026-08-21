@@ -51,6 +51,17 @@ target or CI job -- if you need to, the stub was deleted. Any target that remove
 
 Copy `coldstore.toml.example` to `coldstore.toml` and edit. See `docs/` for detailed documentation.
 
+The current product designs are:
+
+- `docs/interface-refresh.md` — interface, preview and operational-status acceptance;
+- `docs/keymap-design.md` — keyboard grammar and interaction contract; and
+- `docs/tagging-design.md` — verified metadata findings plus the tagging, Live Photo and
+  rename plan.
+
+Schema numbers in design documents are assigned in landing order and are never reused after
+another branch ships them. Document preview owns migration 6; tagging and rename are planned
+as migrations 7 and 8.
+
 ## Testing
 
 ```bash

@@ -704,15 +704,15 @@ date is the same class of bug as a rescan that clears a pin.
 
 ---
 
-## 2. Schema — migration 6 and migration 7
+## 2. Schema — migration 7 and migration 8
 
 Follow `internal/catalog/migrations.go` exactly: append-only, ascending, a version number
 assigned when the migration lands and never reserved in advance, `schemaVersion` bumped in
 the same commit, and **migrations 2 and up written bare** so a runner bug that replays one
 fails loudly.
 
-Two migrations, not one, because they have different shapes: **6 is all additive** (`CREATE
-TABLE` and `ALTER TABLE ADD COLUMN`, fast, safe, no table rewrite) and **7 rebuilds the
+Two migrations, not one, because they have different shapes: **7 is all additive** (`CREATE
+TABLE` and `ALTER TABLE ADD COLUMN`, fast, safe, no table rewrite) and **8 rebuilds the
 `jobs` table** to widen a `CHECK` constraint, which is a different risk profile and should be
 landable and revertable on its own.
 
@@ -797,10 +797,10 @@ an essay, and it bounds the worst case of a maximal page: `GET /files?limit=500`
 row at the cap is about 1 MB of JSON, which is acceptable on a LAN and is not reachable in
 practice.
 
-### 2.4 Migration 6, in full
+### 2.4 Migration 7, in full
 
 ```sql
--- migration6TagsAndMetadata
+-- migration7TagsAndMetadata
 
 CREATE TABLE tags (
 	id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -869,14 +869,14 @@ CREATE INDEX idx_files_pair ON files(folder_label, pair_key);
 ALTER TABLE folder_configs ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
 ```
 
-### 2.5 Migration 7 — widening the `jobs.action` CHECK
+### 2.5 Migration 8 — widening the `jobs.action` CHECK
 
 `jobs` carries `CHECK(action IN ('restore','archive','scan'))`. SQLite cannot alter a CHECK
 constraint; adding a `rename` action requires the documented twelve-step table rebuild. This
 is the one migration in this document that is not additive, and it is why it is separate.
 
 ```sql
--- migration7RenameJobs
+-- migration8RenameJobs
 --
 -- The twelve-step ALTER recipe, minus the steps that do not apply: foreign keys
 -- are off (migration 4), there are no triggers and no views on jobs, and the
@@ -923,7 +923,7 @@ success, per invariant 12.
 ### 2.6 `fileColumns`, `FileRecord`, and the tag hydration rule
 
 `fileColumns` is the single select list every `SELECT` on `files` uses, and `scanFile` is its
-only consumer. Migration 6's fifteen columns are appended to it, in DDL order, and to
+only consumer. Migration 7's fifteen columns are appended to it, in DDL order, and to
 `scanFile` and `FileRecord` in the same commit.
 
 `FileRecord` gains:
@@ -1541,7 +1541,7 @@ owner does with `mv`.
 ### 6.3 The algorithm
 
 `POST /api/v1/folders/{label}/rename` with `{"from": "2024/01", "to": "2024/Iceland"}`
-enqueues a **`rename` job** (migration 7) with `total = 1`, no `job_items`, and the from/to
+enqueues a **`rename` job** (migration 8) with `total = 1`, no `job_items`, and the from/to
 in `jobs.payload`. It is a job and not a synchronous request for exactly one reason: the
 existing `ResumeInterruptedJobs` machinery then gives it crash durability for free, and this
 operation has a window in which the filesystem and the catalog disagree.
@@ -1722,7 +1722,7 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
 |---|---|---|---|
 | 1 | The label-rename guard (6.4). Small, independent, closes a live footgun | #13 | — |
 | 2 | `internal/metadata`: the `Extractor` interface, EXIF + ffprobe + the exiftool subprocess, the ISO 6709 parser, the precedence rules. Pure package, exiftool-generated fixtures, no schema and no daemon changes. **Unblocked** — the GPS `0,0` concern was a synthetic-fixture artifact (1.8) | #1 | — |
-| 3 | Migration 6, plus `fileColumns`, `scanFile`, `FileRecord`, `types/api.ts`. Schema only | #2 | — |
+| 3 | Migration 7, plus `fileColumns`, `scanFile`, `FileRecord`, `types/api.ts`. Schema only | #2 | — |
 | 4 | The extraction pass: `FilesNeedingMetadata`, `SetExtractedMetadata`, the failure budget, the manual-rescan reset | #3 | #1, #2 |
 | 5 | Pair grouping: `ExpandPairGroups`, wired into `OffloadCandidates` and the job enqueue path, plus the `pair_split` event | #6 | #1, #2, #3 |
 | 6 | Tag catalog primitives and CRUD API: normalise/fold, resolve-or-create with ancestors, subtree rename and merge, the counts query, hydration | #7 | #2 |
@@ -1732,7 +1732,7 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
 | 10 | Search and filter: the extended `q`, `tag=`, `untagged=` | #9 | #2, #7 |
 | 11 | Frontend, non-keyboard first: chips, the prompt, the tag manager, the filter presets. Everything works with a mouse before anything works without one, so a broken key binding is isolated to the keyboard layer | #10 | #7, #9 |
 | 12 | Multiselect tagging: the bulk endpoint, the caps, the undo contract, `SelectionBar` | #12 | #7, #9, #10 |
-| 13 | Migration 7 + the rename job, and `display_name` | #14 | #2, #6, #13 |
+| 13 | Migration 8 + the rename job, and `display_name` | #14 | #2, #6, #13 |
 | 14 | The keyboard layer: the operator, the motions, Tag mode, visual-mode bulk, undo. Last, because it depends on every other layer being correct | #11 | #4, #6, #8, #9, #10 |
 | 15 | Export: XMP sidecars into `{cold_storage_path}/sidecars/` | not yet filed | #7 |
 
@@ -1789,7 +1789,7 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
   extraction runs. The backfill pass computes keys for the whole catalog, and until it
   completes, pair expansion is simply a no-op — degraded, not wrong.
 - **Two tags differing only by case, both already in the catalog**, cannot happen after
-  migration 6 (UNIQUE on `name_fold`) but *can* be introduced by a future import. The merge
+  migration 7 (UNIQUE on `name_fold`) but *can* be introduced by a future import. The merge
   behaviour of 4.6 is the remedy and it should be reachable from the tag manager.
 
 ---

@@ -93,18 +93,18 @@ deployment.
 
 ### 7. Merge the tagging design
 
-- [ ] Merge `feat/tagging-design` after documents so the next schema number is unambiguous.
-- [ ] Preserve its verified/source/unverified labels and the recorded GPS-blocker retraction.
-- [ ] Update root documentation indexes to include interface, keymap and tagging designs.
+- [x] Merge `feat/tagging-design` after documents so the next schema number is unambiguous.
+- [x] Preserve its verified/source/unverified labels and the recorded GPS-blocker retraction.
+- [x] Update root documentation indexes to include interface, keymap and tagging designs.
 
 ### 8. Renumber planned migrations everywhere
 
-- [ ] Change tagging schema migration 6 to migration 7.
-- [ ] Change rename/job migration 7 to migration 8.
-- [ ] Amend all affected references in `docs/tagging-design.md`.
+- [x] Change tagging schema migration 6 to migration 7.
+- [x] Change rename/job migration 7 to migration 8.
+- [x] Amend all affected references in `docs/tagging-design.md`.
 - [ ] Amend GitHub issues #2, #3, #7, #8, #14 and tracker #15 where they name the old
       versions; search all issue bodies rather than trusting this list to be exhaustive.
-- [ ] Keep the migration rule explicit: assign versions in landing order and never reuse a
+- [x] Keep the migration rule explicit: assign versions in landing order and never reuse a
       number already shipped on another branch.
 
 ## P0 — live data-safety bugs
@@ -243,7 +243,7 @@ requires the owner.
 - [ ] Remove the false claim that archived content can be rebuilt by scanning hot folders.
 - [ ] Add document preview and EPUB endpoints to the API architecture list.
 - [x] Document preview readers and FileBrowser lightbox flow in the React guide.
-- [ ] Update the root docs index for interface/keymap/tagging documents.
+- [x] Update the root docs index for interface/keymap/tagging documents.
 - [x] Mark `docs/control-plane-design.md` historical where its old build instructions conflict
       with current `.gitkeep` and dependency rules.
 - [ ] Remove or repair the ignored stale `coldstore-demo.toml`; `make demo` itself uses the
