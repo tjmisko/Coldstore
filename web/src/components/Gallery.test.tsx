@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { aFile } from "../test/fixtures";
 import { renderWithToasts, stubFetch } from "../test/harness";
 import { Gallery } from "./Gallery";
+import { KeymapProvider } from "./KeymapProvider";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
 
@@ -22,13 +23,17 @@ const PAGE = [
 function renderGallery(files = PAGE, filterKey: "all" | "conflicts" = "all") {
   stub = stubFetch([{ url: "/api/v1/files", body: files }]);
   const onFilterChange = vi.fn();
+  // Inside the provider, because the keyboard is no longer three window
+  // listeners the components own. Every assertion below is unchanged.
   const view = renderWithToasts(
-    <Gallery
-      folder="CameraRoll"
-      filterKey={filterKey}
-      onFilterChange={onFilterChange}
-      onFolderChanged={() => {}}
-    />,
+    <KeymapProvider>
+      <Gallery
+        folder="CameraRoll"
+        filterKey={filterKey}
+        onFilterChange={onFilterChange}
+        onFolderChanged={() => {}}
+      />
+    </KeymapProvider>,
   );
   return { ...view, onFilterChange };
 }

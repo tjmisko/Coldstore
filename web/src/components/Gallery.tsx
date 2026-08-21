@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { formatCount, formatSize } from "../lib/format";
+import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
+import { useGridKeymap } from "../hooks/useGridKeymap";
+import { galleryColumns, useViewport } from "../hooks/useViewport";
 import type { FileRecord } from "../types/api";
+import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
 import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
 import { PinToggle } from "./PinToggle";
@@ -13,14 +17,17 @@ interface GalleryProps {
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
   onFolderChanged(): void;
+  /** A file the finder asked to be revealed. */
+  reveal?: { fileID: number; token: number } | null;
 }
 
-export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: GalleryProps) {
+export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged, reveal = null }: GalleryProps) {
   const workspace = useFileWorkspace({ folder, filterKey, sort: "mtime", onFolderChanged });
   const { files: list, selection, actions, preset, filters } = workspace;
   const { files, loading, error, hasMore, loadMore, refetchIds } = list;
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const observer = useRef<IntersectionObserver | null>(null);
 
   const sentinelRef = useCallback(
@@ -38,36 +45,6 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
     [hasMore, loading, loadMore],
   );
 
-  // Window-level shortcuts. The target check is what keeps them out of the
-  // search box and the budget editor: without it, Escape and Ctrl+A are stolen
-  // from every input on the page.
-  useEffect(() => {
-    if (lightboxIndex !== null) return;
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
-        e.preventDefault();
-        selection.selectMany(files.map((f) => f.id));
-        return;
-      }
-      if (e.key === "Escape") {
-        selection.clear();
-        return;
-      }
-      if (e.key === "Enter" && files.length > 0) setLightboxIndex(0);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxIndex, files, selection]);
-
   const onFinished = useCallback(
     async (ids: number[]) => {
       await refetchIds(ids);
@@ -75,6 +52,42 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
     },
     [refetchIds, onFolderChanged],
   );
+
+  const bulk = useBulkActions({ selection, filters, onFinished });
+
+  const viewport = useViewport();
+  const columns = galleryColumns(viewport.width);
+  // The sidebar is 288px from md up, and the grid has p-6 plus a 8px gap.
+  const gridWidth = Math.max(200, viewport.width - (viewport.width >= 768 ? 288 : 0) - 56);
+  const tile = gridWidth / columns;
+  const visibleRows = Math.max(1, Math.floor(viewport.height / (tile + 8)));
+
+  const openMenu = useCallback(
+    (index: number, at: { x: number; y: number } | null) => {
+      const file = files[index];
+      if (!file) return;
+      // Right-clicking INSIDE a selection acts on the whole selection; outside
+      // one it acts on the file clicked, and does not disturb the selection.
+      const inSelection = selection.isSelected(file.id) && selection.count > 0;
+      setMenu({ file, ids: inSelection ? selection.ids : [file.id], at });
+    },
+    [files, selection],
+  );
+
+  const cursor = useGridKeymap({
+    scope: "gallery",
+    files,
+    columns,
+    visibleRows,
+    selection,
+    actions,
+    bulk,
+    conflictMode: preset.key === "conflicts",
+    onOpen: setLightboxIndex,
+    onContextMenu: (index) => openMenu(index, null),
+    active: lightboxIndex === null && menu === null,
+    reveal,
+  });
 
   if (!folder) {
     return (
@@ -87,7 +100,8 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
   return (
     <div className="p-4 md:p-6 pb-24">
       {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
-          top of the first few characters of the folder name at 390px. */}
+          top of the first few characters of the folder name at 390px. Margin,
+          not padding: the box has to move for a bounding-box test to see it. */}
       <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{folder}</h2>
       <FilterBar active={filterKey} onChange={onFilterChange} />
 
@@ -104,12 +118,23 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
             file={file}
             selected={selection.isSelected(file.id)}
             anySelected={selection.count > 0}
+            cursor={index === cursor.index}
             conflictMode={preset.key === "conflicts"}
-            onOpen={() => setLightboxIndex(index)}
-            onToggle={() => selection.toggle(file.id)}
+            onOpen={() => {
+              cursor.setIndex(index);
+              setLightboxIndex(index);
+            }}
+            onToggle={() => {
+              cursor.setIndex(index);
+              selection.toggle(file.id);
+            }}
             onToggleRange={() => selection.toggleRange(file.id)}
             onPin={(pinned) => void actions.setPinned(file, pinned)}
             onResolve={(keep) => void actions.resolve(file, keep)}
+            onMenu={(at) => {
+              cursor.setIndex(index);
+              openMenu(index, at);
+            }}
           />
         ))}
       </div>
@@ -138,15 +163,22 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
           onLoadMore={loadMore}
           hasMore={hasMore}
           actions={actions}
+          bulk={bulk}
         />
       )}
 
-      <SelectionBar
-        selection={selection}
-        filters={filters}
-        files={files}
-        onFinished={onFinished}
-      />
+      {menu && (
+        <ContextMenu
+          target={menu}
+          conflictMode={preset.key === "conflicts"}
+          actions={actions}
+          bulk={bulk}
+          onOpen={() => setLightboxIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      <SelectionBar selection={selection} files={files} bulk={bulk} />
     </div>
   );
 }
@@ -155,12 +187,14 @@ interface TileProps {
   file: FileRecord;
   selected: boolean;
   anySelected: boolean;
+  cursor: boolean;
   conflictMode: boolean;
   onOpen(): void;
   onToggle(): void;
   onToggleRange(): void;
   onPin(pinned: boolean): void;
   onResolve(keep: "device" | "archive"): void;
+  onMenu(at: { x: number; y: number }): void;
 }
 
 /** The tile is a div with role="button", not a <button>.
@@ -172,12 +206,14 @@ function Tile({
   file,
   selected,
   anySelected,
+  cursor,
   conflictMode,
   onOpen,
   onToggle,
   onToggleRange,
   onPin,
   onResolve,
+  onMenu,
 }: TileProps) {
   const thumbnail = file.thumbnail_path ? api.thumbnailUrl(file.thumbnail_path) : "";
   const thumbFailed = file.thumb_attempts >= 3;
@@ -201,16 +237,16 @@ function Tile({
       aria-label={file.filename}
       data-file-id={file.id}
       data-selected={selected}
+      data-cursor={cursor}
+      data-cursor-scope="gallery"
       onClick={handleClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu({ x: e.clientX, y: e.clientY });
       }}
       className={`relative aspect-square bg-raised rounded-lg overflow-hidden group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-ground ${
         selected ? "ring-2 ring-ink" : ""
-      }`}
+      } ${cursor && !selected ? "ring-2 ring-cursor" : ""}`}
     >
       {thumbnail ? (
         <img
@@ -222,11 +258,7 @@ function Tile({
       ) : (
         <div className="w-full h-full flex flex-col items-center justify-center text-ink-faint text-meta gap-1.5 p-2 text-center">
           {thumbFailed ? (
-            <span
-              className="text-alarm"
-              title={file.thumb_error || "thumbnail generation failed"}
-              aria-label="thumbnail failed"
-            >
+            <span title={file.thumb_error || "thumbnail generation failed"} aria-label="thumbnail failed">
               &#9888;
             </span>
           ) : null}
@@ -234,16 +266,6 @@ function Tile({
         </div>
       )}
 
-      {/* The checkbox is ALWAYS rendered and always hittable.
-       *
-       *  It used to be `opacity-0 group-hover:opacity-100`, which meant a phone
-       *  -- where there is no hover -- could never reveal it, and the
-       *  `anySelected` escape hatch was unreachable because nothing could be
-       *  selected first. The gallery's whole multi-select feature was dead on
-       *  the device the photos are actually browsed from. It now sits at 60%
-       *  until hovered or selected, which is legible on a photo without
-       *  shouting, and the padding gives it a 36px touch target rather than the
-       *  13px of a native box. */}
       <label
         className={`absolute top-0 left-0 p-2 cursor-pointer transition-opacity ${
           selected || anySelected ? "opacity-100" : "opacity-60 group-hover:opacity-100 focus-within:opacity-100"
@@ -288,31 +310,19 @@ function Tile({
         <PinToggle file={file} onPin={onPin} compact />
       </div>
 
-      {/* Badges carry the state hues. Dim ground plus a coloured hairline and
-          coloured text, rather than a saturated fill -- on a photograph a solid
-          chip is a hole punched in the image, and there are up to three of them. */}
       <div className="absolute bottom-1.5 right-1.5 flex gap-1">
         {file.pinned && (
-          <span
-            className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-held-dim/90 text-held ring-1 ring-held/40 backdrop-blur-[2px]"
-            data-badge="pinned"
-          >
+          <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-held-dim/90 text-held ring-1 ring-held/40 backdrop-blur-[2px]" data-badge="pinned">
             pinned
           </span>
         )}
         {file.status === "archived" && (
-          <span
-            className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-cold-dim/90 text-cold ring-1 ring-cold/40 backdrop-blur-[2px]"
-            data-badge="archived"
-          >
+          <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-cold-dim/90 text-cold ring-1 ring-cold/40 backdrop-blur-[2px]" data-badge="archived">
             archived
           </span>
         )}
         {file.status === "missing" && (
-          <span
-            className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-alarm-dim/90 text-alarm ring-1 ring-alarm/40 backdrop-blur-[2px]"
-            data-badge="missing"
-          >
+          <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-alarm-dim/90 text-alarm ring-1 ring-alarm/40 backdrop-blur-[2px]" data-badge="missing">
             missing
           </span>
         )}
@@ -323,9 +333,6 @@ function Tile({
           className="absolute inset-x-0 bottom-0 bg-ground/85 backdrop-blur-sm p-1.5 flex gap-1.5 text-micro"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* The two outcomes are not symmetrical, so they do not look alike:
-              keeping the archived copy is the cold-side choice and wears the
-              cold hue; keeping what is on the device is the neutral default. */}
           <button
             onClick={() => onResolve("device")}
             className="flex-1 px-1.5 py-1 rounded-md bg-raised text-ink ring-1 ring-line-strong hover:bg-raised-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"

@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatCount, formatDate, formatSize } from "../lib/format";
+import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
+import { useGridKeymap } from "../hooks/useGridKeymap";
+import { useViewport } from "../hooks/useViewport";
 import type { FileRecord } from "../types/api";
+import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
 import { FilterBar } from "./FilterBar";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
@@ -11,40 +15,66 @@ interface FileBrowserProps {
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
   onFolderChanged(): void;
+  reveal?: { fileID: number; token: number } | null;
 }
 
-/** Only a departure from normal gets a hue.
- *
- *  "synced" is the majority state on nearly every screen, so colouring it made
- *  the column a wall of green that said nothing. It is now plain ink, which is
- *  what makes the handful of cold and alarm rows findable at a glance. */
+/** A table row is about this tall, and <C-d> needs to know. Measured rather
+ *  than guessed would be better; measured costs a ResizeObserver on a list that
+ *  can be five hundred rows long, and being one row out on a half-page scroll
+ *  is not a defect anyone will notice. */
+const ROW_HEIGHT = 37;
+
 function statusColor(status: string): string {
   switch (status) {
+    case "synced":
+      return "text-ink-muted";
     case "archived":
       return "text-cold";
-    case "missing":
-      return "text-alarm";
     case "restoring":
     case "archiving":
-      // Full brightness reads as "happening right now".
       return "text-ink";
+    case "missing":
+      return "text-alarm";
     default:
       return "text-ink-muted";
   }
 }
+
+/* Row actions are monochrome and borderless. These two buttons repeat on every
+   row, so a colour here says nothing and thirty outlines are still noise; the
+   palette is spent on the status column instead, where it varies. `cold` is the
+   one exception -- keeping the archived copy of a conflict IS a state choice. */
+const ROW_ACTION = {
+  neutral:
+    "px-2 py-1 text-meta rounded-md bg-transparent text-ink-muted transition-colors hover:bg-raised-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor",
+  cold: "px-2 py-1 text-meta rounded-md bg-transparent text-cold transition-colors hover:bg-cold-dim focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor",
+};
+
+/* The native box is kept in the DOM and merely hidden, so getByRole,
+   toBeChecked, the indeterminate property and the tab order all keep working;
+   only the appearance is ours, drawn at a size a thumb can hit. */
+const CHECKBOX_BOX =
+  "block size-[18px] rounded border-2 border-ink-faint bg-transparent transition-colors peer-checked:border-ink peer-checked:bg-ink peer-checked:[&_svg]:opacity-100 peer-indeterminate:border-ink peer-indeterminate:bg-ink peer-indeterminate:[&_svg]:opacity-100 peer-focus-visible:ring-2 peer-focus-visible:ring-cursor peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-ground";
 
 export function FileBrowser({
   folder,
   filterKey,
   onFilterChange,
   onFolderChanged,
+  reveal = null,
 }: FileBrowserProps) {
-  const workspace = useFileWorkspace({ folder, filterKey, sort: "name", onFolderChanged });
+  const workspace = useFileWorkspace({
+    folder,
+    filterKey,
+    sort: "name",
+    onFolderChanged,
+  });
   const { files: list, selection, actions, preset, filters } = workspace;
   const { files, loading, error, hasMore, loadMore, refetchIds } = list;
 
   const observer = useRef<IntersectionObserver | null>(null);
   const headerCheckbox = useRef<HTMLInputElement>(null);
+  const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -68,7 +98,8 @@ export function FileBrowser({
   // partially-selected header checkbox can only be set through a ref.
   useEffect(() => {
     if (headerCheckbox.current) {
-      headerCheckbox.current.indeterminate = loadedSelected > 0 && !allLoadedSelected;
+      headerCheckbox.current.indeterminate =
+        loadedSelected > 0 && !allLoadedSelected;
     }
   }, [loadedSelected, allLoadedSelected]);
 
@@ -79,6 +110,36 @@ export function FileBrowser({
     },
     [refetchIds, onFolderChanged],
   );
+
+  const bulk = useBulkActions({ selection, filters, onFinished });
+  const viewport = useViewport();
+
+  const openMenu = useCallback(
+    (index: number, at: { x: number; y: number } | null) => {
+      const file = files[index];
+      if (!file) return;
+      const inSelection = selection.isSelected(file.id) && selection.count > 0;
+      setMenu({ file, ids: inSelection ? selection.ids : [file.id], at });
+    },
+    [files, selection],
+  );
+
+  // A table is a grid one column wide, which is the whole reason it gets every
+  // motion the gallery has without a second implementation.
+  const cursor = useGridKeymap({
+    scope: "browser",
+    files,
+    columns: 1,
+    visibleRows: Math.max(1, Math.floor(viewport.height / ROW_HEIGHT)),
+    selection,
+    actions,
+    bulk,
+    conflictMode: preset.key === "conflicts",
+    onOpen: () => {},
+    onContextMenu: (index) => openMenu(index, null),
+    active: menu === null,
+    reveal,
+  });
 
   if (!folder) {
     return (
@@ -91,7 +152,8 @@ export function FileBrowser({
   return (
     <div className="p-4 md:p-6 pb-24">
       {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
-          top of the first few characters of the folder name at 390px. */}
+          top of the first few characters of the folder name at 390px. Margin,
+          not padding: the box has to move for a bounding-box test to see it. */}
       <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{folder}</h2>
       <FilterBar active={filterKey} onChange={onFilterChange} />
 
@@ -106,42 +168,77 @@ export function FileBrowser({
           <thead>
             <tr className="text-left text-ink-faint border-b border-line-strong text-micro uppercase tracking-wider">
               <th className="pb-2 pr-2 w-8">
-                <RowCheckbox
-                  indeterminateRef={headerCheckbox}
-                  checked={allLoadedSelected}
-                  label="Select all loaded files"
-                  dataAttrs={{ "data-select-all-loaded": true }}
-                  onToggle={() => {
-                    if (allLoadedSelected) selection.clear();
-                    else selection.selectMany(files.map((f) => f.id));
-                  }}
-                />
+                <label className="inline-flex p-1 cursor-pointer align-middle">
+                  <input
+                    ref={headerCheckbox}
+                    type="checkbox"
+                    aria-label="Select all loaded files"
+                    data-select-all-loaded
+                    checked={allLoadedSelected}
+                    onChange={() => {
+                      if (allLoadedSelected) selection.clear();
+                      else selection.selectMany(files.map((f) => f.id));
+                    }}
+                    className="peer sr-only"
+                  />
+                  <span aria-hidden="true" className={CHECKBOX_BOX}>
+                    <svg
+                      viewBox="0 0 20 20"
+                      className="size-full text-ground opacity-0"
+                    >
+                      <path
+                        d="M5 10.5l3.2 3.2L15 7"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.75"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                </label>
               </th>
-              <th className="pb-2 pr-2 w-8" title="Pinned files are never archived">
+              <th
+                className="pb-2 pr-2 w-8"
+                title="Pinned files are never archived"
+              >
                 Pin
               </th>
               <th className="pb-2 pr-4 font-medium">Name</th>
-              <th className="pb-2 pr-4 font-medium hidden md:table-cell">Path</th>
+              <th className="pb-2 pr-4 font-medium hidden md:table-cell">
+                Path
+              </th>
               <th className="pb-2 pr-4 font-medium">Size</th>
-              <th className="pb-2 pr-4 font-medium hidden sm:table-cell">Modified</th>
+              <th className="pb-2 pr-4 font-medium hidden sm:table-cell">
+                Modified
+              </th>
               <th className="pb-2 pr-4 font-medium">Status</th>
               <th className="pb-2 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {files.map((file) => (
+            {files.map((file, index) => (
               <Row
                 key={file.id}
                 file={file}
                 selected={selection.isSelected(file.id)}
+                cursor={index === cursor.index}
                 conflictMode={preset.key === "conflicts"}
-                onToggle={() => selection.toggle(file.id)}
+                onFocusRow={() => cursor.setIndex(index)}
+                onToggle={() => {
+                  cursor.setIndex(index);
+                  selection.toggle(file.id);
+                }}
                 onToggleRange={() => selection.toggleRange(file.id)}
                 onPin={(pinned) => void actions.setPinned(file, pinned)}
                 onRestore={() => void actions.restore(file)}
                 onArchive={() => void actions.archive(file)}
                 onResolve={(keep) => void actions.resolve(file, keep)}
                 onDownload={() => actions.download(file)}
+                onMenu={(at) => {
+                  cursor.setIndex(index);
+                  openMenu(index, at);
+                }}
               />
             ))}
           </tbody>
@@ -150,7 +247,11 @@ export function FileBrowser({
 
       <div ref={sentinelRef} className="h-8" />
 
-      {loading && <div className="text-center text-ink-faint py-4 text-meta">Loading...</div>}
+      {loading && (
+        <div className="text-center text-ink-faint py-4 text-meta">
+          Loading...
+        </div>
+      )}
 
       {!loading && files.length === 0 && (
         <div className="text-center text-ink-muted py-12 text-meta">
@@ -164,12 +265,18 @@ export function FileBrowser({
         </div>
       )}
 
-      <SelectionBar
-        selection={selection}
-        filters={filters}
-        files={files}
-        onFinished={onFinished}
-      />
+      {menu && (
+        <ContextMenu
+          target={menu}
+          conflictMode={preset.key === "conflicts"}
+          actions={actions}
+          bulk={bulk}
+          onOpen={() => actions.download(menu.file)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      <SelectionBar selection={selection} files={files} bulk={bulk} />
     </div>
   );
 }
@@ -177,7 +284,9 @@ export function FileBrowser({
 interface RowProps {
   file: FileRecord;
   selected: boolean;
+  cursor: boolean;
   conflictMode: boolean;
+  onFocusRow(): void;
   onToggle(): void;
   onToggleRange(): void;
   onPin(pinned: boolean): void;
@@ -185,12 +294,15 @@ interface RowProps {
   onArchive(): void;
   onResolve(keep: "device" | "archive"): void;
   onDownload(): void;
+  onMenu(at: { x: number; y: number }): void;
 }
 
 function Row({
   file,
   selected,
+  cursor,
   conflictMode,
+  onFocusRow,
   onToggle,
   onToggleRange,
   onPin,
@@ -198,30 +310,67 @@ function Row({
   onArchive,
   onResolve,
   onDownload,
+  onMenu,
 }: RowProps) {
   return (
     <tr
-      className={`group border-b border-line/70 hover:bg-raised/50 ${
-        selected ? "bg-ink/[0.055]" : ""
-      }`}
+      // tabIndex -1, not 0: five hundred rows in the tab order is its own
+      // accessibility failure. The row is entered with j/k or with a click, and
+      // Tab still walks the controls inside it.
+      tabIndex={-1}
       data-file-id={file.id}
       data-selected={selected}
+      data-cursor={cursor}
+      data-cursor-scope="browser"
+      onClick={onFocusRow}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu({ x: e.clientX, y: e.clientY });
+      }}
+      className={`group border-b border-line/70 hover:bg-raised/50 outline-none ${
+        selected ? "bg-ink/[0.055]" : ""
+      } ${cursor ? "ring-2 ring-inset ring-cursor" : ""}`}
     >
       <td className="py-2.5 pr-2">
-        <RowCheckbox
-          checked={selected}
-          label={`Select ${file.filename}`}
-          onToggle={onToggle}
-          onToggleRange={onToggleRange}
-        />
+        <label className="inline-flex p-1 cursor-pointer align-middle">
+          <input
+            type="checkbox"
+            checked={selected}
+            aria-label={`Select ${file.filename}`}
+            onClick={(e) => {
+              if (e.shiftKey) {
+                e.preventDefault();
+                onToggleRange();
+              }
+            }}
+            onChange={(e) => {
+              if (e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey)
+                return;
+              onToggle();
+            }}
+            className="peer sr-only"
+          />
+          <span aria-hidden="true" className={CHECKBOX_BOX}>
+            <svg
+              viewBox="0 0 20 20"
+              className="size-full text-ground opacity-0"
+            >
+              <path
+                d="M5 10.5l3.2 3.2L15 7"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.75"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+        </label>
       </td>
       <td className="py-2.5 pr-2">
         <PinToggle file={file} onPin={onPin} />
       </td>
       <td className="py-2.5 pr-4">
-        {/* Names are read, so they stay in the sans. Everything to the right of
-            here is a measurement or an identifier and goes to the mono, where
-            it aligns down the column. */}
         <span className="text-ink">{file.filename}</span>
         {file.thumb_attempts >= 3 && (
           <span
@@ -241,122 +390,42 @@ function Row({
       <td className="py-2.5 pr-4 text-ink-muted hidden sm:table-cell whitespace-nowrap font-mono text-meta tabular">
         {formatDate(file.file_mtime)}
       </td>
-      <td className={`py-2.5 pr-4 text-meta ${statusColor(file.status)}`}>{file.status}</td>
+      <td className={`py-2.5 pr-4 text-meta ${statusColor(file.status)}`}>
+        {file.status}
+      </td>
       <td className="py-2.5">
-        {/* Monochrome on purpose. These three buttons are identical on every
-            row, so a colour here repeats down the page without ever
-            distinguishing anything -- it was the loudest thing on screen and
-            the first thing the owner asked to lose. The palette is spent on
-            the status column instead, where it varies and therefore informs. */}
         <div className="flex gap-1 flex-wrap">
-          <RowAction onClick={onDownload}>Download</RowAction>
+          <button onClick={onDownload} className={ROW_ACTION.neutral}>
+            Download
+          </button>
           {file.status === "archived" && !conflictMode && (
-            <RowAction onClick={onRestore}>Restore</RowAction>
+            <button onClick={onRestore} className={ROW_ACTION.neutral}>
+              Restore
+            </button>
           )}
-          {file.status === "synced" && <RowAction onClick={onArchive}>Archive</RowAction>}
+          {file.status === "synced" && (
+            <button onClick={onArchive} className={ROW_ACTION.neutral}>
+              Archive
+            </button>
+          )}
           {conflictMode && (
             <>
-              <RowAction onClick={() => onResolve("device")}>Keep device copy</RowAction>
-              <RowAction onClick={() => onResolve("archive")} tone="cold">
+              <button
+                onClick={() => onResolve("device")}
+                className={ROW_ACTION.neutral}
+              >
+                Keep device copy
+              </button>
+              <button
+                onClick={() => onResolve("archive")}
+                className={ROW_ACTION.cold}
+              >
                 Keep archived copy
-              </RowAction>
+              </button>
             </>
           )}
         </div>
       </td>
     </tr>
-  );
-}
-
-interface RowActionProps {
-  onClick(): void;
-  children: React.ReactNode;
-  tone?: "neutral" | "cold";
-}
-
-/** A quiet, always-present row action.
- *
- *  Ghost rather than filled: the whole point of the restyle is that these do not
- *  compete with the status column. `tone="cold"` is the single exception, for
- *  the conflict resolution that keeps the archived copy -- there the choice
- *  itself is a state choice, so the state hue is carrying real information. */
-function RowAction({ onClick, children, tone = "neutral" }: RowActionProps) {
-  // No border. Two of these on every row is thirty outlined rectangles down a
-  // full page -- monochrome noise instead of coloured noise. They earn an
-  // outline on hover, when one of them is the thing being aimed at.
-  const tones = {
-    neutral: "text-ink-muted hover:bg-raised-hover hover:text-ink",
-    cold: "text-cold hover:bg-cold-dim",
-  };
-  return (
-    <button
-      onClick={onClick}
-      className={`px-2 py-1 text-meta rounded-md bg-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${tones[tone]}`}
-    >
-      {children}
-    </button>
-  );
-}
-
-interface RowCheckboxProps {
-  checked: boolean;
-  label: string;
-  onToggle(): void;
-  /** Shift-click. Omitted where a range has no meaning, e.g. the header box. */
-  onToggleRange?(): void;
-  indeterminateRef?: React.Ref<HTMLInputElement>;
-  /** Test-contract data attributes, spread onto the real input. */
-  dataAttrs?: Record<string, string | boolean>;
-}
-
-/** The table's checkbox, drawn to match the gallery tile's.
- *
- *  The native box is kept in the DOM and merely hidden, so `getByRole`,
- *  `toBeChecked`, the tab order and the indeterminate property all keep
- *  working; only its appearance is ours. */
-export function RowCheckbox({
-  checked,
-  label,
-  onToggle,
-  onToggleRange,
-  indeterminateRef,
-  dataAttrs,
-}: RowCheckboxProps) {
-  return (
-    <label className="inline-flex p-1 cursor-pointer align-middle">
-      <input
-        ref={indeterminateRef}
-        type="checkbox"
-        checked={checked}
-        aria-label={label}
-        {...dataAttrs}
-        onClick={(e) => {
-          if (e.shiftKey && onToggleRange) {
-            e.preventDefault();
-            onToggleRange();
-          }
-        }}
-        onChange={(e) => {
-          if (e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey) return;
-          onToggle();
-        }}
-        className="peer sr-only"
-      />
-      <span
-        aria-hidden="true"
-        className="block size-[18px] rounded border-2 border-ink-faint bg-transparent transition-colors peer-checked:border-ink peer-checked:bg-ink peer-checked:[&_svg]:opacity-100 peer-indeterminate:border-ink peer-indeterminate:bg-ink peer-indeterminate:[&_svg]:opacity-100 peer-focus-visible:ring-2 peer-focus-visible:ring-cursor peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-ground"
-      >
-        <svg viewBox="0 0 20 20" className="size-full text-ground opacity-0">
-          <path
-            d={checked ? "M5 10.5l3.2 3.2L15 7" : "M5 10h10"}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.75"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </span>
-    </label>
   );
 }

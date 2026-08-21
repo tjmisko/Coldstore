@@ -36,7 +36,7 @@ export function ConfigPanel({
     <div className="p-4 md:p-6 max-w-3xl space-y-8">
       <div>
         {/* ml-11 clears the fixed sidebar toggle, which is md:hidden. */}
-        <h2 className="text-xl font-semibold ml-11 md:ml-0">Settings</h2>
+        <h2 className="text-title font-medium tracking-tight ml-11 md:ml-0">Settings</h2>
         <p className="text-meta text-ink-muted mt-1.5">
           Budgets, grace periods and persistent patterns live in the catalog and take effect on the
           next enforcement tick -- no restart. The path and the Syncthing id come from
