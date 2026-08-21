@@ -50,7 +50,7 @@ func (s *Server) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "gps_lat and gps_lon must be provided together")
 		return
 	}
-	if req.GPSLat != nil && (*req.GPSLat < -90 || *req.GPSLat > 90 || *req.GPSLon < -180 || *req.GPSLon > 180) {
+	if req.GPSLat != nil && !validCoordinates(*req.GPSLat, *req.GPSLon) {
 		writeError(w, http.StatusBadRequest, "GPS coordinates are out of range")
 		return
 	}

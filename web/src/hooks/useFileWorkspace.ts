@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { api, errorMessage, type FileFilters } from "../lib/api";
+import { api, errorMessage, type FileFilters, type NearFilter } from "../lib/api";
 import { useToast } from "../lib/toast";
 import { useFiles, type UseFiles } from "./useFiles";
 import { useSelection, type Selection } from "./useSelection";
@@ -74,6 +74,7 @@ export interface FileActions {
   download(file: FileRecord): void;
   setDescription(file: FileRecord, description: string): Promise<boolean>;
   setCaptureDate(file: FileRecord, capturedLocal: string): Promise<boolean>;
+  setLocation(file: FileRecord, lat: number, lon: number): Promise<boolean>;
 }
 
 export interface FileWorkspace {
@@ -90,6 +91,7 @@ interface Options {
   filterKey: FilterKey;
   sort?: FileSort;
   limit?: number;
+  near?: NearFilter;
   /** Called after any action that can move bytes or change a pin, so the
    *  budget bars and the wedge banner redraw without waiting for the poll. */
   onFolderChanged?: () => void;
@@ -100,13 +102,14 @@ interface Options {
  *  same repaint rules afterwards. Two implementations of "restore this row"
  *  is how one of them ends up without the res.ok check. */
 export function useFileWorkspace(options: Options): FileWorkspace {
-  const { folder, filterKey, sort, limit, onFolderChanged } = options;
+  const { folder, filterKey, sort, limit, near, onFolderChanged } = options;
   const preset = filterPreset(filterKey);
   const toast = useToast();
 
   const files = useFiles({
     folder,
     ...preset.filters,
+    near,
     sort: preset.sort ?? sort,
     limit,
   });
@@ -214,13 +217,30 @@ export function useFileWorkspace(options: Options): FileWorkspace {
     [patchFile, toast],
   );
 
+  const setLocation = useCallback(
+    async (file: FileRecord, lat: number, lon: number): Promise<boolean> => {
+      try {
+        const updated = await api.updateFile(file.id, { gps_lat: lat, gps_lon: lon });
+        // A coordinate edit can move the row into or out of the exact circle.
+        // Re-run that filter instead of leaving a stale row in the result.
+        if (near) await refetch();
+        else patchFile(file.id, updated);
+        return true;
+      } catch (err) {
+        toast.show("error", `${file.filename}: ${errorMessage(err)}`);
+        return false;
+      }
+    },
+    [near, patchFile, refetch, toast],
+  );
+
   return {
     preset,
     files,
     selection,
     actions: {
-      setPinned, restore, archive, resolve, download, setDescription, setCaptureDate,
+      setPinned, restore, archive, resolve, download, setDescription, setCaptureDate, setLocation,
     },
-    filters: { folder, ...preset.filters },
+    filters: { folder, ...preset.filters, near },
   };
 }

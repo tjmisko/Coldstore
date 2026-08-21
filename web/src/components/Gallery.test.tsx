@@ -272,4 +272,28 @@ describe("Gallery", () => {
     await waitFor(() => expect(tile(61).dataset.cursor).toBe("true"));
     expect(stub.urls().some((url) => url.includes("offset=60"))).toBe(true);
   });
+
+  it("should expose location editing, display, and nearby filtering to pointer users", async () => {
+    const located = aFile({ id: 1, filename: "zero.jpg", gps_lat: 0, gps_lon: 0, gps_source: "manual" });
+    renderGallery([located]);
+    await screen.findByLabelText("zero.jpg");
+
+    fireEvent.contextMenu(tile(1), { clientX: 24, clientY: 48 });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Location and nearby files" }));
+    expect(screen.getByRole("textbox", { name: "Latitude" })).toHaveValue("0");
+    expect(screen.getByRole("textbox", { name: "Longitude" })).toHaveValue("0");
+
+    const radius = screen.getByRole("textbox", { name: "Nearby radius in kilometres" });
+    await userEvent.clear(radius);
+    await userEvent.type(radius, "10");
+    await userEvent.click(screen.getByRole("button", { name: "Show nearby" }));
+
+    await waitFor(() => expect(stub!.urls().some((url) => url.includes("near=0%2C0%2C10"))).toBe(true));
+    expect(screen.getByRole("button", { name: "Clear nearby filter within 10 kilometres" })).toBeInTheDocument();
+
+    await userEvent.click(tile(1));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
+    expect(screen.getByText("0.000000, 0.000000", { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Location" })).toBeInTheDocument();
+  });
 });

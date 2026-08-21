@@ -10,11 +10,14 @@ import { Z } from "../lib/zLayers";
 import type { BulkActions } from "../hooks/useBulkActions";
 import type { FileActions } from "../hooks/useFileWorkspace";
 import type { FileRecord } from "../types/api";
+import type { NearFilter } from "../lib/api";
 import { PinToggle } from "./PinToggle";
 import { Portal } from "./Portal";
 import { PreviewSurface } from "./PreviewSurface";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { CaptureMeta } from "./CaptureMeta";
+import { LocationEditor } from "./LocationEditor";
+import { LocationMeta } from "./LocationMeta";
 
 interface LightboxProps {
   files: FileRecord[];
@@ -28,6 +31,7 @@ interface LightboxProps {
   /** The same bulk path, so `d3j` in the lightbox queues the same job the
    *  selection bar would. */
   bulk: BulkActions;
+  onFindNearby(near: NearFilter): void;
 }
 
 const ICON_BUTTON =
@@ -57,11 +61,13 @@ export function Lightbox({
   hasMore,
   actions,
   bulk,
+  onFindNearby,
 }: LightboxProps) {
   const [index, setIndex] = useState(initialIndex);
   const [showMeta, setShowMeta] = useState(false);
   const [busy, setBusy] = useState(false);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const containerRef = useFocusTrap(true);
   useScrollLock(true);
@@ -269,6 +275,12 @@ export function Lightbox({
                 Description
               </button>
               <button
+                onClick={() => setLocationOpen(true)}
+                className={ACTION_BUTTON}
+              >
+                Location
+              </button>
+              <button
                 onClick={() => actions.download(file)}
                 className={ACTION_BUTTON}
               >
@@ -322,6 +334,9 @@ export function Lightbox({
               <div>
                 <span className="text-ink-faint">Index:</span> {index + 1} / {files.length}
               </div>
+              <div className="col-span-2 md:col-span-4">
+                <span className="text-ink-faint">Location:</span> <LocationMeta file={file} />
+              </div>
               {file.description && (
                 <div className="col-span-2 md:col-span-4 whitespace-pre-wrap text-ink-muted">
                   <span className="text-ink-faint">Description:</span> {file.description}
@@ -338,6 +353,18 @@ export function Lightbox({
           actions={actions}
           onIndexChange={goTo}
           onClose={() => setDescriptionOpen(false)}
+        />
+      )}
+      {locationOpen && (
+        <LocationEditor
+          file={file}
+          actions={actions}
+          onFindNearby={(near) => {
+            setLocationOpen(false);
+            onFindNearby(near);
+            onClose();
+          }}
+          onClose={() => setLocationOpen(false)}
         />
       )}
     </Portal>

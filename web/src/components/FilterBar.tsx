@@ -1,11 +1,14 @@
 import { FILTER_PRESETS, type FilterKey } from "../hooks/useFileWorkspace";
+import type { NearFilter } from "../lib/api";
 
 interface FilterBarProps {
   active: FilterKey;
   onChange(key: FilterKey): void;
+  near?: NearFilter | null;
+  onClearNear?(): void;
 }
 
-export function FilterBar({ active, onChange }: FilterBarProps) {
+export function FilterBar({ active, onChange, near = null, onClearNear = () => {} }: FilterBarProps) {
   const preset = FILTER_PRESETS.find((p) => p.key === active) ?? FILTER_PRESETS[0];
 
   return (
@@ -27,6 +30,17 @@ export function FilterBar({ active, onChange }: FilterBarProps) {
             {option.label}
           </button>
         ))}
+        {near && (
+          <button
+            type="button"
+            data-filter="near"
+            aria-label={`Clear nearby filter within ${near.radiusKm} kilometres`}
+            onClick={onClearNear}
+            className="rounded-full bg-held-dim px-3 py-1 text-meta font-medium text-held transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+          >
+            Within {near.radiusKm} km of {near.lat.toFixed(4)}, {near.lon.toFixed(4)} &times;
+          </button>
+        )}
       </div>
       {preset.hint && <p className="mt-2 text-meta text-ink-faint">{preset.hint}</p>}
     </div>

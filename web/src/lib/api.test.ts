@@ -91,6 +91,11 @@ describe("file query building", () => {
     expect(fileFilterParams({}).has("pinned")).toBe(false);
   });
 
+  it("should serialize a real 0,0 nearby centre for both file endpoints", () => {
+    const params = fileFilterParams({ near: { lat: 0, lon: 0, radiusKm: 25 } });
+    expect(params.get("near")).toBe("0,0,25");
+  });
+
   it("should carry sort and pagination on the listing endpoint", () => {
     const url = filesUrl({ folder: "CameraRoll", pinned: true, pinSource: "restore" }, {
       offset: 60,
@@ -120,5 +125,11 @@ describe("file metadata", () => {
       method: "PATCH",
       body: { captured_local: "2024-02-29 03:04:05.006" },
     });
+  });
+
+  it("should preserve zero manual coordinates in the PATCH body", async () => {
+    stub = stubFetch([{ method: "PATCH", url: "/api/v1/files/7", body: {} }]);
+    await api.updateFile(7, { gps_lat: 0, gps_lon: 0 });
+    expect(stub.calls[0].body).toEqual({ gps_lat: 0, gps_lon: 0 });
   });
 });

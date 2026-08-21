@@ -15,6 +15,7 @@ function fileActions(): FileActions {
     download: vi.fn(),
     setDescription: vi.fn(async () => true),
     setCaptureDate: vi.fn(async () => true),
+    setLocation: vi.fn(async () => true),
   };
 }
 

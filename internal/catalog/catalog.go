@@ -220,6 +220,7 @@ type FileQuery struct {
 	CapturedFrom string
 	CapturedTo   string
 	Undated      bool
+	Near         *NearFilter
 	// Conflicted selects rows with an UNRESOLVED section 4.1b conflict: a
 	// 'conflict' event newer than the last 'conflict_resolved' event for the
 	// same (folder, path). It is the only filter backed by the events table,
@@ -288,6 +289,9 @@ func (q FileQuery) filter() (string, []any) {
 	if q.Conflicted {
 		clause.WriteString(conflictedClause)
 	}
+	if q.Near != nil {
+		q.Near.appendBounds(&clause, &args)
+	}
 	return clause.String(), args
 }
 
@@ -314,6 +318,9 @@ const conflictedClause = `
 
 // ListFiles queries files with filtering, sorting, and pagination.
 func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
+	if q.Near != nil && len(q.IDs) == 0 && !q.Near.valid() {
+		return nil, ErrInvalidNear
+	}
 	where, args := q.filter()
 	query := `SELECT ` + fileColumns + ` FROM files WHERE 1=1` + where
 
@@ -358,6 +365,20 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	if q.Near != nil {
+		files, err := c.queryFiles(query, args...)
+		if err != nil {
+			return nil, err
+		}
+		files = filterFilesNear(files, *q.Near)
+		start := max(0, min(q.Offset, len(files)))
+		end := min(start+limit, len(files))
+		files = files[start:end]
+		if err := c.hydrateFileTags(files); err != nil {
+			return nil, err
+		}
+		return files, nil
+	}
 	query += " LIMIT ? OFFSET ?"
 	args = append(args, limit, q.Offset)
 
@@ -378,7 +399,13 @@ func (c *Catalog) ListFileIDs(q FileQuery, capacity int) (ids []int64, total int
 	if capacity <= 0 {
 		capacity = 20000
 	}
+	if q.Near != nil && len(q.IDs) == 0 && !q.Near.valid() {
+		return nil, 0, ErrInvalidNear
+	}
 	where, args := q.filter()
+	if q.Near != nil && len(q.IDs) == 0 {
+		return c.listFileIDsNear(where, args, *q.Near, capacity)
+	}
 
 	if err := c.db.QueryRow(`SELECT COUNT(*) FROM files WHERE 1=1`+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("counting files: %w", err)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatCount, formatDate, formatSize } from "../lib/format";
+import type { NearFilter } from "../lib/api";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
 import { useGridKeymap } from "../hooks/useGridKeymap";
@@ -10,6 +11,7 @@ import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
+import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
 
@@ -68,10 +70,12 @@ export function FileBrowser({
   reveal = null,
   onShowInFiles = () => {},
 }: FileBrowserProps) {
+  const [near, setNear] = useState<NearFilter | null>(null);
   const workspace = useFileWorkspace({
     folder,
     filterKey,
     sort: "name",
+    near: near ?? undefined,
     onFolderChanged,
   });
   const { files: list, selection, actions, preset, filters } = workspace;
@@ -99,6 +103,7 @@ export function FileBrowser({
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
+  const [locationIndex, setLocationIndex] = useState<number | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -162,7 +167,7 @@ export function FileBrowser({
     onOpen: setPreviewIndex,
     onContextMenu: (index) => openMenu(index, null),
     onEditDescription: setDescriptionIndex,
-    active: previewIndex === null && menu === null && descriptionIndex === null,
+    active: previewIndex === null && menu === null && descriptionIndex === null && locationIndex === null,
     reveal,
   });
 
@@ -180,7 +185,7 @@ export function FileBrowser({
           top of the first few characters of the folder name at 390px. Margin,
           not padding: the box has to move for a bounding-box test to see it. */}
       <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{folder}</h2>
-      <FilterBar active={filterKey} onChange={onFilterChange} />
+      <FilterBar active={filterKey} onChange={onFilterChange} near={near} onClearNear={() => setNear(null)} />
 
       {error && (
         <p className="mb-3 text-meta text-alarm" role="alert">
@@ -300,6 +305,7 @@ export function FileBrowser({
           hasMore={hasMore}
           actions={actions}
           bulk={bulk}
+          onFindNearby={setNear}
         />
       )}
 
@@ -311,6 +317,7 @@ export function FileBrowser({
           bulk={bulk}
           onOpen={() => setPreviewIndex(files.findIndex((file) => file.id === menu.file.id))}
           onEditDescription={() => setDescriptionIndex(files.findIndex((file) => file.id === menu.file.id))}
+          onEditLocation={() => setLocationIndex(files.findIndex((file) => file.id === menu.file.id))}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
         />
@@ -323,6 +330,18 @@ export function FileBrowser({
           actions={actions}
           onIndexChange={cursor.setIndex}
           onClose={() => setDescriptionIndex(null)}
+        />
+      )}
+
+      {locationIndex !== null && files[locationIndex] && (
+        <LocationEditor
+          file={files[locationIndex]}
+          actions={actions}
+          onFindNearby={(next) => {
+            setNear(next);
+            setLocationIndex(null);
+          }}
+          onClose={() => setLocationIndex(null)}
         />
       )}
 

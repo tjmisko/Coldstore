@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../lib/api";
+import { api, type NearFilter } from "../lib/api";
 import { captureDayGroups, formatCaptureDay, resolveCaptureDayJump } from "../lib/capture";
 import { formatCount, formatSize } from "../lib/format";
 import { useBulkActions } from "../hooks/useBulkActions";
@@ -12,6 +12,7 @@ import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
+import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
 
@@ -31,7 +32,10 @@ export function Gallery({
   onShowInFiles = () => {},
 }: GalleryProps) {
   const [sort, setSort] = useState<FileSort>("mtime");
-  const workspace = useFileWorkspace({ folder, filterKey, sort, onFolderChanged });
+  const [near, setNear] = useState<NearFilter | null>(null);
+  const workspace = useFileWorkspace({
+    folder, filterKey, sort, near: near ?? undefined, onFolderChanged,
+  });
   const { files: list, selection, actions, preset, filters } = workspace;
   const effectiveSort = preset.sort ?? sort;
   const { files, loading, error, hasMore, loadMore, refetchIds } = list;
@@ -39,6 +43,7 @@ export function Gallery({
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
+  const [locationIndex, setLocationIndex] = useState<number | null>(null);
   const observer = useRef<IntersectionObserver | null>(null);
   const pendingDayJump = useRef<{
     fromID: number;
@@ -119,7 +124,7 @@ export function Gallery({
           return jump.index;
         }
       : undefined,
-    active: lightboxIndex === null && menu === null && descriptionIndex === null,
+    active: lightboxIndex === null && menu === null && descriptionIndex === null && locationIndex === null,
   });
   const moveCursorTo = cursor.moveTo;
 
@@ -161,7 +166,7 @@ export function Gallery({
           top of the first few characters of the folder name at 390px. Margin,
           not padding: the box has to move for a bounding-box test to see it. */}
       <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{folder}</h2>
-      <FilterBar active={filterKey} onChange={onFilterChange} />
+      <FilterBar active={filterKey} onChange={onFilterChange} near={near} onClearNear={() => setNear(null)} />
 
       <label className="mb-4 flex w-fit items-center gap-2 text-meta text-ink-muted">
         Sort
@@ -259,6 +264,7 @@ export function Gallery({
           hasMore={hasMore}
           actions={actions}
           bulk={bulk}
+          onFindNearby={setNear}
         />
       )}
 
@@ -270,6 +276,7 @@ export function Gallery({
           bulk={bulk}
           onOpen={() => setLightboxIndex(files.findIndex((f) => f.id === menu.file.id))}
           onEditDescription={() => setDescriptionIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onEditLocation={() => setLocationIndex(files.findIndex((f) => f.id === menu.file.id))}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
         />
@@ -282,6 +289,18 @@ export function Gallery({
           actions={actions}
           onIndexChange={cursor.setIndex}
           onClose={() => setDescriptionIndex(null)}
+        />
+      )}
+
+      {locationIndex !== null && files[locationIndex] && (
+        <LocationEditor
+          file={files[locationIndex]}
+          actions={actions}
+          onFindNearby={(next) => {
+            setNear(next);
+            setLocationIndex(null);
+          }}
+          onClose={() => setLocationIndex(null)}
         />
       )}
 

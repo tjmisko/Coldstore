@@ -95,6 +95,13 @@ export interface FileFilters {
   capturedTo?: string;
   /** Metadata was scanned successfully but contained no capture date. */
   undated?: boolean;
+  near?: NearFilter;
+}
+
+export interface NearFilter {
+  lat: number;
+  lon: number;
+  radiusKm: number;
 }
 
 /** fileFilterParams is shared by GET /files and GET /files/ids, which is the
@@ -112,6 +119,9 @@ export function fileFilterParams(filters: FileFilters): URLSearchParams {
   if (filters.capturedFrom) params.set("captured_from", filters.capturedFrom);
   if (filters.capturedTo) params.set("captured_to", filters.capturedTo);
   if (filters.undated) params.set("undated", "1");
+  if (filters.near) {
+    params.set("near", `${filters.near.lat},${filters.near.lon},${filters.near.radiusKm}`);
+  }
   return params;
 }
 

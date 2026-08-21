@@ -33,6 +33,11 @@ const maxPageLimit = 500
 // It reports false when it has already answered the request.
 func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalog.FileQuery, bool) {
 	v := r.URL.Query()
+	near, err := parseNear(v.Get("near"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return catalog.FileQuery{}, false
+	}
 	q := catalog.FileQuery{
 		Folder:       v.Get("folder"),
 		Status:       catalog.FileStatus(v.Get("status")),
@@ -41,6 +46,7 @@ func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalo
 		PinSource:    v.Get("pin_source"),
 		CapturedFrom: v.Get("captured_from"),
 		CapturedTo:   v.Get("captured_to"),
+		Near:         near,
 	}
 	for name, value := range map[string]string{
 		"captured_from": q.CapturedFrom,
