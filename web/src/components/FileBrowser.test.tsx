@@ -20,7 +20,13 @@ const ROWS = [
   aFile({ id: 3, filename: "c.txt", relative_path: "notes/c.txt", extension: ".txt", status: "synced" }),
 ];
 
-function renderBrowser(rows = ROWS) {
+function renderBrowser(
+  rows = ROWS,
+  options: {
+    reveal?: { file: (typeof ROWS)[number]; token: number };
+    onShowInFiles?: (file: (typeof ROWS)[number]) => void;
+  } = {},
+) {
   stub = stubFetch([{ url: "/api/v1/files", body: rows }]);
   return renderWithToasts(
     <FileBrowser
@@ -28,6 +34,8 @@ function renderBrowser(rows = ROWS) {
       filterKey="all"
       onFilterChange={vi.fn()}
       onFolderChanged={() => {}}
+      reveal={options.reveal}
+      onShowInFiles={options.onShowInFiles}
     />,
   );
 }
@@ -125,5 +133,40 @@ describe("FileBrowser", () => {
     await userEvent.click(within(row(1)).getByRole("button", { name: "Archive" }));
 
     await waitFor(() => expect(within(row(1)).getByText("archived")).toBeInTheDocument());
+  });
+
+  it("should render and focus a complete reveal target outside the initial page", async () => {
+    const target = aFile({
+      id: 99,
+      folder_label: "Documents",
+      filename: "z-last.txt",
+      relative_path: "archive/z-last.txt",
+      extension: ".txt",
+    });
+    const page = Array.from({ length: 60 }, (_, index) =>
+      aFile({
+        id: index + 1,
+        folder_label: "Documents",
+        filename: `page-${String(index + 1).padStart(2, "0")}.txt`,
+        relative_path: `page/page-${String(index + 1).padStart(2, "0")}.txt`,
+        extension: ".txt",
+      }),
+    );
+    renderBrowser(page, { reveal: { file: target, token: 1 } });
+
+    await waitFor(() => expect(row(99)).toBe(document.activeElement));
+    expect(row(99)).toHaveAttribute("data-cursor", "true");
+    expect(within(row(99)).getByText("archive/z-last.txt")).toBeInTheDocument();
+  });
+
+  it("should offer the precise in-app Files action from the context menu", async () => {
+    const onShowInFiles = vi.fn();
+    renderBrowser(ROWS, { onShowInFiles });
+    await screen.findByText("a.txt");
+
+    fireEvent.contextMenu(row(1), { clientX: 24, clientY: 48 });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Show in Files view" }));
+
+    expect(onShowInFiles).toHaveBeenCalledWith(ROWS[0]);
   });
 });

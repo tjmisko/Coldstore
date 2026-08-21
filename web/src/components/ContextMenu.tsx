@@ -26,6 +26,7 @@ interface ContextMenuProps {
   actions: FileActions;
   bulk: BulkActions;
   onOpen(): void;
+  onShowInFiles(): void;
   onClose(): void;
 }
 
@@ -42,6 +43,7 @@ export function ContextMenu({
   actions,
   bulk,
   onOpen,
+  onShowInFiles,
   onClose,
 }: ContextMenuProps) {
   const containerRef = useFocusTrap(true);
@@ -67,7 +69,10 @@ export function ContextMenu({
   }, [file, toast]);
 
   const items: Item[] = [];
-  if (!many) items.push({ id: "open", label: "Open", run: onOpen });
+  if (!many) {
+    items.push({ id: "open", label: "Open", run: onOpen });
+    items.push({ id: "show-in-files", label: "Show in Files view", run: onShowInFiles });
+  }
   items.push({ id: "download", label: `Download${suffix}`, run: () => bulk.download(ids) });
   if (file.status === "archived" || many) {
     items.push({ id: "restore", label: `Restore${suffix}`, run: () => bulk.perform("restore", ids) });
@@ -157,9 +162,9 @@ export function ContextMenu({
           tabIndex={-1}
           onKeyDown={onKeyDown}
           style={{ position: "absolute", ...style }}
-          className="w-56 rounded-lg border border-neutral-700 bg-neutral-900 py-1 shadow-2xl outline-none"
+          className="w-56 rounded-lg border border-line-strong bg-surface py-1 shadow-2xl outline-none"
         >
-          <p className="truncate px-3 py-1 text-xs text-neutral-500">
+          <p className="truncate px-3 py-1 text-meta text-ink-faint">
             {many ? `${formatCount(ids.length)} files selected` : file.filename}
           </p>
           {items.map((item, index) => (
@@ -171,8 +176,8 @@ export function ContextMenu({
               onMouseEnter={() => setHighlight(index)}
               onClick={() => run(item)}
               className={`block w-full px-3 py-1.5 text-left text-sm ${
-                index === highlight ? "bg-neutral-800" : ""
-              } ${item.danger ? "text-amber-300" : "text-neutral-200"}`}
+                index === highlight ? "bg-raised-hover" : ""
+              } ${item.danger ? "text-alarm" : "text-ink"}`}
             >
               {item.label}
             </button>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveMotion, resolveRange, spanIndices, visualSpan, type Geometry } from "../keymap/motions";
 import type { Command, Mode, OperatorTarget, Scope } from "../keymap/types";
 import type { FileRecord } from "../types/api";
+import type { FileReveal } from "../types/navigation";
 import type { FileActions } from "./useFileWorkspace";
 import type { Selection } from "./useSelection";
 import type { BulkActions } from "./useBulkActions";
@@ -25,7 +26,7 @@ interface Options {
   active?: boolean;
   /** A file the finder asked to be revealed, and a token that changes on every
    *  request so revealing the same file twice works. */
-  reveal?: { fileID: number; token: number } | null;
+  reveal?: FileReveal | null;
 }
 
 export interface GridCursor {
@@ -65,7 +66,7 @@ export function useGridKeymap(options: Options): GridCursor {
   let next = files.length === 0 ? 0 : Math.min(index, files.length - 1);
 
   if (reveal && reveal.token !== revealedToken) {
-    const at = files.findIndex((file) => file.id === reveal.fileID);
+    const at = files.findIndex((file) => file.id === reveal.file.id);
     // The token is consumed only once the file has actually been found. The
     // finder switches folder to reveal a file, which remounts this list empty:
     // consuming the request on that first render would drop it before the page

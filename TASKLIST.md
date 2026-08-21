@@ -54,21 +54,21 @@ deployment.
 
 ### 4. Finish the combined visual sweep
 
-- [ ] Convert raw Tailwind defaults in `KeymapProvider`, `FuzzyFinder`, `ContextMenu`,
+- [x] Convert raw Tailwind defaults in `KeymapProvider`, `FuzzyFinder`, `ContextMenu`,
       `CommandPalette`, `Cheatsheet` and `Lightbox` to the established tokens.
-- [ ] Sweep the newly merged `PreviewSurface` and PDF/EPUB/text reader components too.
-- [ ] Preserve the rule: color communicates file state/location, never generic action.
-- [ ] Preserve every existing `data-*` selector.
-- [ ] Run the documented raw-color grep and explain any intentional residue.
+- [x] Sweep the newly merged `PreviewSurface` and PDF/EPUB/text reader components too.
+- [x] Preserve the rule: color communicates file state/location, never generic action.
+- [x] Preserve every existing `data-*` selector.
+- [x] Run the documented raw-color grep and explain any intentional residue.
 
 ### 5. Reconcile feature acceptance status
 
 - [ ] Mark D/E items complete only where implementation and tests prove them.
 - [ ] Rewrite D3's obsolete “Space toggles selection” wording: Space is the leader by owner
       decision; keep the implemented non-colliding selection bindings.
-- [ ] Implement F3: fuzzy-finder preview pane using the merged preview surface.
-- [ ] Implement F4: keyboard open/select/act flow from fuzzy results.
-- [ ] Finish G2: add reveal-folder behavior, or document the platform limitation and replace
+- [x] Implement F3: fuzzy-finder preview pane using the merged preview surface.
+- [x] Implement F4: keyboard open/select/act flow from fuzzy results.
+- [x] Finish G2: add reveal-folder behavior, or document the platform limitation and replace
       it with a precise supported action.
 - [ ] Mark H0a–H8 and BUG-3 complete only after the combined branch passes verification.
 - [ ] Decide H9: larger preview derivative versus full original/browser rendering.

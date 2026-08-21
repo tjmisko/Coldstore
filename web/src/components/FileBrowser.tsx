@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatCount, formatDate, formatSize } from "../lib/format";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
 import { useGridKeymap } from "../hooks/useGridKeymap";
 import { useViewport } from "../hooks/useViewport";
 import type { FileRecord } from "../types/api";
+import type { FileReveal } from "../types/navigation";
 import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
 import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
@@ -16,7 +17,8 @@ interface FileBrowserProps {
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
   onFolderChanged(): void;
-  reveal?: { fileID: number; token: number } | null;
+  reveal?: FileReveal | null;
+  onShowInFiles?(file: FileRecord): void;
 }
 
 /** A table row is about this tall, and <C-d> needs to know. Measured rather
@@ -63,6 +65,7 @@ export function FileBrowser({
   onFilterChange,
   onFolderChanged,
   reveal = null,
+  onShowInFiles = () => {},
 }: FileBrowserProps) {
   const workspace = useFileWorkspace({
     folder,
@@ -71,7 +74,24 @@ export function FileBrowser({
     onFolderChanged,
   });
   const { files: list, selection, actions, preset, filters } = workspace;
-  const { files, loading, error, hasMore, loadMore, refetchIds } = list;
+  const { files: loadedFiles, loading, error, hasMore, loadMore, refetchIds } = list;
+
+  // Finder results carry their complete record. If the target is beyond the
+  // initial 60-row page, append it until normal paging reaches it so the grid
+  // can render, focus, and scroll it instead of silently dropping the request.
+  const files = useMemo(() => {
+    const target = reveal?.file;
+    if (
+      !target ||
+      loading ||
+      filterKey !== "all" ||
+      target.folder_label !== folder ||
+      loadedFiles.some((file) => file.id === target.id)
+    ) {
+      return loadedFiles;
+    }
+    return [...loadedFiles, target];
+  }, [filterKey, folder, loadedFiles, loading, reveal]);
 
   const observer = useRef<IntersectionObserver | null>(null);
   const headerCheckbox = useRef<HTMLInputElement>(null);
@@ -287,6 +307,7 @@ export function FileBrowser({
           actions={actions}
           bulk={bulk}
           onOpen={() => setPreviewIndex(files.findIndex((file) => file.id === menu.file.id))}
+          onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
         />
       )}

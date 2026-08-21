@@ -5,6 +5,7 @@ import { prefetchReaders } from "./components/readers/prefetch";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { FileBrowser } from "./components/FileBrowser";
+import { FilePreviewDialog } from "./components/FilePreviewDialog";
 import { FuzzyFinder } from "./components/FuzzyFinder";
 import { Gallery } from "./components/Gallery";
 import { KeymapProvider } from "./components/KeymapProvider";
@@ -22,6 +23,7 @@ import { useKeymap } from "./lib/keymapContext";
 import { useToast } from "./lib/toast";
 import { Z } from "./lib/zLayers";
 import type { FileRecord } from "./types/api";
+import type { FileReveal } from "./types/navigation";
 
 type View = "gallery" | "files" | "config";
 
@@ -30,6 +32,7 @@ const VIEWS: View[] = ["gallery", "files", "config"];
 type OverlayState =
   | { kind: "palette"; initial: string }
   | { kind: "finder"; query: string }
+  | { kind: "preview"; file: FileRecord }
   | { kind: "cheatsheet" };
 
 function isImageFolder(label: string): boolean {
@@ -57,7 +60,7 @@ function Shell() {
   const [filterKey, setFilterKey] = useState<FilterKey>("all");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
-  const [reveal, setReveal] = useState<{ fileID: number; token: number } | null>(null);
+  const [reveal, setReveal] = useState<FileReveal | null>(null);
 
   const keymap = useKeymap();
   const toast = useToast();
@@ -269,16 +272,15 @@ function Shell() {
     [keymap, onFolderChanged, rescan, selectFolder, selectedFolder, toast, updateFolder],
   );
 
-  const onReveal = useCallback(
+  const showInFiles = useCallback(
     (file: FileRecord) => {
-      if (file.folder_label !== selectedFolder) {
-        selectFolder(file.folder_label);
-      } else {
-        setFilterKey("all");
-      }
-      setReveal((current) => ({ fileID: file.id, token: (current?.token ?? 0) + 1 }));
+      setSelectedFolder(file.folder_label);
+      setFilterKey("all");
+      setView("files");
+      setReveal((current) => ({ file, token: (current?.token ?? 0) + 1 }));
+      setOverlay(null);
     },
-    [selectFolder, selectedFolder],
+    [],
   );
 
   return (
@@ -385,7 +387,7 @@ function Shell() {
               filterKey={filterKey}
               onFilterChange={setFilterKey}
               onFolderChanged={onFolderChanged}
-              reveal={reveal}
+              onShowInFiles={showInFiles}
             />
           )}
           {view === "files" && (
@@ -396,6 +398,7 @@ function Shell() {
               onFilterChange={setFilterKey}
               onFolderChanged={onFolderChanged}
               reveal={reveal}
+              onShowInFiles={showInFiles}
             />
           )}
           {view === "config" && (
@@ -424,8 +427,13 @@ function Shell() {
           initialQuery={overlay.query}
           filters={{ folder: selectedFolder }}
           onClose={() => closeIf("finder")}
-          onReveal={onReveal}
+          onOpen={(file) => setOverlay({ kind: "preview", file })}
+          onShowInFiles={showInFiles}
         />
+      )}
+
+      {overlay?.kind === "preview" && (
+        <FilePreviewDialog file={overlay.file} onClose={() => closeIf("preview")} />
       )}
 
       {overlay?.kind === "cheatsheet" && <Cheatsheet onClose={() => closeIf("cheatsheet")} />}

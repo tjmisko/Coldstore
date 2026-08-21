@@ -17,11 +17,16 @@ interface GalleryProps {
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
   onFolderChanged(): void;
-  /** A file the finder asked to be revealed. */
-  reveal?: { fileID: number; token: number } | null;
+  onShowInFiles?(file: FileRecord): void;
 }
 
-export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged, reveal = null }: GalleryProps) {
+export function Gallery({
+  folder,
+  filterKey,
+  onFilterChange,
+  onFolderChanged,
+  onShowInFiles = () => {},
+}: GalleryProps) {
   const workspace = useFileWorkspace({ folder, filterKey, sort: "mtime", onFolderChanged });
   const { files: list, selection, actions, preset, filters } = workspace;
   const { files, loading, error, hasMore, loadMore, refetchIds } = list;
@@ -86,7 +91,6 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged, re
     onOpen: setLightboxIndex,
     onContextMenu: (index) => openMenu(index, null),
     active: lightboxIndex === null && menu === null,
-    reveal,
   });
 
   if (!folder) {
@@ -174,6 +178,7 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged, re
           actions={actions}
           bulk={bulk}
           onOpen={() => setLightboxIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
         />
       )}

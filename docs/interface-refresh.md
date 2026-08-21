@@ -161,13 +161,18 @@ no ranking, no FTS. So "fuzzy" is the part that does not exist yet, at either en
       `GET /files/ids` already returns bare ids capped at 20000 (`api.ts:135`), which is the
       natural seam for a client-side scorer over a bounded set. SQLite FTS5 is the
       server-side alternative and would be a catalog migration.
-- [ ] F3. Preview pane in the finder (telescope-style), reusing the preview work in H.
-- [ ] F4. Open / select / act on the result without leaving the keyboard.
+- [x] F3. Preview pane in the finder (telescope-style), reusing the preview work in H.
+- [x] F4. Open / select / act on the result without leaving the keyboard.
 
 ## G. Right-click context menu
 
 - [ ] G1. Native-feeling context menu on tiles and table rows.
-- [ ] G2. Actions: open, preview, download, archive, restore, pin, copy path, reveal folder.
+- [x] G2. Actions: open preview, show in Files view, download, archive, restore, pin,
+      and copy path. A browser page cannot invoke the operating system's native
+      “reveal in folder” action without a trusted native bridge. “Show in Files
+      view” is the precise web equivalent: it selects the record's folder,
+      clears restrictive filters, switches to the Files view, and focuses the
+      record (including finder matches beyond the first loaded page).
 - [ ] G3. Multi-select aware -- right-clicking inside a selection acts on the whole selection.
 - [ ] G4. Keyboard-reachable (context-menu key, and a leader binding).
 

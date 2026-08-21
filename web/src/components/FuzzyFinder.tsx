@@ -3,15 +3,18 @@ import { rank, type FileFields } from "../keymap/fuzzy";
 import { CORPUS_MAX, useFileCorpus } from "../hooks/useFileCorpus";
 import { api, type FileFilters } from "../lib/api";
 import { formatCount, formatSize } from "../lib/format";
+import { resolvePreview } from "../lib/preview";
 import type { FileRecord } from "../types/api";
 import { Overlay } from "./Overlay";
+import { PreviewSurface } from "./PreviewSurface";
 
 interface FuzzyFinderProps {
   initialQuery: string;
   filters: FileFilters;
   onClose(): void;
-  /** Switch to the file's folder and put the cursor on it. */
-  onReveal(file: FileRecord): void;
+  onOpen(file: FileRecord): void;
+  /** Switch to the Files view and put the cursor on this complete record. */
+  onShowInFiles(file: FileRecord): void;
 }
 
 function fieldsOf(file: FileRecord): FileFields {
@@ -30,9 +33,16 @@ function fieldsOf(file: FileRecord): FileFields {
  *  client-side because the server's `q` is `filename LIKE '%q%'` and has no
  *  ordering at all; the corpus is bounded because a folder with 100k files
  *  cannot ship its filename list to a phone. */
-export function FuzzyFinder({ initialQuery, filters, onClose, onReveal }: FuzzyFinderProps) {
+export function FuzzyFinder({
+  initialQuery,
+  filters,
+  onClose,
+  onOpen,
+  onShowInFiles,
+}: FuzzyFinderProps) {
   const [query, setQuery] = useState(initialQuery);
   const [highlight, setHighlight] = useState(0);
+  const [selected, setSelected] = useState<ReadonlyMap<number, FileRecord>>(() => new Map());
   const corpus = useFileCorpus({ filters, query, enabled: true });
 
   const results = useMemo(
@@ -41,6 +51,21 @@ export function FuzzyFinder({ initialQuery, filters, onClose, onReveal }: FuzzyF
   );
   const index = Math.min(highlight, Math.max(0, results.length - 1));
   const active = results[index]?.item;
+  const preview = active ? resolvePreview(active) : null;
+
+  const toggleSelected = useCallback((file: FileRecord) => {
+    setSelected((current) => {
+      const next = new Map(current);
+      if (next.has(file.id)) next.delete(file.id);
+      else next.set(file.id, file);
+      return next;
+    });
+  }, []);
+
+  const download = useCallback(() => {
+    const targets = selected.size > 0 ? [...selected.values()] : active ? [active] : [];
+    for (const file of targets) window.open(api.downloadUrl(file.id), "_blank", "noopener");
+  }, [active, selected]);
 
   const move = useCallback(
     (delta: number) => {
@@ -61,15 +86,22 @@ export function FuzzyFinder({ initialQuery, filters, onClose, onReveal }: FuzzyF
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        if (active) {
-          onReveal(active);
-          onClose();
-        }
+        if (active) onOpen(active);
+        return;
+      }
+      if (event.ctrlKey && event.key.toLowerCase() === "x") {
+        event.preventDefault();
+        if (active) toggleSelected(active);
         return;
       }
       if (event.ctrlKey && event.key.toLowerCase() === "y") {
         event.preventDefault();
-        if (active) window.open(api.downloadUrl(active.id), "_blank", "noopener");
+        download();
+        return;
+      }
+      if (event.ctrlKey && event.key.toLowerCase() === "g") {
+        event.preventDefault();
+        if (active) onShowInFiles(active);
         return;
       }
       const down = event.key === "ArrowDown" || (event.ctrlKey && event.key.toLowerCase() === "n");
@@ -79,12 +111,12 @@ export function FuzzyFinder({ initialQuery, filters, onClose, onReveal }: FuzzyF
         move(down ? 1 : -1);
       }
     },
-    [active, move, onClose, onReveal],
+    [active, download, move, onClose, onOpen, onShowInFiles, toggleSelected],
   );
 
   return (
-    <Overlay label="Find a file" onClose={onClose} align="top" className="max-w-3xl" testAttribute="finder">
-      <div className="rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl overflow-hidden">
+    <Overlay label="Find a file" onClose={onClose} align="top" className="max-w-6xl" testAttribute="finder">
+      <div className="overflow-hidden rounded-xl border border-line bg-surface shadow-2xl">
         <input
           autoFocus
           data-fuzzy-finder
@@ -93,71 +125,98 @@ export function FuzzyFinder({ initialQuery, filters, onClose, onReveal }: FuzzyF
           spellCheck={false}
           autoComplete="off"
           value={query}
+          aria-activedescendant={active ? `finder-result-${active.id}` : undefined}
           onChange={(event) => {
             setQuery(event.target.value);
             setHighlight(0);
           }}
           onKeyDown={onKeyDown}
-          className="w-full bg-transparent px-4 py-3 text-sm outline-none border-b border-neutral-800"
+          className="w-full border-b border-line bg-transparent px-4 py-3 text-base text-ink outline-none"
         />
 
         {corpus.error && (
-          <p className="px-4 py-2 text-xs text-red-400" role="alert">
+          <p className="px-4 py-2 text-meta text-alarm" role="alert">
             {corpus.error}
           </p>
         )}
 
-        <ul className="max-h-[55vh] overflow-y-auto" role="listbox" aria-label="Matches">
-          {results.map((result, at) => (
-            <li key={result.item.id}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={at === index}
-                data-finder-result={result.item.id}
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  onReveal(result.item);
-                  onClose();
-                }}
-                className={`flex w-full items-baseline gap-3 px-4 py-1.5 text-left ${
-                  at === index ? "bg-neutral-800" : "hover:bg-neutral-800/60"
-                }`}
-              >
-                <span className="text-sm text-neutral-200 truncate max-w-[45%]">
-                  {result.item.filename}
-                </span>
-                <span className="text-xs text-neutral-500 truncate flex-1">
-                  {result.item.folder_label}/{result.item.relative_path}
-                </span>
-                <span className="text-xs text-neutral-500 whitespace-nowrap">
-                  {formatSize(result.item.size_bytes)}
-                </span>
-                <span
-                  className={`text-xs whitespace-nowrap ${
-                    result.item.status === "archived" ? "text-amber-400" : "text-neutral-500"
-                  }`}
-                >
-                  {result.item.status}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="grid min-h-64 md:grid-cols-[minmax(0,3fr)_minmax(18rem,2fr)]">
+          <ul
+            className="max-h-[55vh] overflow-y-auto border-b border-line md:border-b-0 md:border-r"
+            role="listbox"
+            aria-label="Matches"
+            aria-multiselectable="true"
+          >
+            {results.map((result, at) => {
+              const isSelected = selected.has(result.item.id);
+              return (
+                <li key={result.item.id}>
+                  <button
+                    id={`finder-result-${result.item.id}`}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    data-finder-result={result.item.id}
+                    data-finder-active={at === index}
+                    data-finder-selected={isSelected}
+                    onMouseEnter={() => setHighlight(at)}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      if (event.ctrlKey || event.metaKey) toggleSelected(result.item);
+                      else onOpen(result.item);
+                    }}
+                    className={`flex w-full items-baseline gap-3 px-4 py-1.5 text-left ${
+                      at === index ? "bg-raised-hover" : "hover:bg-raised"
+                    } ${isSelected ? "border-l-2 border-cursor pl-3.5" : ""}`}
+                  >
+                    <span className="max-w-[45%] truncate text-base text-ink">
+                      {result.item.filename}
+                    </span>
+                    <span className="flex-1 truncate text-meta text-ink-faint">
+                      {result.item.folder_label}/{result.item.relative_path}
+                    </span>
+                    <span className="whitespace-nowrap text-meta text-ink-faint">
+                      {formatSize(result.item.size_bytes)}
+                    </span>
+                    <span
+                      className={`whitespace-nowrap text-meta ${
+                        result.item.status === "archived" ? "text-cold" : "text-ink-faint"
+                      }`}
+                    >
+                      {result.item.status}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+
+          <div
+            data-finder-preview={active?.id ?? "empty"}
+            data-preview-kind={preview?.kind ?? "none"}
+            className="flex max-h-[55vh] min-h-64 items-center justify-center overflow-auto bg-ground p-4"
+          >
+            {active && preview ? (
+              <PreviewSurface file={active} preview={preview} />
+            ) : (
+              <p className="text-base text-ink-faint">No file selected.</p>
+            )}
+          </div>
+        </div>
 
         {!corpus.loading && results.length === 0 && (
-          <p className="px-4 py-6 text-center text-sm text-neutral-500">No file matches.</p>
+          <p className="px-4 py-6 text-center text-base text-ink-faint">No file matches.</p>
         )}
 
         <p
-          className="border-t border-neutral-800 px-4 py-2 text-xs text-neutral-500"
+          className="border-t border-line px-4 py-2 text-meta text-ink-faint"
           data-finder-footer
         >
           {corpus.loading
             ? "Loading..."
             : corpus.truncated
               ? `Searching the first ${formatCount(CORPUS_MAX)} files in this folder, plus anything the server matches on filename. Narrow the filter to search the rest.`
-              : `${formatCount(results.length)} of ${formatCount(corpus.files.length)} files. Enter reveals, Ctrl-y downloads.`}
+              : `${formatCount(results.length)} of ${formatCount(corpus.files.length)} files. Enter previews, Ctrl-x selects, Ctrl-y downloads selection, Ctrl-g shows in Files view.`}
         </p>
       </div>
     </Overlay>

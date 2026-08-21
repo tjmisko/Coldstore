@@ -107,7 +107,7 @@ test("refuses a command that is not one instead of closing silently", async ({ p
   await expect(input).toBeVisible();
 });
 
-test("finds a file by name and puts the cursor on it", async ({ page }) => {
+test("finds a file by name and opens its preview", async ({ page }) => {
   await page.keyboard.press("F10");
   const input = page.locator("[data-fuzzy-finder]");
   await expect(input).toBeFocused();
@@ -118,7 +118,8 @@ test("finds a file by name and puts the cursor on it", async ({ page }) => {
 
   await page.keyboard.press("Enter");
   await expect(input).toBeHidden();
-  await expect(page.locator('[data-cursor="true"]')).toBeFocused();
+  await expect(page.locator("[data-finder-open-preview]")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Preview concert_night.jpg" })).toBeVisible();
 });
 
 test("opens a context menu on right-click and scopes it to the selection", async ({ page }) => {
