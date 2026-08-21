@@ -65,6 +65,7 @@ export interface FileActions {
   archive(file: FileRecord): Promise<void>;
   resolve(file: FileRecord, keep: "device" | "archive"): Promise<void>;
   download(file: FileRecord): void;
+  setDescription(file: FileRecord, description: string): Promise<boolean>;
 }
 
 export interface FileWorkspace {
@@ -177,11 +178,25 @@ export function useFileWorkspace(options: Options): FileWorkspace {
     window.open(api.downloadUrl(file.id), "_blank", "noopener");
   }, []);
 
+  const setDescription = useCallback(
+    async (file: FileRecord, description: string): Promise<boolean> => {
+      try {
+        const updated = await api.updateFile(file.id, { description });
+        patchFile(file.id, updated);
+        return true;
+      } catch (err) {
+        toast.show("error", `${file.filename}: ${errorMessage(err)}`);
+        return false;
+      }
+    },
+    [patchFile, toast],
+  );
+
   return {
     preset,
     files,
     selection,
-    actions: { setPinned, restore, archive, resolve, download },
+    actions: { setPinned, restore, archive, resolve, download, setDescription },
     filters: { folder, ...preset.filters },
   };
 }

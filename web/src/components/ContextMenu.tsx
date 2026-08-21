@@ -26,6 +26,7 @@ interface ContextMenuProps {
   actions: FileActions;
   bulk: BulkActions;
   onOpen(): void;
+  onEditDescription(): void;
   onShowInFiles(): void;
   onClose(): void;
 }
@@ -43,6 +44,7 @@ export function ContextMenu({
   actions,
   bulk,
   onOpen,
+  onEditDescription,
   onShowInFiles,
   onClose,
 }: ContextMenuProps) {
@@ -71,6 +73,7 @@ export function ContextMenu({
   const items: Item[] = [];
   if (!many) {
     items.push({ id: "open", label: "Open", run: onOpen });
+    items.push({ id: "description", label: "Edit description", run: onEditDescription });
     items.push({ id: "show-in-files", label: "Show in Files view", run: onShowInFiles });
   }
   items.push({ id: "download", label: `Download${suffix}`, run: () => bulk.download(ids) });

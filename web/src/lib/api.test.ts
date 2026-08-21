@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ApiRequestError, apiFetch, fileFilterParams, filesUrl } from "./api";
+import { ApiRequestError, api, apiFetch, fileFilterParams, filesUrl } from "./api";
 import { stubFetch } from "../test/harness";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
@@ -85,5 +85,15 @@ describe("file query building", () => {
     expect(url).toContain("sort=pinned_at");
     expect(url).toContain("offset=60");
     expect(url).toContain("limit=60");
+  });
+});
+
+describe("file metadata", () => {
+  it("should PATCH only the owner-authored fields supplied", async () => {
+    stub = stubFetch([{ method: "PATCH", url: "/api/v1/files/7", body: {} }]);
+    await api.updateFile(7, { description: "A caption" });
+    expect(stub.calls).toEqual([
+      { url: "/api/v1/files/7", method: "PATCH", body: { description: "A caption" } },
+    ]);
   });
 });

@@ -15,6 +15,7 @@ import type {
   PinSource,
   StatusResponse,
   UpdateFolderRequest,
+  UpdateFileRequest,
 } from "../types/api";
 
 /** ApiRequestError carries the status AND the decoded error body.
@@ -174,6 +175,13 @@ export const api = {
 
   archive: (id: number) =>
     apiFetch<FileRecord>(`/api/v1/files/${id}/archive`, { method: "POST" }),
+
+  updateFile: (id: number, patch: UpdateFileRequest) =>
+    apiFetch<FileRecord>(`/api/v1/files/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
 
   resolve: (id: number, keep: "device" | "archive") =>
     apiFetch<FileRecord>(`/api/v1/files/${id}/resolve`, {

@@ -13,6 +13,7 @@ import type { FileRecord } from "../types/api";
 import { PinToggle } from "./PinToggle";
 import { Portal } from "./Portal";
 import { PreviewSurface } from "./PreviewSurface";
+import { DescriptionEditor } from "./DescriptionEditor";
 
 interface LightboxProps {
   files: FileRecord[];
@@ -59,6 +60,7 @@ export function Lightbox({
   const [index, setIndex] = useState(initialIndex);
   const [showMeta, setShowMeta] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const containerRef = useFocusTrap(true);
   useScrollLock(true);
@@ -128,6 +130,9 @@ export function Lightbox({
               return true;
             case "info":
               setShowMeta((shown) => !shown);
+              return true;
+            case "edit-description":
+              setDescriptionOpen(true);
               return true;
             default:
               return false;
@@ -257,6 +262,12 @@ export function Lightbox({
                 Info
               </button>
               <button
+                onClick={() => setDescriptionOpen(true)}
+                className={ACTION_BUTTON}
+              >
+                Description
+              </button>
+              <button
                 onClick={() => actions.download(file)}
                 className={ACTION_BUTTON}
               >
@@ -307,10 +318,24 @@ export function Lightbox({
               <div>
                 <span className="text-ink-faint">Index:</span> {index + 1} / {files.length}
               </div>
+              {file.description && (
+                <div className="col-span-2 md:col-span-4 whitespace-pre-wrap text-ink-muted">
+                  <span className="text-ink-faint">Description:</span> {file.description}
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
+      {descriptionOpen && (
+        <DescriptionEditor
+          files={files}
+          initialIndex={index}
+          actions={actions}
+          onIndexChange={goTo}
+          onClose={() => setDescriptionOpen(false)}
+        />
+      )}
     </Portal>
   );
 }

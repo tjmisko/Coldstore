@@ -3,7 +3,7 @@ import type { Binding, Scope } from "./types";
 
 /** Scopes that stop the chain. While one of these is on top of the stack, `d`
  *  types a `d` and archives nothing. */
-export const EXCLUSIVE_SCOPES: Scope[] = ["overlay"];
+export const EXCLUSIVE_SCOPES: Scope[] = ["overlay", "description"];
 
 const GRID: Scope[] = ["gallery", "browser"];
 const NAVIGABLE: Scope[] = ["gallery", "browser", "lightbox"];
@@ -62,10 +62,11 @@ const SPECS: BindingSpec[] = [
   { id: "file.open.o", keys: "o", command: { kind: "action", action: "open" }, scopes: GRID, title: "Open in the lightbox", group: GROUP_FILES, alias: true },
   { id: "file.menu", keys: "<Menu>", command: { kind: "action", action: "context-menu" }, scopes: GRID, title: "Context menu for this file", group: GROUP_FILES, alias: true },
   { id: "file.menu.leader", keys: "<Space>m", command: { kind: "action", action: "context-menu" }, scopes: GRID, title: "Context menu for this file", group: GROUP_FILES },
+  { id: "file.description", keys: "i", command: { kind: "action", action: "edit-description" }, scopes: NAVIGABLE, title: "Edit description", group: GROUP_FILES },
 
   // -- lightbox -----------------------------------------------------------
   { id: "lightbox.close", keys: "q", command: { kind: "action", action: "close" }, scopes: ["lightbox"], title: "Close the lightbox", group: GROUP_OVERLAY },
-  { id: "lightbox.info", keys: "i", command: { kind: "action", action: "info" }, scopes: ["lightbox"], title: "Toggle the metadata panel", group: GROUP_OVERLAY },
+  { id: "lightbox.info", keys: "<Space>i", command: { kind: "action", action: "info" }, scopes: ["lightbox"], title: "Toggle the metadata panel", group: GROUP_OVERLAY },
 
   // -- conflicts ----------------------------------------------------------
   { id: "conflict.device", keys: "cd", command: { kind: "action", action: "resolve-device" }, scopes: NAVIGABLE, title: "Resolve: keep the copy on your device", group: GROUP_CONFLICT },

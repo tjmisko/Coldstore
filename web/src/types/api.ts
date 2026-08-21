@@ -74,6 +74,14 @@ export interface FileRecord {
   tags: string[];
 }
 
+/** PATCH /api/v1/files/{id}; omitted fields are untouched. */
+export interface UpdateFileRequest {
+  description?: string;
+  captured_local?: string;
+  gps_lat?: number;
+  gps_lon?: number;
+}
+
 /** One entry of an EPUB's reading order. `path` is the archive ENTRY NAME,
  *  already resolved against the package document's directory, and is appended
  *  to the resource route verbatim. The server validates it again on the way

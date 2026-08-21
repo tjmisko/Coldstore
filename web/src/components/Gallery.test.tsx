@@ -171,4 +171,27 @@ describe("Gallery", () => {
     expect(screen.queryByText("4 selected")).toBeNull();
     input.remove();
   });
+
+  it("should open the description editor with i and keep j as caption text", async () => {
+    renderGallery();
+    await screen.findByLabelText("one.jpg");
+    stub!.route({
+      method: "PATCH",
+      url: "/api/v1/files/1",
+      body: { ...PAGE[0], description: "j" },
+    });
+
+    fireEvent.keyDown(window, { key: "i" });
+    const textarea = await screen.findByRole("textbox", { name: "Description for one.jpg" });
+    await userEvent.type(textarea, "j");
+
+    expect(textarea).toHaveValue("j");
+    expect(tile(1).dataset.cursor).toBe("true");
+    expect(tile(2).dataset.cursor).toBe("false");
+
+    fireEvent.keyDown(textarea, { key: "Escape" });
+    await waitFor(() =>
+      expect(stub!.calls.find((call) => call.method === "PATCH")?.body).toEqual({ description: "j" }),
+    );
+  });
 });

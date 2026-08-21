@@ -1,0 +1,95 @@
+import { act, fireEvent, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FileActions } from "../hooks/useFileWorkspace";
+import { aFile } from "../test/fixtures";
+import { renderWithToasts } from "../test/harness";
+import { KeymapProvider } from "./KeymapProvider";
+import { DescriptionEditor } from "./DescriptionEditor";
+
+function fileActions(): FileActions {
+  return {
+    setPinned: vi.fn(async () => {}),
+    restore: vi.fn(async () => {}),
+    archive: vi.fn(async () => {}),
+    resolve: vi.fn(async () => {}),
+    download: vi.fn(),
+    setDescription: vi.fn(async () => true),
+  };
+}
+
+function renderEditor(actions = fileActions()) {
+  const files = [
+    aFile({ id: 1, filename: "one.jpg", description: "first" }),
+    aFile({ id: 2, filename: "two.jpg", description: "second" }),
+  ];
+  const onClose = vi.fn();
+  const onIndexChange = vi.fn();
+  const view = renderWithToasts(
+    <KeymapProvider>
+      <DescriptionEditor
+        files={files}
+        initialIndex={0}
+        actions={actions}
+        onClose={onClose}
+        onIndexChange={onIndexChange}
+      />
+    </KeymapProvider>,
+  );
+  return { ...view, actions, onClose, onIndexChange, files };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("DescriptionEditor", () => {
+  it("should save on Escape while letting navigation letters remain text", async () => {
+    const { actions, onClose, onIndexChange, files } = renderEditor();
+    const textarea = screen.getByRole("textbox", { name: "Description for one.jpg" });
+
+    fireEvent.change(textarea, { target: { value: "jellyfish" } });
+    fireEvent.keyDown(textarea, { key: "j" });
+    expect(textarea).toHaveValue("jellyfish");
+    expect(onIndexChange).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(textarea, { key: "Escape" });
+    await act(async () => {});
+    expect(actions.setDescription).toHaveBeenCalledWith(files[0], "jellyfish");
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("should discard only the uncommitted draft on Ctrl-C", () => {
+    const { actions, onClose, toasts } = renderEditor();
+    const textarea = screen.getByRole("textbox", { name: "Description for one.jpg" });
+    fireEvent.change(textarea, { target: { value: "do not keep" } });
+    fireEvent.keyDown(textarea, { key: "c", ctrlKey: true });
+
+    expect(actions.setDescription).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(toasts.messages().join(" ")).toContain("Discarded uncommitted description");
+  });
+
+  it("should save and move without leaving the editor on Ctrl-J", async () => {
+    const { actions, onIndexChange, files } = renderEditor();
+    const textarea = screen.getByRole("textbox", { name: "Description for one.jpg" });
+    fireEvent.change(textarea, { target: { value: "changed first" } });
+    fireEvent.keyDown(textarea, { key: "j", ctrlKey: true });
+
+    await screen.findByRole("textbox", { name: "Description for two.jpg" });
+    expect(actions.setDescription).toHaveBeenCalledWith(files[0], "changed first");
+    expect(onIndexChange).toHaveBeenCalledWith(1);
+  });
+
+  it("should autosave after 1.5 seconds idle", async () => {
+    vi.useFakeTimers();
+    const { actions, files } = renderEditor();
+    const textarea = screen.getByRole("textbox", { name: "Description for one.jpg" });
+    fireEvent.change(textarea, { target: { value: "idle caption" } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+      await Promise.resolve();
+    });
+    expect(actions.setDescription).toHaveBeenCalledWith(files[0], "idle caption");
+  });
+});

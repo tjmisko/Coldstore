@@ -45,13 +45,14 @@ export type ActionId =
   | "prev-folder"
   | "close"
   | "info"
+  | "edit-description"
   | "rescan"
   | "resolve-device"
   | "resolve-archive";
 
 export type Mode = "normal" | "visual" | "visual-line";
 
-export type Scope = "global" | "gallery" | "browser" | "lightbox" | "overlay";
+export type Scope = "global" | "gallery" | "browser" | "lightbox" | "overlay" | "description";
 
 /** What an operator is waiting for.
  *

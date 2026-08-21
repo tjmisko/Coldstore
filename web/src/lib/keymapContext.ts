@@ -48,4 +48,5 @@ export const SCOPE_PRIORITY: Record<Scope, number> = {
   browser: 10,
   lightbox: 20,
   overlay: 30,
+  description: 40,
 };

@@ -13,6 +13,7 @@ func (s *Server) registerRoutes() {
 	// the mux's path cleaning operates on a URL and knows nothing about what
 	// is inside a zip.
 	s.mux.HandleFunc("GET /api/v1/files/{id}/epub/{resource...}", s.handleEPUBResource)
+	s.mux.HandleFunc("PATCH /api/v1/files/{id}", s.handleUpdateFile)
 	s.mux.HandleFunc("POST /api/v1/files/{id}/restore", s.handleRestoreFile)
 	s.mux.HandleFunc("POST /api/v1/files/{id}/archive", s.handleArchiveFile)
 	s.mux.HandleFunc("POST /api/v1/files/{id}/pin", s.handlePinFile)

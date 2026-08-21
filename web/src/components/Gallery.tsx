@@ -7,6 +7,7 @@ import { useGridKeymap } from "../hooks/useGridKeymap";
 import { galleryColumns, useViewport } from "../hooks/useViewport";
 import type { FileRecord } from "../types/api";
 import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
 import { PinToggle } from "./PinToggle";
@@ -33,6 +34,7 @@ export function Gallery({
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
+  const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
   const observer = useRef<IntersectionObserver | null>(null);
 
   const sentinelRef = useCallback(
@@ -90,7 +92,8 @@ export function Gallery({
     conflictMode: preset.key === "conflicts",
     onOpen: setLightboxIndex,
     onContextMenu: (index) => openMenu(index, null),
-    active: lightboxIndex === null && menu === null,
+    onEditDescription: setDescriptionIndex,
+    active: lightboxIndex === null && menu === null && descriptionIndex === null,
   });
 
   if (!folder) {
@@ -178,8 +181,19 @@ export function Gallery({
           actions={actions}
           bulk={bulk}
           onOpen={() => setLightboxIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onEditDescription={() => setDescriptionIndex(files.findIndex((f) => f.id === menu.file.id))}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {descriptionIndex !== null && files[descriptionIndex] && (
+        <DescriptionEditor
+          files={files}
+          initialIndex={descriptionIndex}
+          actions={actions}
+          onIndexChange={cursor.setIndex}
+          onClose={() => setDescriptionIndex(null)}
         />
       )}
 

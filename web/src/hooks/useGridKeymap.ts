@@ -22,6 +22,7 @@ interface Options {
   conflictMode: boolean;
   onOpen(index: number): void;
   onContextMenu(index: number): void;
+  onEditDescription(index: number): void;
   /** False while the lightbox is open: the cursor stops following the grid. */
   active?: boolean;
   /** A file the finder asked to be revealed, and a token that changes on every
@@ -46,7 +47,7 @@ export interface GridCursor {
 export function useGridKeymap(options: Options): GridCursor {
   const {
     scope, files, columns, visibleRows, selection, actions, bulk,
-    conflictMode, onOpen, onContextMenu, active = true, reveal = null,
+    conflictMode, onOpen, onContextMenu, onEditDescription, active = true, reveal = null,
   } = options;
 
   const [index, setIndexState] = useState(0);
@@ -234,6 +235,9 @@ export function useGridKeymap(options: Options): GridCursor {
             case "context-menu":
               if (files[clamped]) onContextMenu(clamped);
               return true;
+            case "edit-description":
+              if (files[clamped]) onEditDescription(clamped);
+              return true;
             case "resolve-device":
               return resolveConflict("device");
             case "resolve-archive":
@@ -251,7 +255,7 @@ export function useGridKeymap(options: Options): GridCursor {
     },
     [
       files, clamped, geometry, moveCursor, applyVisual, targetIDs, bulk,
-      selection, onOpen, onContextMenu, resolveConflict,
+      selection, onOpen, onContextMenu, onEditDescription, resolveConflict,
     ],
   );
 

@@ -7,6 +7,7 @@ import { useViewport } from "../hooks/useViewport";
 import type { FileRecord } from "../types/api";
 import type { FileReveal } from "../types/navigation";
 import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
 import { PinToggle } from "./PinToggle";
@@ -97,6 +98,7 @@ export function FileBrowser({
   const headerCheckbox = useRef<HTMLInputElement>(null);
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -159,7 +161,8 @@ export function FileBrowser({
     conflictMode: preset.key === "conflicts",
     onOpen: setPreviewIndex,
     onContextMenu: (index) => openMenu(index, null),
-    active: previewIndex === null && menu === null,
+    onEditDescription: setDescriptionIndex,
+    active: previewIndex === null && menu === null && descriptionIndex === null,
     reveal,
   });
 
@@ -307,8 +310,19 @@ export function FileBrowser({
           actions={actions}
           bulk={bulk}
           onOpen={() => setPreviewIndex(files.findIndex((file) => file.id === menu.file.id))}
+          onEditDescription={() => setDescriptionIndex(files.findIndex((file) => file.id === menu.file.id))}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {descriptionIndex !== null && files[descriptionIndex] && (
+        <DescriptionEditor
+          files={files}
+          initialIndex={descriptionIndex}
+          actions={actions}
+          onIndexChange={cursor.setIndex}
+          onClose={() => setDescriptionIndex(null)}
         />
       )}
 
