@@ -42,12 +42,15 @@ main.tsx
             |   |-- FilterBar             (components/FilterBar.tsx)
             |   |-- Tile grid: checkbox, PinToggle, status badges
             |   |-- Lightbox              (components/Lightbox.tsx)
+            |   |   +-- PreviewSurface --> image / video / DocumentReader
             |   +-- SelectionBar          (components/SelectionBar.tsx)
             |
             |-- FileBrowser               (components/FileBrowser.tsx)
             |   |-- useFileWorkspace({folder, filterKey, sort:"name"})
             |   |-- FilterBar
             |   |-- <table>: checkbox column, pin column, per-row actions
+            |   |-- Lightbox
+            |   |   +-- PreviewSurface --> image / video / DocumentReader
             |   +-- SelectionBar
             |
             +-- ConfigPanel               (components/ConfigPanel.tsx)
@@ -72,7 +75,7 @@ components/   what the owner sees
 hooks/        what the components run on
 keymap/       the input engine: no React, no DOM, unit-tested as pure functions
 lib/          what the hooks are built from: api.ts, format.ts, toast.ts,
-              keymapContext.ts, zLayers.ts
+              keymapContext.ts, preview.ts, zLayers.ts
 types/api.ts  the mirrored API contract (design section 6.13)
 ```
 
@@ -91,6 +94,36 @@ numbers can only ask "are you sure?".
 `api.*` are thin typed wrappers, one per endpoint. `fileFilterParams` is shared
 by `GET /files` and `GET /files/ids` on purpose: "select all in folder" must
 resolve the same set the grid is showing, or a job acts on files nobody saw.
+
+The download and preview URLs are deliberately different. `downloadUrl` always
+requests an attachment; `previewUrl` serves an explicit inline content type with
+`nosniff`, including straight from cold storage. EPUB reading uses the related
+spine and resource endpoints, so the browser never downloads and unzips the
+whole book merely to inspect it.
+
+### `lib/preview.ts` + `components/PreviewSurface.tsx`
+
+`resolvePreview(file)` is the single classification point between file metadata
+and rendering. A browser-decodable image uses the original, HEIC/HEIF/AVIF uses
+the JPEG thumbnail with a visible degraded-preview notice, video uses a `<video>`
+with `preload="metadata"`, and PDF, EPUB and text route to the document readers.
+Missing files and unsupported formats produce an explicit unavailable decision,
+not a broken image. `detected_type` is what makes extension-less files such as
+bookmark exports classifiable at all.
+
+`PreviewSurface` only renders that decision. It does not infer type from the
+presence of a thumbnail: videos, opaque image formats and PDFs can all have
+thumbnails, and treating that as "render the original in an `<img>`" downloads
+the wrong bytes and draws a broken image.
+
+PDF, EPUB and text sit behind the one `React.lazy` boundary in
+`components/readers/index.tsx`. `PdfReader` uses the self-hosted pdf.js worker,
+standard fonts and WASM assets; `EpubReader` renders server-extracted spine
+resources in an iframe with neither `allow-scripts` nor `allow-same-origin`;
+`TextReader` fetches the capped inline body and reports the truncation header.
+The app warms these chunks when the browser is idle. Splitting keeps pdf.js off
+the first-render path, although every emitted asset still becomes part of the
+embedded Go binary.
 
 ### `lib/format.ts`
 
@@ -341,8 +374,11 @@ Escape put the cursor back on the tile it was on.
 
 ## Lightbox
 
-Opens on a plain click, on `<CR>` or on `o`; ctrl/cmd-click toggles selection and
-shift-click extends the range instead.
+Gallery opens the lightbox on a plain tile click; ctrl/cmd-click toggles
+selection and shift-click extends the range instead. FileBrowser opens the same
+lightbox from its filename button. A plain row click only moves the cursor, so
+the checkbox, pin and row actions never also open a preview. In either view,
+`<CR>`/`o` and the context menu's Open action enter the same preview flow.
 
 It registers the `lightbox` scope, which is **not** exclusive: `q` and `i` are
 its own, and `d`, `p`, `y`, `j` and `G` fall through to the same paths the grid
@@ -355,6 +391,13 @@ is invalid HTML and made a click on the checkbox also open the lightbox.
 The lightbox prefetches the next page when the user is within five items of the
 end, and routes Pin, Restore and Archive through the parent's actions, so a
 change made here repaints the grid behind it without a refetch.
+
+Both views own an index into their currently loaded file page and pass that page,
+the shared `FileActions` and the shared `BulkActions` to `Lightbox`. Lightbox
+calls `resolvePreview` for the current record and hands the result to
+`PreviewSurface`; arrows and motions change the index without creating a second
+rendering path. Archived originals and documents stream from cold storage for
+preview without changing the file status or implicitly restoring them.
 
 ## Dev proxy
 
