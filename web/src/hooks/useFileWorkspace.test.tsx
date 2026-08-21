@@ -43,4 +43,33 @@ describe("useFileWorkspace tag mutations", () => {
     });
     expect(result.current.files.files[0].tags).toEqual(["Favorite"]);
   });
+
+  it("removes a newly-tagged row from the active Untagged queue", async () => {
+    const file = aFile({ id: 2, tags: [] });
+    stub = stubFetch([
+      { url: "/api/v1/files?folder=CameraRoll&untagged=1", body: [file] },
+      {
+        method: "POST",
+        url: "/api/v1/files/tags",
+        body: {
+          updated: 1,
+          created: ["Reviewed"],
+          undo: { changes: [{ ids: [2], remove: ["Reviewed"] }] },
+        },
+      },
+    ]);
+    const { result } = renderHook(() => useFileWorkspace({
+      folder: "CameraRoll",
+      filterKey: "untagged",
+    }));
+    await waitFor(() => expect(result.current.files.files).toHaveLength(1));
+    stub.route({ url: "/api/v1/files?folder=CameraRoll&untagged=1", body: [] });
+
+    await act(async () => {
+      expect(await result.current.actions.tagFiles([2], ["Reviewed"], [])).toBe(true);
+    });
+
+    expect(result.current.files.files).toEqual([]);
+    expect(stub.calls.some((call) => call.url.includes("ids=2"))).toBe(false);
+  });
 });

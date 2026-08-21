@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tjmisko/coldstore/internal/catalog"
+	"github.com/tjmisko/coldstore/internal/config"
 	metadatapkg "github.com/tjmisko/coldstore/internal/metadata"
 )
 
@@ -127,6 +128,156 @@ func TestMoverRestoreRefusesAStaleSyncedCompanionBeforeMovingAnything(t *testing
 	}
 }
 
+func TestMoverArchiveRollsBackCompletedMembersAfterLaterMoveFailure(t *testing.T) {
+	syncDir, coldDir, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	still := seedSyncedFile(t, cat, syncDir, "IMG_12.heic", 80)
+	movie := seedSyncedFile(t, cat, syncDir, "IMG_12.mov", 120)
+	assignTestPair(t, cat, "cid:twelve", still, movie)
+	const pinnedAt = int64(123456)
+	if err := cat.SetPinned(still.ID, true, catalog.PinSourceUser, pinnedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	mover := NewMover(cfg, cat, testLogger())
+	mover.SetSpaceCheck(plentyOfSpace)
+	realMoveOut := mover.moveOut
+	injected := errors.New("injected second archive failure")
+	calls := 0
+	mover.SetMoveFuncs(func(src, dst string) error {
+		calls++
+		if calls == 2 {
+			return injected
+		}
+		return realMoveOut(src, dst)
+	}, nil)
+
+	if _, err := mover.ArchiveByID(still.ID); !errors.Is(err, injected) {
+		t.Fatalf("archive error = %v, want injected cause", err)
+	}
+	for _, original := range []*catalog.FileRecord{still, movie} {
+		got, err := cat.GetFileByID(original.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != catalog.StatusSynced {
+			t.Errorf("%s status after rollback = %q", original.RelativePath, got.Status)
+		}
+		if _, err := os.Stat(filepath.Join(syncDir, original.RelativePath)); err != nil {
+			t.Errorf("%s not restored to synced folder: %v", original.RelativePath, err)
+		}
+		if _, err := os.Stat(filepath.Join(coldDir, "archive", "TestFolder", original.RelativePath)); !os.IsNotExist(err) {
+			t.Errorf("%s still visible in archive after rollback: %v", original.RelativePath, err)
+		}
+	}
+	gotStill, _ := cat.GetFileByID(still.ID)
+	if !gotStill.Pinned || gotStill.PinSource != catalog.PinSourceUser ||
+		gotStill.PinnedAt == nil || *gotStill.PinnedAt != pinnedAt {
+		t.Errorf("first member pin after rollback = %v/%q/%v", gotStill.Pinned, gotStill.PinSource, gotStill.PinnedAt)
+	}
+	gotMovie, _ := cat.GetFileByID(movie.ID)
+	if gotMovie.Pinned || gotMovie.PinSource != "" || gotMovie.PinnedAt != nil {
+		t.Errorf("failed member pin changed = %v/%q/%v", gotMovie.Pinned, gotMovie.PinSource, gotMovie.PinnedAt)
+	}
+	if events, err := cat.ListEvents("TestFolder", "pair_split", "", 10); err != nil || len(events) != 0 {
+		t.Fatalf("successful rollback wrote pair_split: events %+v err %v", events, err)
+	}
+}
+
+func TestMoverRestoreRollsBackCompletedMembersAndOriginalPinsAfterLaterFailure(t *testing.T) {
+	syncDir, coldDir, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	still := seedSyncedFile(t, cat, syncDir, "IMG_13.heic", 80)
+	movie := seedSyncedFile(t, cat, syncDir, "IMG_13.mov", 120)
+	assignTestPair(t, cat, "cid:thirteen", still, movie)
+	mover := NewMover(cfg, cat, testLogger())
+	mover.SetSpaceCheck(plentyOfSpace)
+	if _, err := mover.ArchiveByID(still.ID); err != nil {
+		t.Fatal(err)
+	}
+	const pinnedAt = int64(654321)
+	if err := cat.SetPinned(still.ID, true, catalog.PinSourceUser, pinnedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	realMoveIn := mover.moveIn
+	injected := errors.New("injected second restore failure")
+	calls := 0
+	mover.SetMoveFuncs(nil, func(src, dst, archiveRoot string) error {
+		calls++
+		if calls == 2 {
+			return injected
+		}
+		return realMoveIn(src, dst, archiveRoot)
+	})
+
+	if _, err := mover.RestoreByID(still.ID); !errors.Is(err, injected) {
+		t.Fatalf("restore error = %v, want injected cause", err)
+	}
+	for _, original := range []*catalog.FileRecord{still, movie} {
+		got, err := cat.GetFileByID(original.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != catalog.StatusArchived {
+			t.Errorf("%s status after rollback = %q", original.RelativePath, got.Status)
+		}
+		if _, err := os.Stat(filepath.Join(coldDir, "archive", "TestFolder", original.RelativePath)); err != nil {
+			t.Errorf("%s not returned to archive: %v", original.RelativePath, err)
+		}
+		if _, err := os.Stat(filepath.Join(syncDir, original.RelativePath)); !os.IsNotExist(err) {
+			t.Errorf("%s still visible in synced folder after rollback: %v", original.RelativePath, err)
+		}
+	}
+	gotStill, _ := cat.GetFileByID(still.ID)
+	if !gotStill.Pinned || gotStill.PinSource != catalog.PinSourceUser ||
+		gotStill.PinnedAt == nil || *gotStill.PinnedAt != pinnedAt {
+		t.Errorf("first member archived pin after rollback = %v/%q/%v", gotStill.Pinned, gotStill.PinSource, gotStill.PinnedAt)
+	}
+	gotMovie, _ := cat.GetFileByID(movie.ID)
+	if gotMovie.Pinned || gotMovie.PinSource != "" || gotMovie.PinnedAt != nil {
+		t.Errorf("failed member archived pin changed = %v/%q/%v", gotMovie.Pinned, gotMovie.PinSource, gotMovie.PinnedAt)
+	}
+	if events, err := cat.ListEvents("TestFolder", "pair_split", "", 10); err != nil || len(events) != 0 {
+		t.Fatalf("successful rollback wrote pair_split: events %+v err %v", events, err)
+	}
+}
+
+func TestMoverArchiveReportsOriginalAndRollbackFailuresAndLogsTheRemainingSplit(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	still := seedSyncedFile(t, cat, syncDir, "IMG_14.heic", 80)
+	movie := seedSyncedFile(t, cat, syncDir, "IMG_14.mov", 120)
+	assignTestPair(t, cat, "cid:fourteen", still, movie)
+	mover := NewMover(cfg, cat, testLogger())
+	mover.SetSpaceCheck(plentyOfSpace)
+	realMoveOut := mover.moveOut
+	originalFailure := errors.New("injected later-member failure")
+	rollbackFailure := errors.New("injected rollback failure")
+	calls := 0
+	mover.SetMoveFuncs(func(src, dst string) error {
+		calls++
+		if calls == 2 {
+			return originalFailure
+		}
+		return realMoveOut(src, dst)
+	}, func(string, string, string) error {
+		return rollbackFailure
+	})
+
+	_, err := mover.ArchiveByID(still.ID)
+	if !errors.Is(err, originalFailure) || !errors.Is(err, rollbackFailure) {
+		t.Fatalf("archive error = %v, want original and rollback causes", err)
+	}
+	events, listErr := cat.ListEvents("TestFolder", "pair_split", "", 10)
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(events) != 1 || !strings.Contains(events[0].Details, "rollback") {
+		t.Fatalf("pair_split events = %+v, want failed rollback", events)
+	}
+}
+
 func TestArchiveLockedWritesPairSplitOnlyWhenCoverageOmitsASibling(t *testing.T) {
 	syncDir, _, cfg, cat := setupTestEnv(t)
 	declarePolicy(t, cfg, cat)
@@ -202,6 +353,50 @@ type livePhotoExtractor struct {
 	probeErr     error
 	probeStarted chan struct{}
 	probeRelease chan struct{}
+}
+
+type mappedLivePhotoExtractor struct {
+	bulk  map[string]metadatapkg.Extracted
+	probe map[string]metadatapkg.Extracted
+}
+
+func (e *mappedLivePhotoExtractor) Extract(_ context.Context, filePath, _ string) (metadatapkg.Extracted, error) {
+	return e.bulk[filePath], nil
+}
+
+func (e *mappedLivePhotoExtractor) ProbeStillCandidate(_ context.Context, filePath, _ string) (metadatapkg.Extracted, error) {
+	return e.probe[filePath], nil
+}
+
+func seedSyncedFileInFolder(t *testing.T, cat *catalog.Catalog, folder, root, relPath string,
+	size int) *catalog.FileRecord {
+
+	t.Helper()
+	full := filepath.Join(root, relPath)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, make([]byte, size), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &catalog.FileRecord{
+		FolderLabel: folder, RelativePath: relPath, Filename: filepath.Base(relPath),
+		Extension: filepath.Ext(relPath), SizeBytes: int64(size),
+		FileMtime: info.ModTime().UTC(), FileAtime: info.ModTime().UTC(),
+		Status: catalog.StatusSynced,
+	}
+	if _, err := cat.UpsertFile(rec, time.Now().UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := cat.GetFile(folder, relPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func (e *livePhotoExtractor) Extract(_ context.Context, _ string, ext string) (metadatapkg.Extracted, error) {
@@ -287,6 +482,134 @@ func TestMetadataPairsMatchingContentIDsAndAttachesSidecars(t *testing.T) {
 		got, _ := cat.GetFileByID(file.ID)
 		if got.PairKey != "cid:same-id" || got.PairSource != "content_id" {
 			t.Errorf("%s pairing = %q (%q)", file.RelativePath, got.PairKey, got.PairSource)
+		}
+	}
+}
+
+func TestMetadataDisambiguatesImportRenumberCollisionByContentID(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	still := seedSyncedFile(t, cat, syncDir, "Imports/IMG_1234.heic", 10)
+	trueMovie := seedSyncedFile(t, cat, syncDir, "Imports/IMG_1234(2).mov", 10)
+	unrelated := seedSyncedFile(t, cat, syncDir, "Imports/IMG_1234.mov", 10)
+	d := newTestDaemon(t, cfg, cat, testLogger())
+	d.metadataExtractor = &mappedLivePhotoExtractor{
+		bulk: map[string]metadatapkg.Extracted{
+			filepath.Join(syncDir, trueMovie.RelativePath): {ContentID: "true-pair"},
+			filepath.Join(syncDir, unrelated.RelativePath): {ContentID: "stranger"},
+		},
+		probe: map[string]metadatapkg.Extracted{
+			filepath.Join(syncDir, still.RelativePath): {ContentID: "true-pair"},
+		},
+	}
+
+	d.extractMetadata(context.Background())
+	gotStill, _ := cat.GetFileByID(still.ID)
+	gotTrueMovie, _ := cat.GetFileByID(trueMovie.ID)
+	gotUnrelated, _ := cat.GetFileByID(unrelated.ID)
+	if gotStill.PairKey != "cid:true-pair" || gotTrueMovie.PairKey != "cid:true-pair" {
+		t.Fatalf("true renumbered pair = still %q movie %q", gotStill.PairKey, gotTrueMovie.PairKey)
+	}
+	if gotUnrelated.PairKey != "cid:stranger" {
+		t.Fatalf("unrelated same-stem movie joined wrong pair: %q", gotUnrelated.PairKey)
+	}
+	expanded, err := cat.ExpandPairGroups([]int64{still.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expanded) != 2 || expanded[0] != still.ID || expanded[1] != trueMovie.ID {
+		t.Fatalf("renumbered pair expansion = %v", expanded)
+	}
+}
+
+func TestMetadataRenumberCandidateStillRequiresMatchingContentID(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	still := seedSyncedFile(t, cat, syncDir, "IMG_2000.heic", 10)
+	movie := seedSyncedFile(t, cat, syncDir, "IMG_2000(3).mov", 10)
+	d := newTestDaemon(t, cfg, cat, testLogger())
+	d.metadataExtractor = &mappedLivePhotoExtractor{
+		bulk: map[string]metadatapkg.Extracted{
+			filepath.Join(syncDir, movie.RelativePath): {ContentID: "movie-only"},
+		},
+		probe: map[string]metadatapkg.Extracted{
+			filepath.Join(syncDir, still.RelativePath): {ContentID: "still-only"},
+		},
+	}
+
+	d.extractMetadata(context.Background())
+	gotStill, _ := cat.GetFileByID(still.ID)
+	gotMovie, _ := cat.GetFileByID(movie.ID)
+	if gotStill.PairKey != "cid:still-only" || gotMovie.PairKey != "cid:movie-only" {
+		t.Fatalf("mismatched renumber candidate = still %q movie %q", gotStill.PairKey, gotMovie.PairKey)
+	}
+}
+
+func TestMetadataRenumberCandidateHonorsCaptureTimeWindow(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	still := seedSyncedFile(t, cat, syncDir, "IMG_3000.heic", 10)
+	movie := seedSyncedFile(t, cat, syncDir, "IMG_3000(2).mov", 10)
+	now := time.Now().Unix()
+	if err := cat.SetExtractedMetadata(still.ID, metadatapkg.Extracted{
+		CapturedLocal: "2025-01-01 12:00:00", CapturedSource: "exif",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.SetExtractedMetadata(movie.ID, metadatapkg.Extracted{
+		CapturedLocal: "2025-01-01 12:01:01", CapturedSource: "quicktime", ContentID: "too-late",
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	d := newTestDaemon(t, cfg, cat, testLogger())
+	d.metadataExtractor = &mappedLivePhotoExtractor{
+		probe: map[string]metadatapkg.Extracted{
+			filepath.Join(syncDir, still.RelativePath): {ContentID: "too-late"},
+		},
+	}
+
+	d.extractMetadata(context.Background())
+	gotStill, _ := cat.GetFileByID(still.ID)
+	gotMovie, _ := cat.GetFileByID(movie.ID)
+	if gotStill.PairKey != "" || gotMovie.PairKey != "cid:too-late" {
+		t.Fatalf("out-of-window renumber candidate paired: still %q movie %q", gotStill.PairKey, gotMovie.PairKey)
+	}
+}
+
+func TestMetadataPairCandidatesNeverCrossFolders(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	otherDir := newSyncthingFolder(t, filepath.Join(t.TempDir(), "other"))
+	cfg.Folders = append(cfg.Folders, config.FolderConfig{
+		Label: "OtherFolder", Path: otherDir, BudgetBytes: 5000,
+	})
+	declarePolicy(t, cfg, cat)
+	firstStill := seedSyncedFileInFolder(t, cat, "TestFolder", syncDir, "IMG_4000.heic", 10)
+	firstMovie := seedSyncedFileInFolder(t, cat, "TestFolder", syncDir, "IMG_4000(2).mov", 10)
+	secondStill := seedSyncedFileInFolder(t, cat, "OtherFolder", otherDir, "IMG_4000.heic", 10)
+	secondMovie := seedSyncedFileInFolder(t, cat, "OtherFolder", otherDir, "IMG_4000(2).mov", 10)
+	d := newTestDaemon(t, cfg, cat, testLogger())
+	d.metadataExtractor = &mappedLivePhotoExtractor{
+		bulk: map[string]metadatapkg.Extracted{
+			filepath.Join(syncDir, firstMovie.RelativePath):   {ContentID: "folder-one"},
+			filepath.Join(otherDir, secondMovie.RelativePath): {ContentID: "folder-two"},
+		},
+		probe: map[string]metadatapkg.Extracted{
+			filepath.Join(syncDir, firstStill.RelativePath):   {ContentID: "folder-one"},
+			filepath.Join(otherDir, secondStill.RelativePath): {ContentID: "folder-two"},
+		},
+	}
+
+	d.extractMetadata(context.Background())
+	for _, tc := range []struct {
+		file *catalog.FileRecord
+		key  string
+	}{
+		{firstStill, "cid:folder-one"}, {firstMovie, "cid:folder-one"},
+		{secondStill, "cid:folder-two"}, {secondMovie, "cid:folder-two"},
+	} {
+		got, _ := cat.GetFileByID(tc.file.ID)
+		if got.PairKey != tc.key {
+			t.Errorf("%s/%s key = %q, want %q", got.FolderLabel, got.RelativePath, got.PairKey, tc.key)
 		}
 	}
 }

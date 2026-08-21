@@ -34,13 +34,13 @@ const maxPageLimit = 500
 func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalog.FileQuery, bool) {
 	v := r.URL.Query()
 	rawTags := v["tag"]
-	if len(rawTags) > catalog.MaxTagFilters {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("at most %d tag filters per request", catalog.MaxTagFilters))
-		return catalog.FileQuery{}, false
-	}
 	tags, err := catalog.NormalizeTagFilters(rawTags)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return catalog.FileQuery{}, false
+	}
+	if len(tags) > catalog.MaxTagFilters {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("at most %d tag filters per request", catalog.MaxTagFilters))
 		return catalog.FileQuery{}, false
 	}
 	near, err := parseNear(v.Get("near"))

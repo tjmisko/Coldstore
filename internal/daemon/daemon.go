@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -371,11 +372,6 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 		allPatterns = append(allPatterns, p.Pattern)
 	}
 
-	candidates, err := d.cat.OffloadCandidates(folder.FolderLabel, offloadCandidateBatchSize)
-	if err != nil {
-		return fmt.Errorf("getting offload candidates: %w", err)
-	}
-
 	// Grace is per folder and comes from the database too. A negative value
 	// clamps to zero rather than reaching into the future for a cutoff.
 	graceMinutes := folder.GraceMinutes
@@ -390,6 +386,35 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 	evicted := 0
 	var evictedBytes int64
 	defer func() { d.reportBulkEviction(folder.FolderLabel, evicted, evictedBytes) }()
+
+	// Materialise a complete candidate snapshot through bounded keyset pages
+	// before moving anything. Eligible files disappear from the synced predicate
+	// as they move, so OFFSET would skip an equal number from the next page.
+	// Expansion can repeat a group whose later member is itself a seed; seenIDs
+	// collapses that harmless overlap. Holding the complete snapshot lets
+	// groupPairCandidates restore global newest-member ordering across page
+	// boundaries without issuing an unbounded SQLite query.
+	afterID := int64(0)
+	seenIDs := make(map[int64]struct{})
+	candidates := make([]catalog.FileRecord, 0, offloadCandidateBatchSize)
+	for {
+		page, nextID, err := d.cat.OffloadCandidatePage(
+			folder.FolderLabel, offloadCandidateBatchSize, afterID)
+		if err != nil {
+			return fmt.Errorf("getting offload candidates: %w", err)
+		}
+		if nextID == 0 {
+			break
+		}
+		afterID = nextID
+		for i := range page {
+			if _, ok := seenIDs[page[i].ID]; ok {
+				continue
+			}
+			seenIDs[page[i].ID] = struct{}{}
+			candidates = append(candidates, page[i])
+		}
+	}
 
 	for _, group := range groupPairCandidates(candidates) {
 		if err := ctx.Err(); err != nil {
@@ -406,7 +431,7 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 			return fmt.Errorf("getting folder size: %w", err)
 		}
 		if onDevice <= folder.BudgetBytes {
-			break
+			return nil
 		}
 
 		eligible := true
@@ -485,8 +510,10 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 	return nil
 }
 
-// groupPairCandidates preserves the catalog's oldest-group-first order while
-// making the policy loop structurally incapable of treating a member alone.
+// groupPairCandidates makes the policy loop structurally incapable of treating
+// a member alone and applies the catalog's global oldest-group-first order.
+// Sorting here matters when bounded catalog pages expanded groups whose newest
+// member fell in a later page.
 func groupPairCandidates(files []catalog.FileRecord) [][]catalog.FileRecord {
 	groups := make([][]catalog.FileRecord, 0)
 	indexes := make(map[string]int)
@@ -503,6 +530,28 @@ func groupPairCandidates(files []catalog.FileRecord) [][]catalog.FileRecord {
 		}
 		groups[idx] = append(groups[idx], file)
 	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		activity := func(group []catalog.FileRecord) time.Time {
+			var newest time.Time
+			for k := range group {
+				candidate := group[k].FileMtime
+				if group[k].FileAtime.After(candidate) {
+					candidate = group[k].FileAtime
+				}
+				if candidate.After(newest) {
+					newest = candidate
+				}
+			}
+			return newest
+		}
+		left, right := activity(groups[i]), activity(groups[j])
+		if left.Equal(right) {
+			// The member ids are stable and groups are assembled in ascending page
+			// order, giving equal-activity groups a deterministic final order.
+			return groups[i][0].ID < groups[j][0].ID
+		}
+		return left.Before(right)
+	})
 	return groups
 }
 

@@ -282,16 +282,48 @@ func (m *Mover) archiveGroupLocked(ids []int64, explicit, requireClosed bool) er
 		}
 	}
 
+	// A filesystem has no transaction spanning several paths. Keep the mover
+	// lock for the complete attempt and compensate synchronously if a later
+	// member fails, but be honest about the remaining boundary: SIGKILL, power
+	// loss, or another process observing the folder between two renames can still
+	// see an intermediate split. Startup recovery and pair_split remain the
+	// backstops for those unavoidable crash/visibility windows.
+	completed := make([]catalog.FileRecord, 0, len(files))
 	for i := range files {
 		if files[i].Status == catalog.StatusArchived {
 			continue
 		}
 		if _, err := m.archiveLocked(files[i].ID, explicit, covered); err != nil {
-			m.logSplitGroups(expanded, "archive group stopped after a member failed")
-			return err
+			original := fmt.Errorf("archiving pair member %d: %w", files[i].ID, err)
+			rollbackErrs := m.rollbackArchivedMembers(completed)
+			if verifyErr := m.verifyOriginalGroupState(files); verifyErr != nil {
+				rollbackErrs = append(rollbackErrs, verifyErr)
+			}
+			if len(rollbackErrs) == 0 {
+				return original
+			}
+			m.logSplitGroups(expanded, "archive group rollback could not rejoin every member")
+			return errors.Join(append([]error{original}, rollbackErrs...)...)
 		}
+		completed = append(completed, files[i])
 	}
 	return nil
+}
+
+func (m *Mover) rollbackArchivedMembers(completed []catalog.FileRecord) []error {
+	var rollbackErrs []error
+	for i := len(completed) - 1; i >= 0; i-- {
+		original := &completed[i]
+		if _, err := m.restoreLocked(original.ID); err != nil {
+			rollbackErrs = append(rollbackErrs,
+				fmt.Errorf("rolling archived member %d back to synced: %w", original.ID, err))
+		}
+		if err := m.restorePinState(original); err != nil {
+			rollbackErrs = append(rollbackErrs,
+				fmt.Errorf("restoring original pin for member %d: %w", original.ID, err))
+		}
+	}
+	return rollbackErrs
 }
 
 func (m *Mover) archiveLocked(id int64, explicit bool, covered map[int64]struct{}) (*catalog.FileRecord, error) {
@@ -416,8 +448,23 @@ func (m *Mover) archiveLocked(id int64, explicit bool, covered map[int64]struct{
 // cleared it, and returns a function that puts it back. An unpinned file
 // yields a no-op, so callers can invoke the result unconditionally.
 func (m *Mover) pinRestorer(rec *catalog.FileRecord) func() {
+	return func() {
+		if !rec.Pinned {
+			return
+		}
+		if err := m.restorePinState(rec); err != nil {
+			m.logger.Error("cannot restore the pin an abandoned archive cleared",
+				"id", rec.ID, "path", rec.RelativePath, "error", err)
+		}
+	}
+}
+
+// restorePinState puts a row's pin back exactly as it was in a group snapshot.
+// It is stricter than pinRestorer: compensating moves also have to clear the
+// automatic restore pin when the original row was unpinned.
+func (m *Mover) restorePinState(rec *catalog.FileRecord) error {
 	if !rec.Pinned {
-		return func() {}
+		return m.cat.SetPinned(rec.ID, false, "", 0)
 	}
 	source := rec.PinSource
 	if source != catalog.PinSourceUser && source != catalog.PinSourceRestore {
@@ -427,12 +474,7 @@ func (m *Mover) pinRestorer(rec *catalog.FileRecord) func() {
 	if rec.PinnedAt != nil {
 		at = *rec.PinnedAt
 	}
-	return func() {
-		if err := m.cat.SetPinned(rec.ID, true, source, at); err != nil {
-			m.logger.Error("cannot restore the pin an abandoned archive cleared",
-				"id", rec.ID, "path", rec.RelativePath, "error", err)
-		}
-	}
+	return m.cat.SetPinned(rec.ID, true, source, at)
 }
 
 func (m *Mover) claimForArchive(id int64, explicit bool) (bool, error) {
@@ -503,14 +545,83 @@ func (m *Mover) restoreGroupLocked(ids []int64) error {
 				files[i].ID, files[i].Status)
 		}
 	}
+	completed := make([]catalog.FileRecord, 0, len(files))
+	covered := make(map[int64]struct{}, len(files))
+	for i := range files {
+		covered[files[i].ID] = struct{}{}
+	}
 	for i := range files {
 		if files[i].Status == catalog.StatusArchived {
 			if _, err := m.restoreLocked(files[i].ID); err != nil {
-				return err
+				original := fmt.Errorf("restoring pair member %d: %w", files[i].ID, err)
+				rollbackErrs := m.rollbackRestoredMembers(completed, covered)
+				if verifyErr := m.verifyOriginalGroupState(files); verifyErr != nil {
+					rollbackErrs = append(rollbackErrs, verifyErr)
+				}
+				if len(rollbackErrs) == 0 {
+					return original
+				}
+				m.logSplitGroups(expanded, "restore group rollback could not rejoin every member")
+				return errors.Join(append([]error{original}, rollbackErrs...)...)
 			}
+			completed = append(completed, files[i])
 		}
 	}
 	return nil
+}
+
+func (m *Mover) rollbackRestoredMembers(completed []catalog.FileRecord,
+	covered map[int64]struct{}) []error {
+
+	var rollbackErrs []error
+	for i := len(completed) - 1; i >= 0; i-- {
+		original := &completed[i]
+		if _, err := m.archiveLocked(original.ID, true, covered); err != nil {
+			rollbackErrs = append(rollbackErrs,
+				fmt.Errorf("rolling restored member %d back to archived: %w", original.ID, err))
+		}
+		if err := m.restorePinState(original); err != nil {
+			rollbackErrs = append(rollbackErrs,
+				fmt.Errorf("restoring original pin for member %d: %w", original.ID, err))
+		}
+	}
+	return rollbackErrs
+}
+
+func (m *Mover) verifyOriginalGroupState(originals []catalog.FileRecord) error {
+	ids := make([]int64, len(originals))
+	for i := range originals {
+		ids[i] = originals[i].ID
+	}
+	current, err := m.cat.FilesByIDs(ids)
+	if err != nil {
+		return fmt.Errorf("verifying pair rollback: %w", err)
+	}
+	byID := make(map[int64]catalog.FileRecord, len(current))
+	for i := range current {
+		byID[current[i].ID] = current[i]
+	}
+	for i := range originals {
+		before := &originals[i]
+		after, ok := byID[before.ID]
+		if !ok {
+			return fmt.Errorf("pair rollback lost catalog member %d", before.ID)
+		}
+		if after.Status != before.Status || after.Pinned != before.Pinned ||
+			after.PinSource != before.PinSource || !sameOptionalInt64(after.PinnedAt, before.PinnedAt) {
+			return fmt.Errorf("pair rollback left member %d as %s pin=%v/%q; want %s pin=%v/%q",
+				before.ID, after.Status, after.Pinned, after.PinSource,
+				before.Status, before.Pinned, before.PinSource)
+		}
+	}
+	return nil
+}
+
+func sameOptionalInt64(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }
 
 func (m *Mover) restoreLocked(id int64) (*catalog.FileRecord, error) {

@@ -250,7 +250,16 @@ export function useFileWorkspace(options: Options): FileWorkspace {
       try {
         const result = await api.bulkTags({ ids, add, remove });
         setLastTagUndo(result.undo);
-        await refetchIds(ids);
+        // Tags participate in q, tag= and untagged= membership. Repainting by
+        // id deliberately bypasses filters and would leave a newly-tagged row
+        // sitting in the Untagged work queue, so membership-sensitive views
+        // must resolve their complete first page again.
+        const tagMutationChangesMembership =
+          preset.filters.untagged !== undefined ||
+          (preset.filters.tags?.length ?? 0) > 0 ||
+          !!preset.filters.search;
+        if (tagMutationChangesMembership) await refetch();
+        else await refetchIds(ids);
         const verb = add.length > 0 ? "Tagged" : "Removed tags from";
         const created = result.created.length > 0
           ? ` · created ${result.created.join(", ")}`
@@ -265,7 +274,7 @@ export function useFileWorkspace(options: Options): FileWorkspace {
         return false;
       }
     },
-    [refetchIds, toast],
+    [preset.filters.search, preset.filters.tags, preset.filters.untagged, refetch, refetchIds, toast],
   );
 
   return {

@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithToasts, stubFetch } from "../test/harness";
@@ -43,6 +43,35 @@ describe("TagPrompt", () => {
 
     expect(apply).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot be dismissed after Apply starts until the write result is known", async () => {
+    stub = stubFetch([{ url: "/api/v1/tags", body: [] }]);
+    let finish: ((ok: boolean) => void) | undefined;
+    const apply = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    const close = vi.fn();
+    renderWithToasts(
+      <TagPrompt folder="CameraRoll" ids={[7]} mode="add" onApply={apply} onClose={close} />,
+    );
+
+    await userEvent.type(screen.getByLabelText("Tags to add"), "Reviewed");
+    const applyButton = screen.getByRole("button", { name: "Apply tags" });
+    await waitFor(() => expect(applyButton).toBeEnabled());
+    await userEvent.click(applyButton);
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+
+    await userEvent.keyboard("{Escape}");
+    const panel = document.querySelector('[data-overlay="tag-prompt"]');
+    const backdrop = panel?.parentElement;
+    if (!backdrop) throw new Error("tag prompt backdrop not found");
+    fireEvent.mouseDown(backdrop, { target: backdrop });
+    expect(close).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finish?.(true);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
   });
 
   it("applies a removal with the pointer through the remove side of the bulk contract", async () => {

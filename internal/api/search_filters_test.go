@@ -111,6 +111,44 @@ func TestSearchFilterValidationIsSharedByFilesAndIDs(t *testing.T) {
 	}
 }
 
+func TestSearchTagFilterCapCountsNormalizedUniquePathsAtBothEndpoints(t *testing.T) {
+	srv, cat, _ := setupTestServer(t)
+	wantID := addAPISearchFile(t, cat, "tagged.jpg", "", "Trips/Iceland")
+	values := url.Values{}
+	for _, value := range []string{
+		"Trips/Iceland", "trips/iceland", " TRIPS / ICELAND ",
+		"Trips/ Iceland", "Trips /Iceland", "  trips/iceland  ",
+		"TRIPS/iceland", "trips/ICELAND", "Trips / Iceland",
+	} {
+		values.Add("tag", value)
+	}
+	for _, endpoint := range []string{"/api/v1/files", "/api/v1/files/ids"} {
+		req := httptest.NewRequest(http.MethodGet, endpoint+"?"+values.Encode(), nil)
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s duplicate variants status = %d, body = %s", endpoint, w.Code, w.Body.String())
+		}
+		if endpoint == "/api/v1/files" {
+			var files []catalog.FileRecord
+			if err := json.NewDecoder(w.Body).Decode(&files); err != nil {
+				t.Fatal(err)
+			}
+			if len(files) != 1 || files[0].ID != wantID {
+				t.Fatalf("%s files = %#v, want %d", endpoint, files, wantID)
+			}
+			continue
+		}
+		var ids fileIDsResponse
+		if err := json.NewDecoder(w.Body).Decode(&ids); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(ids.IDs, []int64{wantID}) {
+			t.Fatalf("%s ids = %v, want %d", endpoint, ids.IDs, wantID)
+		}
+	}
+}
+
 func TestFileIDsOverrideNewSearchFilters(t *testing.T) {
 	srv, cat, _ := setupTestServer(t)
 	id := addAPISearchFile(t, cat, "selected.jpg", "", "Keep")

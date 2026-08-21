@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTagCompletions } from "../hooks/useTags";
 import { formatCount } from "../lib/format";
 import { Overlay } from "./Overlay";
@@ -38,6 +38,7 @@ export function TagPrompt({ folder, ids, mode, selectionNote, onApply, onClose }
   const [tokens, setTokens] = useState<string[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const uniqueIDs = useMemo(() => [...new Set(ids)], [ids]);
   const completions = useTagCompletions(folder, input, true);
@@ -69,7 +70,8 @@ export function TagPrompt({ folder, ids, mode, selectionNote, onApply, onClose }
 
   const apply = async () => {
     const names = appendUnique(tokens, [input]);
-    if (names.length === 0 || names.length > MAX_TAGS || overFileLimit || busy) return;
+    if (names.length === 0 || names.length > MAX_TAGS || overFileLimit || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -78,14 +80,23 @@ export function TagPrompt({ folder, ids, mode, selectionNote, onApply, onClose }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
+  };
+
+  // Once Apply has handed the request to fetch, aborting the browser request
+  // cannot prove the server did not commit its transaction. Keep the operation
+  // visibly modal until its result is known instead of letting Escape, the
+  // backdrop, or a Cancel click promise a cancellation we cannot guarantee.
+  const closeUnlessApplying = () => {
+    if (!busyRef.current) onClose();
   };
 
   const countLabel = `${mode === "add" ? "Tag" : "Remove tags from"} ${formatCount(uniqueIDs.length)} file${uniqueIDs.length === 1 ? "" : "s"}`;
 
   return (
-    <Overlay label={countLabel} onClose={onClose} className="max-w-2xl" testAttribute="tag-prompt">
+    <Overlay label={countLabel} onClose={closeUnlessApplying} className="max-w-2xl" testAttribute="tag-prompt">
       <div data-tag-prompt className="rounded-xl border border-line-strong bg-surface p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -179,7 +190,8 @@ export function TagPrompt({ folder, ids, mode, selectionNote, onApply, onClose }
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
-            onClick={onClose}
+            onClick={closeUnlessApplying}
+            disabled={busy}
             className="rounded-md px-3 py-1.5 text-base text-ink-muted ring-1 ring-line-strong hover:bg-raised-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
           >
             Cancel

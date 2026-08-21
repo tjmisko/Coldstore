@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +11,82 @@ import (
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 )
+
+func TestEnforcementPagesPastFiveThousandProtectedRowsToAnEligiblePair(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	cfg.Daemon.GracePeriodMinutes = 0
+	cfg.Folders[0].BudgetBytes = 5000
+	cfg.Folders[0].Persistent = []string{"Protected/*"}
+	declarePolicy(t, cfg, cat)
+
+	old := time.Now().UTC().Add(-48 * time.Hour)
+	var firstProtected, lastProtected int64
+	for i := 0; i < offloadCandidateBatchSize; i++ {
+		rel := fmt.Sprintf("Protected/%04d.jpg", i)
+		if _, err := cat.UpsertFile(&catalog.FileRecord{
+			FolderLabel: "TestFolder", RelativePath: rel, Filename: filepath.Base(rel),
+			Extension: ".jpg", SizeBytes: 1, FileMtime: old, FileAtime: old,
+			Status: catalog.StatusSynced,
+		}, int64(i+1)); err != nil {
+			t.Fatal(err)
+		}
+		got, err := cat.GetFile("TestFolder", rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			firstProtected = got.ID
+		}
+		lastProtected = got.ID
+	}
+	still := seedSyncedFile(t, cat, syncDir, "Eligible/IMG_5001.heic", 1)
+	movie := seedSyncedFile(t, cat, syncDir, "Eligible/IMG_5001.mov", 1)
+	assignTestPair(t, cat, "cid:after-protected-page", still, movie)
+	ageFiles(t, cat, syncDir, still.RelativePath, movie.RelativePath)
+
+	d := newTestDaemon(t, cfg, cat, testLogger())
+	d.SetSpaceCheck(plentyOfSpace)
+	d.EnforceQuotas()
+
+	for _, file := range []*catalog.FileRecord{still, movie} {
+		got, err := cat.GetFileByID(file.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != catalog.StatusArchived {
+			t.Errorf("eligible pair member %s status = %q", got.RelativePath, got.Status)
+		}
+	}
+	for _, id := range []int64{firstProtected, lastProtected} {
+		got, err := cat.GetFileByID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Status != catalog.StatusSynced {
+			t.Errorf("protected row %d moved: %q", id, got.Status)
+		}
+	}
+}
+
+func TestGroupPairCandidatesOrdersByNewestMemberAcrossInputPages(t *testing.T) {
+	base := time.Now().UTC().Add(-24 * time.Hour)
+	files := []catalog.FileRecord{
+		{ID: 1, FolderLabel: "TestFolder", PairKey: "cid:split-page", FileMtime: base, FileAtime: base},
+		{ID: 2, FolderLabel: "TestFolder", FileMtime: base.Add(time.Hour), FileAtime: base.Add(time.Hour)},
+		{ID: 3, FolderLabel: "TestFolder", PairKey: "cid:split-page", FileMtime: base.Add(2 * time.Hour), FileAtime: base.Add(2 * time.Hour)},
+	}
+
+	groups := groupPairCandidates(files)
+	if len(groups) != 2 {
+		t.Fatalf("groups = %#v, want two complete groups", groups)
+	}
+	if len(groups[0]) != 1 || groups[0][0].ID != 2 {
+		t.Fatalf("first group = %#v, want older unpaired id 2", groups[0])
+	}
+	if len(groups[1]) != 2 || groups[1][0].ID != 1 || groups[1][1].ID != 3 {
+		t.Fatalf("second group = %#v, want complete pair [1 3]", groups[1])
+	}
+}
 
 // testLogger keeps test output quiet unless something actually goes wrong.
 func testLogger() *slog.Logger {

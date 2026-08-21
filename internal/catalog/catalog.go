@@ -888,45 +888,69 @@ func (c *Catalog) FolderCounts(folder string) (FolderCounts, error) {
 	return fc, err
 }
 
-// OffloadCandidates seeds from unpinned synced rows, expands every selected
-// pair group, and returns complete groups ordered by their newest member's
-// max(mtime, atime). The seed query is capped at limit rows; expansion may
-// exceed the cap because truncating a group would recreate the split bug. A
-// limit of zero or less means defaultOffloadCandidateLimit.
+// OffloadCandidates returns the first stable candidate page. Quota enforcement
+// uses OffloadCandidatePage directly so protected rows in this page cannot hide
+// eligible rows that follow it.
+func (c *Catalog) OffloadCandidates(folder string, limit int) ([]FileRecord, error) {
+	files, _, err := c.OffloadCandidatePage(folder, limit, 0)
+	return files, err
+}
+
+// OffloadCandidatePage seeds from unpinned synced rows after a stable keyset
+// cursor, expands every selected pair group, and returns complete groups ordered
+// by their newest member's max(mtime, atime). Expansion may exceed limit because
+// truncating a group would recreate the split bug. next is the final SEED id,
+// not an expanded companion id; pass it back unchanged to fetch the next page.
+// A zero next means no seed rows were returned.
 //
 // Returned companion rows can be pinned or already archived so the caller can
 // apply policy to the group as a unit. Persistent-glob filtering and the grace cutoff happen in the caller, in Go:
 // file_mtime and file_atime are TEXT columns, so comparing a bound Go time
 // against them is a string comparison with a timezone-dependent result.
-func (c *Catalog) OffloadCandidates(folder string, limit int) ([]FileRecord, error) {
+// The cursor therefore compares against the still-present catalog row by id;
+// archiving it changes status but not its ordering fields, so pages cannot skip
+// when earlier rows disappear from the synced predicate.
+func (c *Catalog) OffloadCandidatePage(folder string, limit int, afterID int64) (
+	files []FileRecord, next int64, err error) {
+
 	if limit <= 0 {
 		limit = defaultOffloadCandidateLimit
 	}
-	seeds, err := c.queryFiles(`SELECT `+fileColumns+`
-		FROM files
-		WHERE folder_label = ? AND status = 'synced' AND pinned = 0
-		ORDER BY MAX(file_mtime, file_atime) ASC
-		LIMIT ?`, folder, limit)
-	if err != nil || len(seeds) == 0 {
-		return seeds, err
+	where := `folder_label = ? AND status = 'synced' AND pinned = 0`
+	args := []any{folder}
+	if afterID > 0 {
+		where += ` AND (
+			MAX(file_mtime, file_atime) > (SELECT MAX(file_mtime, file_atime) FROM files WHERE id = ?)
+			OR (MAX(file_mtime, file_atime) = (SELECT MAX(file_mtime, file_atime) FROM files WHERE id = ?)
+				AND id > ?))`
+		args = append(args, afterID, afterID, afterID)
 	}
+	args = append(args, limit)
+	seeds, err := c.queryFiles(`SELECT `+fileColumns+`
+		FROM files WHERE `+where+`
+		ORDER BY MAX(file_mtime, file_atime) ASC, id ASC
+		LIMIT ?`, args...)
+	if err != nil || len(seeds) == 0 {
+		return seeds, 0, err
+	}
+	next = seeds[len(seeds)-1].ID
 	ids := make([]int64, 0, len(seeds))
 	for _, seed := range seeds {
 		ids = append(ids, seed.ID)
 	}
 	expanded, err := c.ExpandPairGroups(ids)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	files, err := c.FilesByIDs(expanded)
+	files, err = c.FilesByIDs(expanded)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	ordered := make([]FileRecord, 0, len(files))
 	for _, group := range orderedPairGroups(files) {
 		ordered = append(ordered, group.files...)
 	}
-	return ordered, nil
+	return ordered, next, nil
 }
 
 // FileCount returns the total number of files matching the given status (or all if empty).

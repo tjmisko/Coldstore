@@ -51,7 +51,28 @@ func pairClusterIdentity(folder, relativePath, filename string) string {
 	if dir == "." {
 		dir = ""
 	}
-	return folder + "\x00" + dir + "\x00" + catalog.CanonicalPairStem(filename)
+	return folder + "\x00" + dir + "\x00" + contentPairCandidateStem(filename)
+}
+
+// contentPairCandidateStem widens only the CID-comparison candidate set for
+// import collision suffixes such as IMG_1234(2).MOV. It deliberately does not
+// change catalog.CanonicalPairStem: if ExifTool is unavailable, degraded
+// basename grouping must never treat a renamed file as basename evidence.
+func contentPairCandidateStem(filename string) string {
+	stem := catalog.CanonicalPairStem(filename)
+	if !strings.HasSuffix(stem, ")") {
+		return stem
+	}
+	open := strings.LastIndexByte(stem, '(')
+	if open <= 0 || open == len(stem)-2 {
+		return stem
+	}
+	for _, r := range stem[open+1 : len(stem)-1] {
+		if r < '0' || r > '9' {
+			return stem
+		}
+	}
+	return strings.TrimSpace(stem[:open])
 }
 
 // recordMetadataAndPair makes a newly discovered CID and every pairing
@@ -180,7 +201,7 @@ func (d *Daemon) pairCandidateCluster(ctx context.Context, anchor catalog.FileRe
 		value, probeErr := prober.ProbeStillCandidate(ctx, sourcePathFn(still), still.Extension)
 		if probeErr != nil {
 			if errors.Is(probeErr, exec.ErrNotFound) {
-				return d.assignDegradedPair(anchor, candidates, videos, stills)
+				return d.assignDegradedPair(*still, candidates)
 			}
 			if ctx.Err() == nil {
 				if recordErr := d.cat.RecordPairingFailure(still.ID, probeErr.Error(), time.Now().Unix()); recordErr != nil {
@@ -204,16 +225,29 @@ func (d *Daemon) pairCandidateCluster(ctx context.Context, anchor catalog.FileRe
 	// candidate cluster; multiple confirmed CIDs make basename attachment
 	// ambiguous, so the sidecar stays unpaired rather than joining the wrong one.
 	videoKeys := make(map[string]struct{})
+	videoStems := make(map[string]map[string]struct{})
 	for _, video := range videos {
 		if video.PairSource == "content_id" && strings.HasPrefix(video.PairKey, "cid:") {
 			videoKeys[video.PairKey] = struct{}{}
+			if videoStems[video.PairKey] == nil {
+				videoStems[video.PairKey] = make(map[string]struct{})
+			}
+			videoStems[video.PairKey][catalog.CanonicalPairStem(video.Filename)] = struct{}{}
 		}
 	}
 	confirmed := make(map[string]struct{})
+	confirmedStems := make(map[string]map[string]struct{})
 	for _, still := range stills {
 		key := stillKeys[still.ID]
 		if _, ok := videoKeys[key]; ok && key != "" {
 			confirmed[key] = struct{}{}
+			if confirmedStems[key] == nil {
+				confirmedStems[key] = make(map[string]struct{})
+			}
+			confirmedStems[key][catalog.CanonicalPairStem(still.Filename)] = struct{}{}
+			for stem := range videoStems[key] {
+				confirmedStems[key][stem] = struct{}{}
+			}
 		}
 	}
 	if len(confirmed) == 1 {
@@ -221,6 +255,9 @@ func (d *Daemon) pairCandidateCluster(ctx context.Context, anchor catalog.FileRe
 		for key = range confirmed {
 		}
 		for _, sidecar := range sidecars {
+			if _, ok := confirmedStems[key][catalog.CanonicalPairStem(sidecar.Filename)]; !ok {
+				continue
+			}
 			assignments = append(assignments, catalog.PairAssignment{
 				ID: sidecar.ID, Key: key, Source: "content_id",
 			})
@@ -232,8 +269,26 @@ func (d *Daemon) pairCandidateCluster(ctx context.Context, anchor catalog.FileRe
 	return d.cat.SetPairAssignments(assignments)
 }
 
-func (d *Daemon) assignDegradedPair(anchor catalog.FileRecord, candidates, videos,
-	stills []catalog.FileRecord) error {
+func (d *Daemon) assignDegradedPair(anchor catalog.FileRecord, candidates []catalog.FileRecord) error {
+	// The CID candidate cluster may include import-renumbered stems. Basename
+	// degradation is narrower by construction: retain only the exact canonical
+	// stem cluster, including the intentional IMG_E normalization.
+	canonical := catalog.CanonicalPairStem(anchor.Filename)
+	genuine := make([]catalog.FileRecord, 0, len(candidates))
+	videos := make([]catalog.FileRecord, 0)
+	stills := make([]catalog.FileRecord, 0)
+	for _, candidate := range candidates {
+		if catalog.CanonicalPairStem(candidate.Filename) != canonical {
+			continue
+		}
+		genuine = append(genuine, candidate)
+		if isPairVideo(candidate.Extension) {
+			videos = append(videos, candidate)
+		}
+		if isPairStill(candidate.Extension) {
+			stills = append(stills, candidate)
+		}
+	}
 	eligible := make(map[int64]struct{})
 	for _, still := range stills {
 		if hasCloseVideo(still, videos) {
@@ -253,8 +308,8 @@ func (d *Daemon) assignDegradedPair(anchor catalog.FileRecord, candidates, video
 		dir = ""
 	}
 	key := "stem:" + path.Join(dir, catalog.CanonicalPairStem(anchor.Filename))
-	ids := make([]int64, 0, len(candidates))
-	for _, candidate := range candidates {
+	ids := make([]int64, 0, len(genuine))
+	for _, candidate := range genuine {
 		if _, ok := eligible[candidate.ID]; ok || isPairSidecar(candidate.Extension) {
 			ids = append(ids, candidate.ID)
 		}

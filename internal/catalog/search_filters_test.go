@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"fmt"
 	"path"
 	"reflect"
 	"sort"
@@ -269,5 +270,32 @@ func TestSearchFilterValidationAndIDsOverride(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].ID != id || !reflect.DeepEqual(ids, []int64{id}) || total != 1 {
 		t.Fatalf("IDs override rows=%v ids=%v total=%d", searchFilenames(files), ids, total)
+	}
+}
+
+func TestSearchTagFilterCapCountsNormalizedUniquePaths(t *testing.T) {
+	cat := setupTestCatalog(t)
+	wantID := addSearchFile(t, cat, searchFileFixture{
+		relative: "tagged.jpg", tags: []string{"Trips/Iceland"},
+	})
+	variants := []string{
+		"Trips/Iceland", "trips/iceland", " TRIPS / ICELAND ",
+		"Trips/ Iceland", "Trips /Iceland", "  trips/iceland  ",
+		"TRIPS/iceland", "trips/ICELAND", "Trips / Iceland",
+	}
+	files, err := cat.ListFiles(FileQuery{Tags: variants})
+	if err != nil {
+		t.Fatalf("nine variants of one normalized path: %v", err)
+	}
+	if len(files) != 1 || files[0].ID != wantID {
+		t.Fatalf("normalized duplicate filters returned %#v, want %d", searchFilenames(files), wantID)
+	}
+
+	distinct := make([]string, MaxTagFilters+1)
+	for i := range distinct {
+		distinct[i] = fmt.Sprintf("tag-%d", i)
+	}
+	if _, err := cat.ListFiles(FileQuery{Tags: distinct}); !errors.Is(err, ErrTooManyTagFilters) {
+		t.Fatalf("nine distinct normalized paths error = %v", err)
 	}
 }
