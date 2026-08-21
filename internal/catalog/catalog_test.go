@@ -285,15 +285,8 @@ func TestPersistentPaths(t *testing.T) {
 func TestFolderConfig(t *testing.T) {
 	cat := setupTestCatalog(t)
 
-	fc := &FolderConfigRecord{
-		FolderLabel:   "Photos",
-		SyncthingID:   "abc-123",
-		SyncthingPath: "/home/user/Photos",
-		BudgetBytes:   20_000_000_000,
-		GraceMinutes:  30,
-		Enabled:       true,
-	}
-	if err := cat.UpsertFolderConfig(fc); err != nil {
+	if _, err := cat.ReconcileFolderFromTOML("Photos", "abc-123", "/home/user/Photos",
+		20_000_000_000, 30); err != nil {
 		t.Fatal(err)
 	}
 
