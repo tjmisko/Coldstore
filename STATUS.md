@@ -1,184 +1,135 @@
 # Status — coldstore closeout
 
-Snapshot date: 2026-08-21. Snapshot base: `feat/interface-refresh` at `5a0de5b`.
-The Git tree is the source of truth for any state that changes after this file.
+Snapshot date: 2026-08-21. Integrated code/document state: `feat/interface-refresh`
+through `4f029d1`. The Git tree is authoritative for changes after this snapshot.
 
 ## Executive state
 
-- The production daemon is live and authenticated, reached through a loopback SSH tunnel.
-- Initial cataloguing completed. A real UI archive propagated deletion through Syncthing,
-  and restore works correctly. The isolated throwaway-folder quota test has not run.
-- Production runs repository commit `37ad497` with catalog schema 2.
-- Local `main` is `9bcb7e8`, nine commits ahead, including deployment/runbook corrections,
-  the real `require_mountpoint` guard and the node-lockfile build fix.
-- `feat/interface-refresh` already contains `feat/keymap`; the earlier handoff claiming an
-  uncommitted merge was wrong.
-- `feat/documents` and `feat/tagging-design` remain to be integrated.
-- All GitHub issues #1–#15 are open. #15 is the tagging tracker; #13 is the first live bug.
+- Production is live behind Basic Auth on a loopback listener reached by SSH tunnel.
+- Production remains at repository commit `37ad497` and catalog schema 2. Nothing from this
+  integration was deployed or run against the host.
+- Local `main` is `9bcb7e8`, nine commits ahead of the deployed baseline, including the real
+  `require_mountpoint` guard and build/runbook corrections.
+- `feat/interface-refresh` now integrates keymap, document-preview and tagging-design work.
+  Document preview owns shipped migration 6; planned tagging/rename migrations are 7/8.
+- The folder-label identity guard for GitHub #13 is implemented locally and tested but not
+  deployed. Live Photo members remain non-atomic; #6 is the outstanding P0 data bug.
+- All GitHub issues were still open at the last reachable snapshot. Issue-body migration
+  edits could not be made because `api.github.com` is unreachable from this environment.
 
-## Repository and branches
+## Integrated repository state
 
-### `main`
+The active branch carries:
 
-- Local head: `9bcb7e8`.
-- Deployed/upstream head: `37ad497`.
-- The nine local commits add scanner/config fixes, the hardware-correct deployment runbook,
-  `[storage] require_mountpoint`, dependency-stamp build repair and ignored private deploy
-  documents.
+- identity/title/icon/PWA assets and the dark token system;
+- BUG-1 touch selection and BUG-2 mobile heading repairs;
+- one scoped keymap dispatcher, operator-pending grammar, palette, finder, context menu and
+  generated cheatsheet;
+- the keyboard handler publication fix and centralized overlay/toast layering;
+- schema migration 6, content sniffing, PDF/EPUB/text previews and PDF/EPUB thumbnails;
+- finder-owned preview/open/select/download/reveal workflows;
+- permanent folder-label/path ownership validation before reconciliation writes;
+- `coldstore --status [--json]`, using immutable/query-only catalog inspection; and
+- the verified tagging/metadata/Live Photo/rename design with planned migrations 7 and 8.
 
-### `feat/interface-refresh`
-
-Carries:
-
-- identity/title/icon/PWA assets;
-- BUG-1 touch selection and BUG-2 mobile heading fixes;
-- Tailwind v4 design tokens and IBM Plex assets;
-- the keymap engine, palette, fuzzy finder, context menu and cheatsheet;
-- the operational status-dump task in `docs/interface-refresh.md` section I.
-
-The keymap merge is commit `28ba626`, with parents `13fe402` and `e13fcd6`.
-
-### `feat/documents`
-
-Head: `63dfd06`; twelve commits after shared base `5cab271`.
-
-Adds:
-
-- schema migration 6, `files.detected_type` and content sniffing;
-- one source of truth for thumbnailable extensions;
-- real seeded PDFs/EPUBs;
-- inline file preview routes and EPUB resource routes;
-- PDF thumbnails through `pdftocairo` with content-page selection;
-- pure-Go EPUB parsing/cover extraction;
-- lazy PDF, EPUB and text readers; and
-- BUG-3's correct per-file preview dispatch.
-
-Historical isolated verification: Go tests, frontend tests, lint, Playwright, in-process E2E
-and a fresh-clone build passed. The live Syncthing tier was not run. Measured output was
-approximately 3.4 MB of frontend distribution and an 18 MB binary.
-
-### `feat/tagging-design`
-
-Head: `9bcbb3f`; six documentation commits on old base `37ad497`.
-
-Adds the authoritative metadata/tagging/rename design and corresponds to GitHub issues
-#1–#15. It contains no implementation. Its planned migration 6/7 numbers conflict with
-documents' landed migration 6 and must become 7/8 before implementation.
+Key integration commits are listed in `HANDOFF.md`. Both feature merges are true two-parent
+merge commits (`752c210` for documents and `9b5be84` for tagging design).
 
 ## Verified test evidence
 
-### Local `main`
+Passed on the integrated branch:
 
-Passed during the familiarization audit:
+- `make lint` with zero warnings;
+- `make test-web`: 22 files, 260 tests;
+- `web/src/components/keyboard.test.tsx`: 20 consecutive runs, 34 tests each;
+- `go vet ./...`;
+- `go test ./...`;
+- `go test -race ./internal/...`;
+- `make test-e2e`; and
+- detached fresh-checkout `make build` with no preparatory dependency install.
 
-- `go vet ./...`
-- `go test ./...`
-- `go test -race ./internal/...`
-- `go test -tags e2e -count=1 -timeout 120s ./tests/e2e/...`
+The fresh build installed its own 370 frontend packages and produced:
 
-Only `make test-e2e-live` proves real Syncthing deletion and restore propagation in CI.
-Never combine the `e2e_live` and `e2e` build tags.
+- `web/dist`: 3,568 KiB;
+- `coldstore`: 18,187,688 bytes.
 
-### Current interface/keymap branch
+This sandbox denies esbuild's npm postinstall self-exec even with scoped escalation. Setting
+`npm_config_ignore_scripts=true` allowed the target's own `npm ci` to install the correct
+platform package, after which the normal TypeScript/Vite and Go build completed.
 
-- ESLint passed with zero warnings.
-- One full Vitest run passed 212/212.
-- Isolated Playwright passed 27/27.
-- Five repetitions of `web/src/components/keyboard.test.tsx` passed 3/5.
+Two tiers remain unverified here:
 
-The intermittent failures included basic `j` motion and `2d3j`, not just visual/context-menu
-tests. The best current diagnosis is a passive-effect race:
+- Playwright was attempted against isolated roots and unused ports normally and with scoped
+  escalation; the daemon could not bind loopback.
+- `make test-e2e-live` was attempted with three alternate ports and scoped escalation; its
+  bind preflight failed before Docker startup.
 
-- tests wait until the fetched row is visible;
-- `useKeymapLayer` updates `handlerRef.current` in `useEffect`;
-- a row can commit before that effect replaces the handler closure that still sees an empty
-  `files` array; and
-- `useGridKeymap` then rejects the command at its empty-list guard.
-
-Cleanup already unmounts every test and clears the provider timer, making the old leaked-timer
-theory less likely. Fix the lifecycle, then prove it with repeated targeted runs.
+These are execution-environment blockers, not observed product failures. Keep their tasklist
+boxes open until the exact tiers run on a host that permits local listeners.
 
 ## Production environment
 
 The host-specific ignored documents contain private identifiers and are not reproduced here.
-The operational shape other agents need is:
+The operational facts needed for planning are:
 
-- Debian 12 on an HP N40L: two AMD K10 cores, 3.8 GiB RAM and a 4 GiB swapfile.
-- Build with the default `GOAMD64=v1`; v2/v3 binaries are not supported by this CPU.
-- Go 1.27 and Node 24 are installed from upstream tarballs. The old split-build procedure is
-  retired; the host can run `make build` itself.
-- Hot Syncthing folders live on the root filesystem. Cold storage is a dedicated btrfs RAID1
-  subvolume on two devices. A separate unprotected btrfs device is explicitly out of scope.
-- `thumbnail_workers=1` is intentional on this memory-constrained host.
-- `ffmpeg`, SQLite, `poppler-utils` and `exiftool` are installed.
-- Five managed Syncthing folders are healthy, fully synced, Send & Receive and protected by
-  the required coldstore temp/superseded ignore patterns.
-- Syncthing file versioning is disabled. The server still runs Syncthing v1.19.2 and should
-  be upgraded as an operations task.
-- The host uses a static wired address outside the DHCP allocation pool.
-- The archive mount, swap and btrfs scrub are operational. Snapshot scheduling is awaiting
-  explicit owner confirmation; do not claim it is either configured or absent until then.
-- The owner considers existing backups sufficient. A fresh SQLite `.backup` remains a
-  mandatory gate immediately before any production schema upgrade.
+- Debian 12 on an HP N40L with two AMD K10 cores, 3.8 GiB RAM and configured swap;
+- default `GOAMD64=v1`; v2/v3 binaries are not supported by this CPU;
+- Go 1.27 and Node 24 are installed, so the host can run `make build` directly;
+- hot folders live on the root filesystem; cold storage is a dedicated btrfs RAID1;
+- `thumbnail_workers=1` is intentional on this memory-constrained host;
+- ffmpeg, SQLite, poppler-utils and ExifTool are installed;
+- managed Syncthing folders were healthy, Send & Receive and protected by the required
+  coldstore temp/superseded ignore patterns at the last owner-provided check;
+- Syncthing file versioning is disabled and the installed Syncthing release still needs an
+  owner-approved maintenance upgrade; and
+- snapshot scheduling is unresolved. Do not claim it is configured or absent without owner
+  confirmation.
 
-### Access and authority
+A fresh SQLite `.backup` is a mandatory gate immediately before production schema changes.
+The catalog cannot be reconstructed from hot folders because scans do not rediscover
+already-offloaded archive rows.
 
-- Current: Basic Auth on loopback, reached through an SSH tunnel.
-- Desired: a permanent browser-native HTTPS route that does not require installing a VPN
-  client and can accommodate guests.
-- Consequence: Tailscale alone does not meet the primary requirement. A real public ingress
-  makes session auth, rate limiting and a carefully private backend listener load-bearing.
-- The owner does not authorize agents to SSH to or otherwise access the production host.
-  Ask for specific output. Do not deploy/restart/migrate/change budgets without explicit
-  approval.
+## Access and authority
 
-## Known defects and integration hazards
+- Current access is the safe interim state: loopback + Basic Auth + SSH tunnel.
+- The desired permanent path is browser-native HTTPS, supports guests and does not require a
+  VPN client.
+- Public ingress requires a selected domain/proxy trust boundary plus session authentication,
+  CSRF defense, rate limiting and a private backend listener.
+- The owner has not selected or authorized a topology. Do not implement provider-specific
+  deployment or expose the raw port by assumption.
+- Agents have no production-host authority. Ask for output and require separate approval for
+  deployment, restarts, migrations, budget changes and archive/restore actions.
 
-### Data-safety bugs
+## Remaining engineering work
 
-- GitHub #13: editing a TOML folder label silently creates a second catalog identity for the
-  same path. Labels are permanent until the guard is implemented.
-- GitHub #6: Live Photo still/video/edit members have no pair group; automatic or manual
-  movement can split them.
+### Load-bearing
 
-### Frontend/integration bugs
+- GitHub #6: identify Live Photo groups by content identifier and expand them atomically at
+  every archive, restore, rename and quota-accounting entry point.
+- Its prerequisites are metadata package #1, schema #2 (planned migration 7) and extraction
+  pass #3. Follow `docs/tagging-design.md` section 8 rather than skipping dependencies.
 
-- Intermittent keyboard stale-handler race described above.
-- `ToastProvider` still hardcodes `z-60`, although `zLayers.ts` requires toasts above
-  overlays. The CSS/task docs describe an obsolete ladder.
-- New keymap overlays and the deliberately untouched Lightbox still use raw Tailwind colors.
-- Fuzzy-finder preview/select/general-action behavior is incomplete.
-- Context-menu “reveal folder” is absent.
-- FileBrowser's keyboard Open is currently a no-op and context-menu Open downloads; after the
-  documents merge both must open the preview lightbox.
+### Product and operations
 
-### Documentation drift
-
-- `docs/interface-refresh.md` checkboxes for D–H do not describe actual implementation state.
-- Deployment rollback prose incorrectly says any older binary accepts a newer catalog. The
-  migration runner refuses newer schemas; only pre-migration binaries have the dangerous
-  behavior the prose describes.
-- Deployment prose says an archive can be rebuilt by scanning, then admits archived files
-  are absent from that scan. The first claim is false.
-- The tracked architecture API list omits the document preview/EPUB routes.
-- The React guide omits the new readers.
-- `docs/control-plane-design.md` contains historical build instructions that now contradict
-  the tracked `.gitkeep` rule.
-- The ignored deployment record/checklist need local-only updates after document support is
-  integrated. Never commit their identifiers.
+- Select and threat-model permanent HTTPS ingress, then implement session auth only against
+  that explicit topology.
+- Run Playwright and the live Syncthing tier in a listener-capable environment.
+- Benchmark PDF thumbnail generation on the actual two-core host from owner-provided output.
+- Complete the owner-mediated backup, deployment, throwaway quota, snapshot and Syncthing
+  upgrade gates in `TASKLIST.md`.
+- Update GitHub issue bodies from planned migration 6/7 to 7/8 when network access exists.
 
 ## Metadata decisions already settled
 
 - `evanoberholster/imagemeta` is the primary still-photo reader. Real iPhone HEIC GPS,
   capture time, offset and subseconds matched ExifTool.
-- Re-probe suspicious/empty HEIC results with `bep/imagemeta`; it handles the verified
+- Re-probe suspicious/empty HEIC results with `bep/imagemeta`; it covers the verified
   `iloc`-before-`iinf` failure mode. Apply GPS reference signs explicitly.
-- No pure-Go reader can read Apple's offset-based maker-note ContentIdentifier. Use a
-  resident `exiftool -stay_open` subprocess only for Live Photo still candidates.
-- Never import `barasher/go-exiftool`; its GPL-3.0 license would change the Go binary's
+- No pure-Go reader exposes Apple's offset-based maker-note ContentIdentifier. Use a
+  resident `exiftool -stay_open` subprocess only for candidate Live Photo stills.
+- Do not import `barasher/go-exiftool`; its GPL-3.0 license would change the binary's
   licensing posture.
-- Use `ffprobe` only for QuickTime/video metadata. It exposes no useful EXIF from stills.
-- Parse Apple's colon-less creation-date offset and all three ISO 6709 forms documented in
-  the tagging design.
-- The only unmeasured tagging claim is the FTS5 performance argument; issue #9 requires a
-  benchmark before the search decision is final.
+- Use `ffprobe` for QuickTime/video metadata, not still-photo EXIF.
+- Preserve owner-entered capture/location values across rescans and extraction retries.
+- Issue #9 must benchmark `LIKE` at representative scale before accepting the no-FTS5 claim.

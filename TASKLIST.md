@@ -262,10 +262,10 @@ requires the owner.
 
 ### 18. Repair local-only deployment records
 
-- [ ] Keep `docs/first-deploy.md` and `docs/deploy-checklist.md` ignored and uncommitted.
-- [ ] Update their old split-build procedure: Node 24 on the server now supports `make build`.
-- [ ] Update PDF/EPUB dependency and thumbnail/preview behavior after documents lands.
-- [ ] Record actual rollout progress: initial scan plus real manual archive propagation and
+- [x] Keep `docs/first-deploy.md` and `docs/deploy-checklist.md` ignored and uncommitted.
+- [x] Update their old split-build procedure: Node 24 on the server now supports `make build`.
+- [x] Update PDF/EPUB dependency and thumbnail/preview behavior after documents lands.
+- [x] Record actual rollout progress: initial scan plus real manual archive propagation and
       successful restore; throwaway quota test remains open.
 - [ ] Record snapshot scheduling only after the owner confirms it.
 
