@@ -33,6 +33,7 @@ import (
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 	"github.com/tjmisko/coldstore/internal/daemon"
+	"github.com/tjmisko/coldstore/internal/filetype"
 	"github.com/tjmisko/coldstore/internal/thumbnail"
 )
 
@@ -292,6 +293,23 @@ func seedFile(cat *catalog.Catalog, folder, dir, relPath string, mtime time.Time
 	if err != nil {
 		return seeded{}, err
 	}
+
+	// The scanner's content sniff, applied here too. Without it the demo's
+	// catalog is missing a column the real one always has, and the difference
+	// is not cosmetic: the Documents folder is seeded DISABLED, so no scan
+	// ever reaches it, and its extension-less "bookmarks" file would stay
+	// unclassified forever. That is exactly the file the preview work exists
+	// for, and a fixture that cannot reach it is a fixture that hides the
+	// feature.
+	detected, err := filetype.SniffFile(full)
+	if err != nil {
+		return seeded{}, fmt.Errorf("sniffing %s: %w", relPath, err)
+	}
+	if err := cat.SetDetectedType(saved.ID, detected); err != nil {
+		return seeded{}, fmt.Errorf("recording the type of %s: %w", relPath, err)
+	}
+	saved.DetectedType = detected
+
 	return seeded{id: saved.ID, name: relPath, path: full}, nil
 }
 
