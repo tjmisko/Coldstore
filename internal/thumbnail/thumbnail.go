@@ -21,6 +21,7 @@ import (
 
 	"github.com/disintegration/imaging"
 	"github.com/tjmisko/coldstore/internal/catalog"
+	"github.com/tjmisko/coldstore/internal/filetype"
 )
 
 const (
@@ -56,6 +57,61 @@ var videoExts = map[string]bool{
 // format to one and not the other made the generator support a type the queue
 // never selected -- silently, because nothing tied the two together.
 var extCategories = []map[string]bool{imageExts, heifExts, videoExts}
+
+// detectedTypes maps a content-sniffed type onto the same categories.
+//
+// It is the second way into the generator, and the only one that works for a
+// file with no extension: extension and mime_type are both derived from the
+// filename, so a bookmark export called "reading" is invisible to either. This
+// list has to stay in step with extCategories by hand -- there is no
+// mechanical relation between ".mov" and "video/quicktime" -- which is what
+// the round-trip test in thumbnail_test.go checks.
+var detectedImageTypes = map[string]bool{
+	filetype.TypeJPEG: true,
+	filetype.TypePNG:  true,
+	filetype.TypeWebP: true,
+	filetype.TypeGIF:  true,
+}
+
+var detectedHEIFTypes = map[string]bool{
+	filetype.TypeHEIC: true,
+	filetype.TypeHEIF: true,
+	filetype.TypeAVIF: true,
+}
+
+var detectedVideoTypes = map[string]bool{
+	filetype.TypeMP4:       true,
+	filetype.TypeQuickTime: true,
+	filetype.TypeMatroska:  true,
+	filetype.TypeWebM:      true,
+	filetype.TypeAVI:       true,
+}
+
+var typeCategories = []map[string]bool{detectedImageTypes, detectedHEIFTypes, detectedVideoTypes}
+
+// CanThumbnailType reports whether a content-sniffed type is one the generator
+// can render.
+func CanThumbnailType(detected string) bool {
+	for _, set := range typeCategories {
+		if set[detected] {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportedDetectedTypes returns every type CanThumbnailType accepts, sorted,
+// as the second arm to hand to catalog.FilesNeedingThumbnailsByType.
+func SupportedDetectedTypes() []string {
+	var types []string
+	for _, set := range typeCategories {
+		for t := range set {
+			types = append(types, t)
+		}
+	}
+	sort.Strings(types)
+	return types
+}
 
 // CanThumbnail returns true if we support generating a thumbnail for this extension.
 func CanThumbnail(ext string) bool {
@@ -138,19 +194,24 @@ func (g *Generator) GenerateContext(ctx context.Context, file *catalog.FileRecor
 	}
 
 	ext := strings.ToLower(file.Extension)
+	detected := file.DetectedType
 	outPath := g.ThumbPath(file.FolderLabel, file.RelativePath)
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("creating thumb dir: %w", err)
 	}
 
+	// Extension first, detected type second. The extension is what the owner
+	// named the file and is right almost always; the sniffed type is the way
+	// in for the files that have no extension at all, which is the only reason
+	// it exists.
 	var err error
 	switch {
-	case imageExts[ext]:
+	case imageExts[ext], detectedImageTypes[detected]:
 		err = g.generateImage(sourcePath, outPath)
-	case heifExts[ext]:
+	case heifExts[ext], detectedHEIFTypes[detected]:
 		err = g.generateHEIF(ctx, sourcePath, outPath)
-	case videoExts[ext]:
+	case videoExts[ext], detectedVideoTypes[detected]:
 		err = g.generateVideo(ctx, sourcePath, outPath)
 	default:
 		return fmt.Errorf("unsupported extension: %s", ext)

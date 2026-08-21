@@ -76,6 +76,12 @@ const (
 // selected by the queue.
 var thumbnailExts = thumbnail.SupportedExtensions()
 
+// thumbnailTypes is the second arm of the queue predicate: the content-sniffed
+// types the generator can render. It is what reaches a file with no extension,
+// which an extension-keyed query cannot select no matter how many formats the
+// generator learns.
+var thumbnailTypes = thumbnail.SupportedDetectedTypes()
+
 type Daemon struct {
 	cfg                 *config.Config
 	cat                 *catalog.Catalog
@@ -621,7 +627,7 @@ func (d *Daemon) generateThumbnails(ctx context.Context) {
 			return
 		}
 
-		files, err := d.cat.FilesNeedingThumbnails(thumbnailExts, thumbnailBatchSize)
+		files, err := d.cat.FilesNeedingThumbnailsByType(thumbnailExts, thumbnailTypes, thumbnailBatchSize)
 		if err != nil {
 			d.logger.Error("querying files for thumbnails", "error", err)
 			return
