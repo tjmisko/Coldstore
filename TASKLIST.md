@@ -201,9 +201,9 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
 
 ### 14. Issue sequence
 
-- [ ] #1 — pure metadata package: primary and HEIC cross-check readers, QuickTime reader,
+- [x] #1 — pure metadata package: primary and HEIC cross-check readers, QuickTime reader,
       resident ExifTool probe, real fixtures and cancellation/deadline safety.
-- [ ] #2 — migration 7: tags, descriptions, capture/location fields, pairing fields and
+- [x] #2 — migration 7: tags, descriptions, capture/location fields, pairing fields and
       `display_name`.
 - [ ] #3 — background metadata extraction pass with its own queue, attempt budget and
       owner-edit preservation.

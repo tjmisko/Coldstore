@@ -107,8 +107,8 @@ already-offloaded archive rows.
 
 - GitHub #6: identify Live Photo groups by content identifier and expand them atomically at
   every archive, restore, rename and quota-accounting entry point.
-- Its prerequisites are metadata package #1, schema #2 (planned migration 7) and extraction
-  pass #3. Follow `docs/tagging-design.md` section 8 rather than skipping dependencies.
+- Metadata package #1 and schema #2 (migration 7) are complete. Extraction pass #3 remains
+  the final prerequisite. Follow `docs/tagging-design.md` section 8 rather than skipping it.
 
 ### Product and operations
 
@@ -122,6 +122,9 @@ already-offloaded archive rows.
 
 ## Metadata decisions already settled
 
+- `internal/metadata` now implements the pure-Go bulk reader, HEIC cross-check, QuickTime
+  reader and resident candidate-only ExifTool probe; repeated package tests, its race test,
+  vet and the repository-wide Go test suite pass.
 - `evanoberholster/imagemeta` is the primary still-photo reader. Real iPhone HEIC GPS,
   capture time, offset and subseconds matched ExifTool.
 - Re-probe suspicious/empty HEIC results with `bep/imagemeta`; it covers the verified
