@@ -319,10 +319,12 @@ They are bound together by an Apple UUID written into both, and **the UUID is th
 - In the `.HEIC`, `ContentIdentifier` inside the **Apple maker note** (`MakerApple` tag
   0x0011) in the EXIF. ExifTool's own `Apple.pm` documents 0x0011 with the comment *"if
   defined, there is a live photo associated with the video"*; Apple's internal name for it is
-  `AssetIdentifier`. **[VERIFIED] No pure-Go library reads it.** `evanoberholster/imagemeta`
-  has the API surface and the tag constant but returns garbage, and its upstream test asserts
-  only hardcoded defaults and skips when its fixture is absent, so the field is effectively
-  untested (1.8).
+  `AssetIdentifier`. **[VERIFIED on real data] No pure-Go library reads it.** On a JPEG whose
+  genuine identifier is `D4122CE4-…`, ExifTool reads it and `evanoberholster/imagemeta`
+  returns `""`. This is not a gap that might be patched around: that library parses
+  **embedded** maker-note values (≤4 bytes, inline) correctly and fails every **offset-based**
+  one, and a UUID string is always offset-based (1.8). Its own upstream test for this area
+  would fail on genuine iPhone output and passes only because it skips.
 
 **So the still half needs `exiftool`, and the design pays for it deliberately and narrowly.**
 
@@ -481,7 +483,7 @@ should not be coded against.
 
 | Candidate | Licence | Pure Go | Maintained | HEIC | Apple 0x0011 | Verdict |
 |---|---|---|---|---|---|---|
-| `github.com/evanoberholster/imagemeta` | MIT | yes | yes | yes **[VERIFIED]** | **no** | **Leading candidate for the bulk path — not settled. See the blocker below.** It reads HEIC and it is fast (18.4 µs/file). It *appears* to support Apple maker notes — `exif.MakerNote.Apple.ContentIdentifier`, `TagAppleContentID = 0x0011` — but **[VERIFIED]** it returns garbage for the field, and its upstream test asserts only hardcoded defaults and skips when its fixture is absent, so the support is effectively untested. Treat 0x0011 as unavailable from pure Go. |
+| `github.com/evanoberholster/imagemeta` | MIT | yes | yes | yes **[VERIFIED]** | **no** | **Adopt for the bulk path.** Verified correct on a genuine iPhone 12 Pro HEIC — GPS, `DateTimeOriginal`, `OffsetTimeOriginal` and `SubSecTimeOriginal` all matching exiftool exactly — and fast (18.4 µs/file). Two known defects, both handled below and neither disqualifying: it drops all EXIF from a HEIC whose `iloc` precedes `iinf`, and it parses only **embedded** Apple maker-note values, failing every offset-based one. Treat 0x0011 as unavailable from pure Go. |
 | `github.com/bep/imagemeta` | MIT | yes | yes | yes **[VERIFIED]** | no | **Adopt as the cross-check, not the primary** — no Apple maker notes, and it returns **unsigned** GPS with a separate ref (`GPSLongitude = 122.4194`, `GPSLongitudeRef = "W"`), so the caller applies the sign. **[VERIFIED]** it reads HEIC files whose `iloc` precedes `iinf`, which is precisely what the primary drops. The two libraries' HEIC failure modes are **complementary**, which makes a 15 µs re-probe on an empty result cheap insurance rather than belt-and-braces. |
 | `github.com/dsoprea/go-exif/v3` | MIT | yes | **no** (last push 2024) | **not alone** | unverified | **Reject.** Parses EXIF/TIFF blobs only. HEIC needs `go-heic-exif-extractor` (last push 2021), JPEG needs `go-jpeg-image-structure` (2022): a three-repo pipeline whose container halves are four and five years stale. |
 | `github.com/rwcarlsen/goexif` | BSD-2 | yes | **no** (2022, self-described alpha) | no | no | **Reject, and it is disqualifying rather than merely dated. [VERIFIED]** `DateTime()` returns the value in `time.Local` — the *server's* zone — so one file yields three different instants under three `TZ` values. It also cannot see `OffsetTimeOriginal` at all (its tag table predates EXIF 2.31) and reports the tag absent when it is present. Both failures are silent. |
@@ -511,29 +513,83 @@ Two gotchas for that wrapper: pass `-n` (`NoPrintConversion`) or GPS comes back 
 **float64 for `537` but a string for `"05"`** on the same field, so the decoder must accept
 both types — and must preserve the leading zero, per 1.4.
 
-> ### ⚠ Unresolved blocker: GPS on files carrying an Apple maker note
->
-> **[VERIFIED, on a synthetic fixture]** On a file carrying an Apple maker note,
-> `evanoberholster/imagemeta` returned **GPS `0,0`** — it regressed a field that works
-> correctly on files *without* one. The measurement used a synthetic maker note, and the
-> researcher was explicit that a real iPhone file might take a different code path.
->
-> If it reproduces on real files, the recommended bulk library **silently loses location on
-> every iPhone photo** — one of the two things the owner said he cares about, failing in the
-> mode this document spends section 1.1 warning about: no error, just an empty field that
-> reads as "this photo had no GPS".
->
-> **The library choice is therefore not settled**, and `0,0` from any reader must be treated
-> as suspicious in its own right — it is both a plausible bug signature and a real coordinate
-> in the Gulf of Guinea.
->
-> **Try the cheap path before sourcing a fixture.** Check whether `bep/imagemeta` returns
-> correct GPS for the same file. It has no Apple maker-note support at all, so it may simply
-> not take the code path that regresses. If it is clean the blocker closes for free: widen the
-> cross-check trigger from "empty result" to "empty result **or** `0,0` from a file carrying
-> an Apple maker note", and one mechanism that was going in anyway covers both of the primary
-> reader's known defects. Only if it is *not* clean does adoption require a **real iPhone
-> HEIC** fixture rather than a synthetic one.
+**Resolved: the GPS `0,0` regression does not reproduce on real files.** An earlier revision
+of this document carried it as a blocker gating the library choice. That was wrong, and the
+retraction is recorded rather than quietly deleted, because the way it was wrong is
+instructive.
+
+**[VERIFIED on a genuine iPhone 12 Pro HEIC, iOS 16.7.1, originals never re-encoded]**
+`evanoberholster/imagemeta` reads it correctly and exactly:
+
+```
+imagemeta   GPS 41.84340277777778, 3.0662277777777778
+exiftool -n GPS 41.8434027777778,   3.06622777777778     <- exact match
+            DateTimeOriginal 2023-10-22 09:39:48.445 +0200
+```
+
+GPS, capture time, `OffsetTimeOriginal` and `SubSecTimeOriginal` are all right, on a file with
+a real 44-entry Apple maker note.
+
+**Why the synthetic result looked so convincing.** A clean bisect over eight synthetic
+maker-note variants implicated the *type* of tag `0x0001 MakerNoteVersion`: `SHORT` parsed,
+`int32s` (SLONG) lost GPS. Type was isolated from value, and a no-maker-note control ruled out
+the rewriting tool. Then the real file's tag `0x0001` was confirmed to be type 9 — **Apple
+really does write `int32s`** — so "real files will break" followed from a verified premise and
+a verified mechanism. It is still false: the real 44-entry maker note does not trigger the
+mis-seek, and the minimal three- and four-entry ones do. The fault is layout-sensitive in a
+way the reduction did not preserve.
+
+The lesson worth carrying: **a bisect can be internally valid, mechanistically explained, and
+still not generalise from a reduced fixture to a real one.** "Verified on synthetic input" is
+a weaker claim than it feels like while you are holding the bisect, and this document's
+`[VERIFIED]` markers should be read with the fixture in mind, not just the verb.
+
+**What survives, and it is enough to keep the cross-check.** `bep/imagemeta` returned correct
+GPS on **all 17** synthetic variants and read 56 tags cleanly from the real HEIC, so the
+re-probe specified below for the `iloc` bug **would have covered the GPS bug too, for free**.
+Keep the trigger widened to "empty result **or** `0,0` from a file carrying an Apple maker
+note": it costs tens of microseconds on a rare path, it is already being built, and `0,0` is
+worth distrusting on its own merits — it is simultaneously a plausible bug signature and a
+real coordinate in the Gulf of Guinea.
+
+Two secondary results from the same work, neither container-specific:
+
+- The synthetic variants behave **identically in JPEG and HEIC**, so nothing here was ever a
+  container problem. One asymmetry is worth knowing: a maker note with no `0x0001` at all
+  hard-errors on JPEG (`data is not long enough`) but silently returns `0,0` on HEIC. A loud
+  failure is the better of the two.
+- A real Apple-maker-note **JPEG carrying GPS** was not obtainable and is strictly
+  **[UNVERIFIED]**. Given container-independence in the synthetic set and correctness on the
+  real HEIC, the risk is low.
+
+**The Apple maker note is a different story, and it got worse on real data.**
+**[VERIFIED on the real iPhone HEIC and on a JPEG carrying a genuine `ContentIdentifier`]**
+`evanoberholster/imagemeta` does not merely miss the odd tag — it fails a whole *class*:
+
+| Value storage | Example | Result |
+|---|---|---|
+| **Embedded** (≤4 bytes, inline in the IFD entry) | `ImageCaptureType` | correct |
+| **Offset-based** (every string, every UNDEF blob) | `ContentIdentifier`, `BurstUUID`, `ImageUniqueID`, `RunTime` | wrong or empty |
+
+Concretely, on a file whose real identifier is `D4122CE4-…`, ExifTool reads it and imagemeta
+returns `""`. On the real iPhone HEIC, `MakerNoteVersion` comes back as `2` — a hardcoded
+default — where the file says `14`, and `RunTime` comes back `0/0`.
+
+**`ContentIdentifier` is a string, so it is always offset-based, so it is always broken.**
+That is not an edge case to work around; it is the entire mechanism Live Photo pairing would
+have depended on (1.6), and it is why the still half goes through `exiftool`.
+
+A signal about how load-bearing that library's maker-note support is: its own
+`TestAppleMakerNoteFixture` asserts `RunTime.Value != 0`, and on genuine iPhone output
+`RunTime` is `0/0` — **the upstream test would fail on real data.** It passes today only
+because the fixture is not committed and the test skips.
+
+**One incidental gotcha with real consequences for this design.** `imagemeta` attempts the
+Apple maker note **only when IFD0 `Make == "Apple"`**. Handed a file with an intact maker note
+but no `Make` tag, it returned nothing at all — no maker note, and no Make/Model either.
+ExifTool reads it regardless. Section 1.1 is a catalogue of the ways iOS export paths strip
+things, so a file that has lost IFD0 while keeping its maker note is not hypothetical here,
+and it fails silently. This is one more reason the pairing probe is exiftool's job.
 
 **ffprobe reads no EXIF from stills at all.** Verified against JPEG and HEIC files carrying
 full EXIF and GPS: it returns nothing for JPEG, and for HEIC it opens the container with the
@@ -1665,7 +1721,7 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
 | # | Step | Issue | Depends on |
 |---|---|---|---|
 | 1 | The label-rename guard (6.4). Small, independent, closes a live footgun | #13 | — |
-| 2 | `internal/metadata`: the `Extractor` interface, EXIF + ffprobe + the exiftool subprocess, the ISO 6709 parser, the precedence rules. Pure package, exiftool-generated fixtures, no schema and no daemon changes. **Gated on resolving the GPS `0,0` blocker of 1.8 against a real iPhone fixture** | #1 | — |
+| 2 | `internal/metadata`: the `Extractor` interface, EXIF + ffprobe + the exiftool subprocess, the ISO 6709 parser, the precedence rules. Pure package, exiftool-generated fixtures, no schema and no daemon changes. **Unblocked** — the GPS `0,0` concern was a synthetic-fixture artifact (1.8) | #1 | — |
 | 3 | Migration 6, plus `fileColumns`, `scanFile`, `FileRecord`, `types/api.ts`. Schema only | #2 | — |
 | 4 | The extraction pass: `FilesNeedingMetadata`, `SetExtractedMetadata`, the failure budget, the manual-rescan reset | #3 | #1, #2 |
 | 5 | Pair grouping: `ExpandPairGroups`, wired into `OffloadCandidates` and the job enqueue path, plus the `pair_split` event | #6 | #1, #2, #3 |
@@ -1687,12 +1743,19 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
 - **An empty extraction result from a HEIC is suspicious, not authoritative.** The primary
   reader silently drops all EXIF when `iloc` precedes `iinf` (1.8), so "no tags" and "a
   library bug" are the same observation. Re-probe with the cross-check reader before writing
-  the empty result. This is the one place where the honest-absence design of 1.1 could be
-  turned into a lie by a dependency.
-- **`0,0` is both a real coordinate and a bug signature.** It is a legitimate point in the
-  Gulf of Guinea, and it is also what the primary reader returned on a file carrying an Apple
-  maker note (1.8). Log it, cross-check it, and never use it as a sentinel in either
-  direction.
+  the empty result — the trigger is "empty **or** `0,0` from a maker-note file". This is the
+  one place where the honest-absence design of 1.1 could be turned into a lie by a
+  dependency.
+- **`0,0` is a real coordinate that must never be a sentinel**, in Go, on the wire or in the
+  UI — it is a legitimate point in the Gulf of Guinea. It is also cheap to distrust: the
+  primary reader produced it on *synthetic* maker-note fixtures, and although that never
+  reproduced on real hardware output (1.8), the cross-check triggers on it anyway because the
+  re-probe is already there for the `iloc` bug and costs tens of microseconds.
+- **A file with an intact maker note but no IFD0 `Make` tag reads as having no metadata at
+  all.** The primary reader only attempts the Apple path when `Make == "Apple"`, and handed
+  such a file it returns nothing — not even Make/Model (1.8). Section 1.1 catalogues the iOS
+  export paths that strip things, so this is not hypothetical, and it fails silently. The
+  empty-result re-probe is what catches it.
 - **A photo with no metadata at all** is the normal case, not an error. `meta_scanned_at` set
   and `captured_local = ''` means "we looked and there was nothing"; `meta_scanned_at IS NULL`
   means "not yet". The UI must render these differently and the `undated=1` filter must select
