@@ -134,4 +134,5 @@ already-offloaded archive rows.
   licensing posture.
 - Use `ffprobe` for QuickTime/video metadata, not still-photo EXIF.
 - Preserve owner-entered capture/location values across rescans and extraction retries.
-- Issue #9 must benchmark `LIKE` at representative scale before accepting the no-FTS5 claim.
+- Issue #9's 50,000-row ARM64 benchmark measured 14.0–47.9 ms for extended `q`,
+  tag/description filtering and ID resolution, below the documented 100 ms FTS5 threshold.
