@@ -70,12 +70,11 @@ const (
 	wedgeWarningRefreshSeconds = 24 * 60 * 60
 )
 
-// thumbnailExts are all extensions the thumbnail generator supports.
-var thumbnailExts = []string{
-	".jpg", ".jpeg", ".png", ".webp",
-	".heif", ".heic",
-	".mp4", ".mov", ".avi", ".mkv", ".webm",
-}
+// thumbnailExts are all extensions the thumbnail generator supports. It is
+// asked of the generator rather than written out here: a second hand-kept copy
+// of the list is how a format ends up supported by the generator and never
+// selected by the queue.
+var thumbnailExts = thumbnail.SupportedExtensions()
 
 type Daemon struct {
 	cfg                 *config.Config

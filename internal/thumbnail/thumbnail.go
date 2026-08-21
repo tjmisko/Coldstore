@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,10 +49,36 @@ var videoExts = map[string]bool{
 	".mp4": true, ".mov": true, ".avi": true, ".mkv": true, ".webm": true,
 }
 
+// extCategories is the ONE place a new thumbnailable category is registered.
+// CanThumbnail, SupportedExtensions and Generate's dispatch switch all read
+// from it, so the queue predicate and the generator cannot drift apart. The
+// daemon used to keep a second hand-written copy of this list, and adding a
+// format to one and not the other made the generator support a type the queue
+// never selected -- silently, because nothing tied the two together.
+var extCategories = []map[string]bool{imageExts, heifExts, videoExts}
+
 // CanThumbnail returns true if we support generating a thumbnail for this extension.
 func CanThumbnail(ext string) bool {
 	ext = strings.ToLower(ext)
-	return imageExts[ext] || heifExts[ext] || videoExts[ext]
+	for _, set := range extCategories {
+		if set[ext] {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportedExtensions returns every extension CanThumbnail accepts, sorted, as
+// the list to hand to catalog.FilesNeedingThumbnails.
+func SupportedExtensions() []string {
+	var exts []string
+	for _, set := range extCategories {
+		for ext := range set {
+			exts = append(exts, ext)
+		}
+	}
+	sort.Strings(exts)
+	return exts
 }
 
 // Generator produces thumbnails and stores them in the configured thumbnail directory.
