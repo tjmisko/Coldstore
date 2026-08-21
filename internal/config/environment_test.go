@@ -225,3 +225,65 @@ func TestShouldLeaveNoProbeFilesBehindWhenCheckSucceeds(t *testing.T) {
 		}
 	}
 }
+
+// The probe runs inside a LIVE Syncthing folder. Syncthing's watcher sees the
+// create before the unlink, and a name matching no .stignore line is a name
+// Syncthing may announce and propagate to every paired device. The runbook
+// already asks for `*.coldstore-tmp` in every managed folder's .stignore, for
+// the mover's temp siblings, so the probe carries that suffix rather than
+// requiring an ignore rule nobody was told about.
+func TestWriteProbeShouldUseAnAlreadyIgnoredName(t *testing.T) {
+	dir := t.TempDir()
+
+	f, err := os.CreateTemp(dir, writeProbePattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.Close()
+
+	name := filepath.Base(f.Name())
+	if !strings.HasSuffix(name, ".coldstore-tmp") {
+		t.Errorf("probe file %q does not end in .coldstore-tmp, so no .stignore "+
+			"line the runbook asks for covers it", name)
+	}
+	if !strings.HasPrefix(name, ".coldstore-writecheck-") {
+		t.Errorf("probe file %q is no longer identifiable as coldstore's", name)
+	}
+}
+
+// --check passes on an UNMOUNTED fstab mountpoint -- the directory must exist
+// for mount(8) to work, so it is present, a directory and writable, on the root
+// filesystem. Nothing else in the preflight can raise that, and the cost of
+// missing it is the archive landing on root while Syncthing propagates every
+// deletion. Reporting the mount state is the whole mitigation --check can offer.
+func TestDescribeMountShouldDistinguishAMountPointFromAPlainDirectory(t *testing.T) {
+	plain := filepath.Join(t.TempDir(), "coldstore")
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := DescribeMount(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.IsMountPoint {
+		t.Errorf("a plain subdirectory reported as a mount point")
+	}
+
+	// "/" is its own parent, so the dev comparison has to special-case it or
+	// the one path that is definitely a mount reports as not being one.
+	root, err := DescribeMount("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !root.IsMountPoint {
+		t.Errorf(`DescribeMount("/").IsMountPoint = false, want true`)
+	}
+}
+
+func TestDescribeMountShouldReportAnErrorForAMissingPath(t *testing.T) {
+	if _, err := DescribeMount(filepath.Join(t.TempDir(), "nope")); err == nil {
+		t.Error("DescribeMount on a missing path returned no error")
+	}
+}

@@ -155,7 +155,8 @@ func reportPreflight(w io.Writer, cfg *config.Config, configPath string, warning
 	}
 
 	fmt.Fprintf(w, "config           %s\n", configPath)
-	fmt.Fprintf(w, "cold storage     %s (exists, writable)\n", cfg.Storage.ColdStoragePath)
+	fmt.Fprintf(w, "cold storage     %s (exists, writable%s)\n",
+		cfg.Storage.ColdStoragePath, describeColdStorageMount(cfg.Storage.ColdStoragePath))
 	fmt.Fprintf(w, "listen           %s -- reachable from %s\n", cfg.Server.ListenAddr, reach)
 	fmt.Fprintf(w, "auth             %s\n", auth)
 	fmt.Fprintf(w, "folders          %d declared\n", len(cfg.Folders))
@@ -176,6 +177,35 @@ func reportPreflight(w io.Writer, cfg *config.Config, configPath string, warning
 	fmt.Fprintln(w, "\nWarnings are not fatal. A folder that is missing or has no .stfolder is")
 	fmt.Fprintln(w, "skipped until it appears, which is what lets the daemon survive being")
 	fmt.Fprintln(w, "started before its mount.")
+}
+
+// describeColdStorageMount says whether cold storage is its own mounted
+// filesystem, because --check has no other way to raise the one mistake that
+// costs data outright.
+//
+// checkColdStorage passes on an UNMOUNTED fstab mountpoint: the directory has
+// to exist for mount(8) to work, so it is there, it is a directory, and it is
+// writable -- on the root filesystem. The daemon then writes a fresh catalog
+// and every archived file there while Syncthing propagates the deletions to
+// every device the owner has, and the real archive reappears shadowed and
+// invisible when the volume is finally mounted. The unit's RequiresMountsFor=
+// is what prevents that at boot; nothing prevents it if the owner starts the
+// daemon by hand.
+//
+// A plain directory is a supported layout, so this is a description and not a
+// verdict. It is worded so that reading past it is a choice.
+func describeColdStorageMount(path string) string {
+	state, err := config.DescribeMount(path)
+	if err != nil {
+		return ""
+	}
+	if !state.IsMountPoint {
+		return "; NOT a separate mount -- confirm this is deliberate"
+	}
+	if state.FSType == "" {
+		return "; mounted"
+	}
+	return "; mounted, " + state.FSType
 }
 
 // printReadWritePaths emits the exact ReadWritePaths= line this config needs,
