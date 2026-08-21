@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/daemon"
@@ -26,7 +29,7 @@ func (s *Server) handleListFolders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, configs)
 }
 
-// updateFolderRequest carries the three fields the UI owns (D1). The pointers
+// updateFolderRequest carries the folder fields the UI owns (D1). The pointers
 // are mandatory: with value types a PATCH-style request that only changes the
 // budget decodes "enabled" as false and silently stops the folder being
 // managed at all, which under D1 also stops it being enforced.
@@ -34,9 +37,10 @@ func (s *Server) handleListFolders(w http.ResponseWriter, r *http.Request) {
 // syncthing_id and syncthing_path are deliberately absent. They are
 // infrastructure, declared in coldstore.toml, and the UI may not write them.
 type updateFolderRequest struct {
-	BudgetBytes  *int64 `json:"budget_bytes"`
-	GraceMinutes *int   `json:"grace_minutes"`
-	Enabled      *bool  `json:"enabled"`
+	BudgetBytes  *int64  `json:"budget_bytes"`
+	GraceMinutes *int    `json:"grace_minutes"`
+	Enabled      *bool   `json:"enabled"`
+	DisplayName  *string `json:"display_name"`
 }
 
 func (s *Server) handleUpdateFolder(w http.ResponseWriter, r *http.Request) {
@@ -56,8 +60,17 @@ func (s *Server) handleUpdateFolder(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "grace_minutes cannot be negative")
 		return
 	}
+	if req.DisplayName != nil {
+		clean := strings.TrimSpace(*req.DisplayName)
+		if utf8.RuneCountInString(clean) > 128 || strings.IndexFunc(clean, unicode.IsControl) >= 0 {
+			writeError(w, http.StatusBadRequest, "display_name must be at most 128 characters without controls")
+			return
+		}
+		req.DisplayName = &clean
+	}
 
-	found, err := s.cat.UpdateFolderPolicy(label, req.BudgetBytes, req.GraceMinutes, req.Enabled)
+	found, err := s.cat.UpdateFolderSettings(label, req.BudgetBytes, req.GraceMinutes,
+		req.Enabled, req.DisplayName)
 	if err != nil {
 		s.logger.Error("updating folder policy", "folder", label, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to update folder")

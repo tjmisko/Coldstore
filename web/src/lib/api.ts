@@ -15,6 +15,7 @@ import type {
   PersistentPath,
   PinResponse,
   PinSource,
+  RenamePathResponse,
   StatusResponse,
   Tag,
   TagDeleteResponse,
@@ -259,6 +260,13 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
+    }),
+
+  renamePath: (label: string, from: string, to: string) =>
+    apiFetch<RenamePathResponse>(`/api/v1/folders/${encodeURIComponent(label)}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to }),
     }),
 
   persistentPaths: (label: string) =>

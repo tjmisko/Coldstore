@@ -57,6 +57,57 @@ func TestCreateJobShouldUseASingleVirtualItemWhenTheActionIsScan(t *testing.T) {
 	}
 }
 
+func TestCreateRenameJobShouldPersistItsPayloadAsOneVirtualItem(t *testing.T) {
+	cat := setupTestCatalog(t)
+	jobID, err := cat.CreateRenameJob("Photos", "2024/01", "2024/Iceland")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := cat.GetJob(jobID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := DecodeRenamePayload(job.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Action != JobActionRename || job.Total != 1 || payload.From != "2024/01" ||
+		payload.To != "2024/Iceland" {
+		t.Fatalf("rename job = %+v payload %+v", job, payload)
+	}
+	var items int
+	if err := cat.db.QueryRow(`SELECT COUNT(*) FROM job_items WHERE job_id = ?`, jobID).Scan(&items); err != nil {
+		t.Fatal(err)
+	}
+	if items != 0 {
+		t.Fatalf("rename job_items = %d, want 0", items)
+	}
+}
+
+func TestCompleteVirtualItemShouldBeIdempotentAcrossCrashReplay(t *testing.T) {
+	cat := setupTestCatalog(t)
+	jobID, err := cat.CreateRenameJob("Photos", "old", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.CompleteJobItemVirtual(jobID, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Simulates a kill after the result write and before FinishJob. Startup
+	// recovery requeues the still-running row and the operation replays.
+	if err := cat.CompleteJobItemVirtual(jobID, ""); err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := cat.GetJob(jobID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Done != 1 || job.Total != 1 || job.FailedCount != 0 {
+		t.Fatalf("virtual counters = done %d total %d failed %d",
+			job.Done, job.Total, job.FailedCount)
+	}
+}
+
 func TestCreateJobShouldRejectTheRequestWhenTheActionIsNotOneOfTheThree(t *testing.T) {
 	cat := setupTestCatalog(t)
 

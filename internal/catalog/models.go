@@ -31,6 +31,7 @@ const (
 	JobActionRestore = "restore"
 	JobActionArchive = "archive"
 	JobActionScan    = "scan"
+	JobActionRename  = "rename"
 
 	JobStatePending = "pending"
 	JobStateRunning = "running"
@@ -167,9 +168,18 @@ type Job struct {
 	Done        int    `json:"done"`
 	FailedCount int    `json:"failed_count"` // column `failed`
 	Error       string `json:"error"`        // job-level reason, "" normally
+	Payload     string `json:"-"`            // rename-only durable JSON
 	CreatedAt   int64  `json:"created_at"`
 	StartedAt   *int64 `json:"started_at"`  // null, never omitted
 	FinishedAt  *int64 `json:"finished_at"` // null, never omitted
+}
+
+// RenamePayload is persisted in jobs.payload. Paths are slash-separated,
+// cleaned relative paths beneath the folder root; validation is repeated by
+// the mover when a restarted worker consumes the payload.
+type RenamePayload struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 type JobFailure struct {

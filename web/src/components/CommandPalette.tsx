@@ -25,7 +25,7 @@ function remember(name: string) {
 interface CommandPaletteProps {
   /** Text the palette opens with, e.g. ":folder " from <leader>o. */
   initial: string;
-  folders: string[];
+  folders: (string | { label: string; name: string })[];
   filters: { key: string; label: string }[];
   onClose(): void;
   /** Returns an error message, or null when the action was taken. */

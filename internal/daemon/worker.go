@@ -137,7 +137,33 @@ func (w *Worker) runJob(ctx context.Context, job *catalog.Job) error {
 	if job.Action == catalog.JobActionScan {
 		return w.runScanJob(ctx, job)
 	}
+	if job.Action == catalog.JobActionRename {
+		return w.runRenameJob(ctx, job)
+	}
 	return w.runItemJob(ctx, job)
+}
+
+// runRenameJob executes the one synthetic, restartable rename item. Like a
+// scan, it owns no job_items rows; unlike a scan, the payload is durable and
+// each filesystem/catalog step is idempotent after a crash.
+func (w *Worker) runRenameJob(ctx context.Context, job *catalog.Job) error {
+	payload, err := catalog.DecodeRenamePayload(job.Payload)
+	if err == nil {
+		err = w.mover.RenamePath(ctx, job.FolderLabel, payload.From, payload.To)
+	}
+	if ctx.Err() != nil {
+		w.logger.Info("rename job interrupted by shutdown", "job", job.ID)
+		return nil
+	}
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+		w.logger.Error("rename job failed", "job", job.ID, "folder", job.FolderLabel, "error", err)
+	}
+	if cerr := w.cat.CompleteJobItemVirtual(job.ID, msg); cerr != nil {
+		return fmt.Errorf("recording rename result for job %d: %w", job.ID, cerr)
+	}
+	return w.cat.FinishJob(job.ID, time.Now().Unix())
 }
 
 // runScanJob runs the single synthetic item of a scan job. A scan job has

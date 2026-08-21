@@ -82,6 +82,36 @@ describe("completions", () => {
     expect(found.every((c) => c.terminal)).toBe(true);
   });
 
+  it("should display a cosmetic folder name but resolve it to the stable label", () => {
+    const context: CompletionContext = {
+      ...CONTEXT,
+      folders: [{ label: "CameraRoll", name: "Family Photos" }],
+    };
+    expect(completions(":folder Fam", context)[0]).toMatchObject({
+      line: ":folder Family Photos",
+      hint: "CameraRoll",
+    });
+    expect(resolveCommandLine(":folder Family Photos", context)).toEqual({
+      ok: true,
+      action: { kind: "folder", label: "CameraRoll" },
+    });
+  });
+
+  it("should refuse duplicate cosmetic names while accepting an exact stable label", () => {
+    const context: CompletionContext = {
+      ...CONTEXT,
+      folders: [
+        { label: "CameraRoll", name: "Family Photos" },
+        { label: "OldPhone", name: "Family Photos" },
+      ],
+    };
+    expect(resolveCommandLine(":folder Family Photos", context).ok).toBe(false);
+    expect(resolveCommandLine(":folder OldPhone", context)).toEqual({
+      ok: true,
+      action: { kind: "folder", label: "OldPhone" },
+    });
+  });
+
   it("should complete the filter keys, with their labels as the hint", () => {
     const found = completions(":filter pinned-a", CONTEXT);
     expect(found[0].label).toBe("pinned-auto");

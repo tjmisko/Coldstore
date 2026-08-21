@@ -155,6 +155,23 @@ describe("file metadata", () => {
   });
 });
 
+describe("path rename", () => {
+  it("should enqueue the stable folder label and exact relative paths", async () => {
+    stub = stubFetch([{
+      method: "POST",
+      url: "/api/v1/folders/Camera%20Roll/rename",
+      body: { job_id: 9, action: "rename", state: "pending", total: 1, warnings: [] },
+    }]);
+
+    await api.renamePath("Camera Roll", "2024/01", "2024/Iceland");
+    expect(stub.calls[0]).toEqual({
+      url: "/api/v1/folders/Camera%20Roll/rename",
+      method: "POST",
+      body: { from: "2024/01", to: "2024/Iceland" },
+    });
+  });
+});
+
 describe("bulk tags", () => {
   it("should post both a uniform mutation and its exact grouped undo", async () => {
     stub = stubFetch([{ method: "POST", url: "/api/v1/files/tags", body: {

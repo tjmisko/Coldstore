@@ -249,8 +249,8 @@ func TestMigration7ShouldUpgradeEveryOlderSchemaWithoutLosingRows(t *testing.T) 
 			}
 			defer cat.Close()
 
-			if got := userVersion(t, dbPath); got != 7 {
-				t.Errorf("user_version = %d, want 7", got)
+			if got := userVersion(t, dbPath); got != schemaVersion {
+				t.Errorf("user_version = %d, want %d", got, schemaVersion)
 			}
 			file, err := cat.GetFile("Photos", "kept.jpg")
 			if err != nil {
@@ -278,6 +278,68 @@ func TestMigration7ShouldUpgradeEveryOlderSchemaWithoutLosingRows(t *testing.T) 
 				t.Errorf("preserved folder = %+v", folder)
 			}
 		})
+	}
+}
+
+func TestMigration8ShouldPreserveJobsAndWidenOnlyTheActionConstraint(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "schema7.db")
+	raw := createDatabaseAtVersion(t, dbPath, 7)
+	res, err := raw.Exec(`INSERT INTO jobs
+		(action, folder_label, state, total, done, failed, error, created_at, started_at)
+		VALUES ('archive', 'Photos', 'running', 1, 0, 0, 'kept', 11, 12)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO job_items (job_id, file_id, state, error)
+		VALUES (?, 42, 'running', 'item kept')`, oldID); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cat.Close()
+	job, _, err := cat.GetJob(oldID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Action != JobActionArchive || job.FolderLabel != "Photos" || job.State != JobStateRunning ||
+		job.Error != "kept" || job.Payload != "" || job.CreatedAt != 11 || job.StartedAt == nil || *job.StartedAt != 12 {
+		t.Fatalf("preserved job = %+v", job)
+	}
+	var itemState, itemError string
+	if err := cat.db.QueryRow(`SELECT state, error FROM job_items WHERE job_id = ? AND file_id = 42`,
+		oldID).Scan(&itemState, &itemError); err != nil {
+		t.Fatal(err)
+	}
+	if itemState != JobStateRunning || itemError != "item kept" {
+		t.Fatalf("preserved job item = %q, %q", itemState, itemError)
+	}
+	newID, err := cat.CreateRenameJob("Photos", "old", "new")
+	if err != nil {
+		t.Fatalf("rename action was not admitted: %v", err)
+	}
+	if newID <= oldID {
+		t.Fatalf("post-migration job id = %d, want greater than preserved %d", newID, oldID)
+	}
+	if _, err := cat.db.Exec(`INSERT INTO jobs (action, created_at) VALUES ('delete', 1)`); err == nil {
+		t.Fatal("migration widened the jobs action CHECK beyond rename")
+	}
+	var indexes int
+	if err := cat.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_jobs_state'`).Scan(&indexes); err != nil {
+		t.Fatal(err)
+	}
+	if indexes != 1 {
+		t.Fatalf("idx_jobs_state count = %d, want 1", indexes)
 	}
 }
 

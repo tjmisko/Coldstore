@@ -94,7 +94,7 @@ function FolderMeter({
     <div className="space-y-1.5">
       <div className="flex justify-between gap-2 text-meta">
         <span className={folder.enabled && folder.present_in_toml ? "text-ink" : "text-ink-faint"}>
-          {folder.label}
+          {folder.display_name || folder.label}
           {!folder.enabled && <span className="ml-1 text-ink-faint">(disabled)</span>}
           {!folder.present_in_toml && (
             <span className="ml-1 text-ink-faint">(not in coldstore.toml)</span>
@@ -168,7 +168,7 @@ function FolderMeter({
       {folder.syncthing_type !== "" && folder.syncthing_type !== "sendreceive" && (
         <div className="rounded-md border border-alarm/45 bg-alarm-dim p-2.5" role="alert">
           <p className="text-ink leading-snug">
-            {folder.label} is a {folder.syncthing_type} Syncthing folder &mdash; coldstore cannot
+            {folder.display_name || folder.label} is a {folder.syncthing_type} Syncthing folder &mdash; coldstore cannot
             free space on your devices.
           </p>
           <p className="text-ink-muted">

@@ -40,6 +40,7 @@ export function aFile(overrides: Partial<FileRecord> = {}): FileRecord {
 export function aFolderStatus(overrides: Partial<FolderStatus> = {}): FolderStatus {
   return {
     label: "CameraRoll",
+    display_name: "",
     synced_size_bytes: 10_000_000_000,
     budget_bytes: 20_000_000_000,
     pinned_bytes: 2_000_000_000,

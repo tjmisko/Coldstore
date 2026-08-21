@@ -61,6 +61,8 @@ function Shell() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
   const [reveal, setReveal] = useState<FileReveal | null>(null);
+  const selectedFolderStatus = folders.find((folder) => folder.label === selectedFolder);
+  const selectedDisplayName = selectedFolderStatus?.display_name || selectedFolder;
 
   const keymap = useKeymap();
   const toast = useToast();
@@ -77,7 +79,7 @@ function Shell() {
     setView(isImageFolder(folders[0].label) ? "gallery" : "files");
   }
 
-  useDocumentTitle(view === "config" ? "Settings" : selectedFolder);
+  useDocumentTitle(view === "config" ? "Settings" : selectedDisplayName);
 
   // Warm the document readers once the app is idle, so the first PDF opened
   // does not wait on a 1.5 MB fetch. Deliberately NOT part of the initial
@@ -327,7 +329,7 @@ function Shell() {
               }`}
             >
               <span className={folder.enabled && folder.present_in_toml ? "" : "opacity-60"}>
-                {folder.label}
+                {folder.display_name || folder.label}
               </span>
               {!folder.enabled && <span className="ml-1 text-meta text-ink-faint">disabled</span>}
               {!folder.present_in_toml && (
@@ -384,6 +386,7 @@ function Shell() {
             <Gallery
               key={`gallery-${selectedFolder}`}
               folder={selectedFolder}
+              displayName={selectedDisplayName}
               filterKey={filterKey}
               onFilterChange={setFilterKey}
               onFolderChanged={onFolderChanged}
@@ -394,6 +397,7 @@ function Shell() {
             <FileBrowser
               key={`files-${selectedFolder}`}
               folder={selectedFolder}
+              displayName={selectedDisplayName}
               filterKey={filterKey}
               onFilterChange={setFilterKey}
               onFolderChanged={onFolderChanged}
@@ -415,7 +419,10 @@ function Shell() {
       {overlay?.kind === "palette" && (
         <CommandPalette
           initial={overlay.initial}
-          folders={folders.map((folder) => folder.label)}
+          folders={folders.map((folder) => ({
+            label: folder.label,
+            name: folder.display_name || folder.label,
+          }))}
           filters={FILTER_PRESETS.map((preset) => ({ key: preset.key, label: preset.label }))}
           onClose={() => closeIf("palette")}
           onAction={onPaletteAction}

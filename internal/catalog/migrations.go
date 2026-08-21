@@ -25,12 +25,13 @@ var migrations = []migration{
 	{5, migration5ThumbnailFailures},
 	{6, migration6DetectedType},
 	{7, migration7TagsAndMetadata},
+	{8, migration8RenameJobs},
 }
 
 // schemaVersion is the version a freshly migrated database reports.
 // It equals the highest entry above and is bumped in the same commit as that
 // entry.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // SchemaVersion returns the schema version this binary writes.
 func SchemaVersion() int { return schemaVersion }
@@ -338,4 +339,37 @@ CREATE INDEX idx_files_gps ON files(gps_lat, gps_lon);
 CREATE INDEX idx_files_pair ON files(folder_label, pair_key);
 
 ALTER TABLE folder_configs ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+`
+
+// migration8RenameJobs rebuilds jobs because SQLite cannot widen a CHECK in
+// place. payload is intentionally private to the durable rename worker; the
+// other actions keep the empty default and their wire responses do not expose
+// it. job_items survives unchanged because nothing references jobs with an
+// enforced foreign key.
+const migration8RenameJobs = `
+CREATE TABLE jobs_new (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	action TEXT NOT NULL CHECK(action IN ('restore','archive','scan','rename')),
+	folder_label TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT 'pending'
+		CHECK(state IN ('pending','running','done','failed')),
+	total INTEGER NOT NULL DEFAULT 0,
+	done INTEGER NOT NULL DEFAULT 0,
+	failed INTEGER NOT NULL DEFAULT 0,
+	error TEXT NOT NULL DEFAULT '',
+	payload TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	started_at INTEGER,
+	finished_at INTEGER
+);
+
+INSERT INTO jobs_new (id, action, folder_label, state, total, done, failed, error,
+	payload, created_at, started_at, finished_at)
+	SELECT id, action, folder_label, state, total, done, failed, error,
+		'', created_at, started_at, finished_at FROM jobs;
+
+DROP TABLE jobs;
+ALTER TABLE jobs_new RENAME TO jobs;
+
+CREATE INDEX idx_jobs_state ON jobs(state, id);
 `

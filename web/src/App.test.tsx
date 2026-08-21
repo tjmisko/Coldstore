@@ -69,6 +69,28 @@ describe("App", () => {
     expect(document.title).toBe("CameraRoll — Coldstore");
   });
 
+  it("should render a cosmetic folder name while keeping the stable label in selectors", async () => {
+    stub = stubFetch([
+      {
+        url: "/api/v1/status",
+        body: aStatus({
+          folders: [{ ...aStatus().folders[0], display_name: "Family Photos" }],
+        }),
+      },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Family Photos", level: 2 }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('[data-folder-nav="CameraRoll"]')).toHaveTextContent(
+      "Family Photos",
+    );
+    expect(document.title).toBe("Family Photos — Coldstore");
+  });
+
   it("should name the tab Settings when the config view is showing", async () => {
     stub = stubFetch([
       { url: "/api/v1/status", body: aStatus() },

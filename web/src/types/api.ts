@@ -14,7 +14,7 @@ export type PinSource = "user" | "restore";
  *  wedge banner sends them to triage. */
 export type FileSort = "mtime" | "size" | "name" | "pinned_at" | "captured";
 
-export type JobAction = "restore" | "archive" | "scan";
+export type JobAction = "restore" | "archive" | "scan" | "rename";
 export type JobState = "pending" | "running" | "done" | "failed";
 
 export interface ApiError {
@@ -111,12 +111,17 @@ export interface FolderConfig {
   last_enforced_at: number | null;
 }
 
-/** PUT /api/v1/folders/{label} accepts only these three fields, all optional.
+/** PUT /api/v1/folders/{label} accepts only these UI-owned fields, all optional.
  *  syncthing_id and syncthing_path are TOML-owned and are ignored. */
 export interface UpdateFolderRequest {
   budget_bytes?: number;
   grace_minutes?: number;
   enabled?: boolean;
+  display_name?: string;
+}
+
+export interface RenamePathResponse extends JobCreated {
+  warnings: string[];
 }
 
 export interface PersistentPath {
@@ -139,6 +144,7 @@ export interface FolderCounts {
 
 export interface FolderStatus {
   label: string;
+  display_name: string;
   /** On-device footprint: synced + archiving + restoring. pinned_bytes is a
    *  SUBSET of this, never an addend. */
   synced_size_bytes: number;

@@ -97,6 +97,7 @@ function FolderCard({ folder, live, selected, onSelect, onSave }: FolderCardProp
   // the owner wrote in the file.
   const [budget, setBudget] = useState(formatSize(folder.budget_bytes));
   const [grace, setGrace] = useState(String(folder.grace_minutes));
+  const [displayName, setDisplayName] = useState(folder.display_name);
   const [budgetError, setBudgetError] = useState<string | null>(null);
   const [graceError, setGraceError] = useState<string | null>(null);
 
@@ -122,6 +123,13 @@ function FolderCard({ folder, live, selected, onSelect, onSave }: FolderCardProp
     await onSave({ grace_minutes: minutes });
   };
 
+  const commitDisplayName = async () => {
+    const clean = displayName.trim();
+    setDisplayName(clean);
+    if (clean === folder.display_name) return;
+    await onSave({ display_name: clean });
+  };
+
   return (
     <div
       className={`bg-surface rounded-lg p-4 border ${
@@ -132,7 +140,7 @@ function FolderCard({ folder, live, selected, onSelect, onSave }: FolderCardProp
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="font-medium flex items-center gap-2 flex-wrap">
-            {folder.folder_label}
+            {folder.display_name || folder.folder_label}
             {!folder.present_in_toml && <Chip tone="neutral">not in coldstore.toml</Chip>}
             {!folder.enabled && <Chip tone="neutral">disabled</Chip>}
             {live?.wedged && <Chip tone="danger">wedged</Chip>}
@@ -145,7 +153,7 @@ function FolderCard({ folder, live, selected, onSelect, onSave }: FolderCardProp
             {folder.syncthing_path}
           </p>
           <p className="text-meta text-ink-faint">
-            syncthing id {folder.syncthing_id || "-"} &middot; path and id come from coldstore.toml
+            stable label {folder.folder_label} &middot; syncthing id {folder.syncthing_id || "-"}
           </p>
         </div>
 
@@ -159,6 +167,31 @@ function FolderCard({ folder, live, selected, onSelect, onSave }: FolderCardProp
           />
           enabled
         </label>
+      </div>
+
+      <div className="mt-3">
+        <label
+          className="block text-meta text-ink-muted mb-1.5"
+          htmlFor={`display-name-${folder.folder_label}`}
+        >
+          Display name
+        </label>
+        <input
+          id={`display-name-${folder.folder_label}`}
+          type="text"
+          value={displayName}
+          placeholder={folder.folder_label}
+          data-display-name-input={folder.folder_label}
+          onChange={(event) => setDisplayName(event.target.value)}
+          onBlur={() => void commitDisplayName()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void commitDisplayName();
+          }}
+          className="w-full bg-raised border border-line-strong rounded-md px-2.5 py-1.5 text-base text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+        />
+        <p className="text-meta text-ink-muted mt-1.5">
+          Cosmetic only. The stable label and cold-storage paths do not change.
+        </p>
       </div>
 
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">

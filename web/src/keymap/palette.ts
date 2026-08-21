@@ -72,7 +72,7 @@ export function findCommand(name: string): PaletteCommand | null {
 }
 
 export interface CompletionContext {
-  folders: string[];
+  folders: (string | { label: string; name: string })[];
   filters: { key: string; label: string }[];
   views: string[];
   /** Command names the owner has run before, most recent first. */
@@ -139,7 +139,10 @@ interface Candidate {
 function argumentCandidates(command: PaletteCommand, context: CompletionContext): Candidate[] {
   switch (command.argument) {
     case "folder":
-      return context.folders.map((label) => ({ value: label, hint: "folder" }));
+      return context.folders.map((folder) => {
+        const choice = typeof folder === "string" ? { label: folder, name: folder } : folder;
+        return { value: choice.name, hint: choice.name === choice.label ? "folder" : choice.label };
+      });
     case "filter":
       return context.filters.map((f) => ({ value: f.key, hint: f.label }));
     case "view":
@@ -189,9 +192,30 @@ export function resolveCommandLine(line: string, context: CompletionContext): Pa
 
   switch (command.name) {
     case "folder": {
-      const label = matchOne(args, context.folders);
-      if (!label) return { ok: false, error: `no folder matching "${args}"` };
-      return { ok: true, action: { kind: "folder", label } };
+      const choices = context.folders.map((folder) =>
+        typeof folder === "string" ? { label: folder, name: folder } : folder,
+      );
+      const aliases = choices.flatMap((choice) => [
+        { value: choice.name, choice },
+        { value: choice.label, choice },
+      ]);
+      const lower = args.toLowerCase();
+      const uniqueChoices = (matched: typeof aliases) => [
+        ...new Map(matched.map((candidate) => [candidate.choice.label, candidate.choice])).values(),
+      ];
+      let found = uniqueChoices(aliases.filter((candidate) => candidate.value.toLowerCase() === lower));
+      if (found.length === 0) {
+        found = uniqueChoices(
+          aliases.filter((candidate) => candidate.value.toLowerCase().startsWith(lower)),
+        );
+      }
+      if (found.length === 0) {
+        const ranked = rankStrings(args, aliases, (candidate) => candidate.value);
+        found = uniqueChoices(ranked);
+      }
+      const choice = found.length === 1 ? found[0] : undefined;
+      if (!choice) return { ok: false, error: `no folder matching "${args}"` };
+      return { ok: true, action: { kind: "folder", label: choice.label } };
     }
     case "filter": {
       const key = matchOne(args, context.filters.map((f) => f.key));

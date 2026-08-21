@@ -1131,6 +1131,14 @@ func (c *Catalog) MarkFoldersAbsentFromTOML(declared []string) error {
 // grace_minutes alone. Returns false if no row with that label exists.
 func (c *Catalog) UpdateFolderPolicy(label string, budgetBytes *int64, graceMinutes *int,
 	enabled *bool) (found bool, err error) {
+	return c.UpdateFolderSettings(label, budgetBytes, graceMinutes, enabled, nil)
+}
+
+// UpdateFolderSettings extends UpdateFolderPolicy with the UI-owned cosmetic
+// display name. The stable TOML label and both Syncthing fields remain
+// impossible to write through this path.
+func (c *Catalog) UpdateFolderSettings(label string, budgetBytes *int64, graceMinutes *int,
+	enabled *bool, displayName *string) (found bool, err error) {
 
 	var exists int
 	err = c.db.QueryRow(`SELECT 1 FROM folder_configs WHERE folder_label = ?`, label).Scan(&exists)
@@ -1154,6 +1162,10 @@ func (c *Catalog) UpdateFolderPolicy(label string, budgetBytes *int64, graceMinu
 	if enabled != nil {
 		sets = append(sets, "enabled = ?")
 		args = append(args, boolToInt(*enabled))
+	}
+	if displayName != nil {
+		sets = append(sets, "display_name = ?")
+		args = append(args, *displayName)
 	}
 	if len(sets) == 0 {
 		return true, nil

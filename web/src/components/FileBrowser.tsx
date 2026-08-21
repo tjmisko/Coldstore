@@ -19,6 +19,7 @@ import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 
 interface FileBrowserProps {
   folder: string;
+  displayName?: string;
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
   onFolderChanged(): void;
@@ -66,6 +67,7 @@ const CHECKBOX_BOX =
 
 export function FileBrowser({
   folder,
+  displayName = folder,
   filterKey,
   onFilterChange,
   onFolderChanged,
@@ -187,7 +189,7 @@ export function FileBrowser({
       {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
           top of the first few characters of the folder name at 390px. Margin,
           not padding: the box has to move for a bounding-box test to see it. */}
-      <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{folder}</h2>
+      <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{displayName}</h2>
       <FilterBar active={filterKey} onChange={onFilterChange} near={near} onClearNear={() => setNear(null)} />
 
       {error && (
