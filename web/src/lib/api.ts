@@ -93,6 +93,12 @@ export interface FileFilters {
   pinSource?: PinSource;
   /** Unresolved section 4.1b conflicts only. */
   conflict?: boolean;
+  /** Repeated filters compose with AND; each path includes its descendants. */
+  tags?: string[];
+  /** True selects untagged files; false selects files carrying any tag. */
+  untagged?: boolean;
+  /** True selects non-empty descriptions; false selects empty descriptions. */
+  described?: boolean;
   capturedFrom?: string;
   capturedTo?: string;
   /** Metadata was scanned successfully but contained no capture date. */
@@ -118,6 +124,9 @@ export function fileFilterParams(filters: FileFilters): URLSearchParams {
   if (filters.pinned !== undefined) params.set("pinned", filters.pinned ? "1" : "0");
   if (filters.pinSource) params.set("pin_source", filters.pinSource);
   if (filters.conflict) params.set("conflict", "1");
+  for (const tag of filters.tags ?? []) params.append("tag", tag);
+  if (filters.untagged !== undefined) params.set("untagged", filters.untagged ? "1" : "0");
+  if (filters.described !== undefined) params.set("described", filters.described ? "1" : "0");
   if (filters.capturedFrom) params.set("captured_from", filters.capturedFrom);
   if (filters.capturedTo) params.set("captured_to", filters.capturedTo);
   if (filters.undated) params.set("undated", "1");

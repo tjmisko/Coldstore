@@ -15,9 +15,11 @@ const (
 	maxTagDepth        = 6
 	MaxBulkTagIDs      = 5000
 	MaxBulkTagNames    = 16
+	MaxTagFilters      = 8
 )
 
 var ErrNoSuchTag = errors.New("no such tag")
+var ErrTooManyTagFilters = errors.New("too many tag filters")
 
 type InvalidTagNameError struct {
 	Name   string
@@ -160,6 +162,21 @@ func normalizeTagNames(raw []string) ([]normalizedTag, error) {
 		}
 		seen[normalized.fold] = true
 		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+// NormalizeTagFilters applies the same vocabulary rules as every tag write
+// and returns deduplicated folded paths suitable for exact/subtree queries.
+// SQLite NOCASE is ASCII-only, so callers must never fold these in SQL.
+func NormalizeTagFilters(raw []string) ([]string, error) {
+	normalized, err := normalizeTagNames(raw)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, len(normalized))
+	for i := range normalized {
+		result[i] = normalized[i].fold
 	}
 	return result, nil
 }

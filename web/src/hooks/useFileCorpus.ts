@@ -34,9 +34,10 @@ interface Options {
  *  rank locally, and tops it up from the server when the window is not the
  *  whole folder.
  *
- *  Server-side `q` is `filename LIKE '%q%'` -- filename only, no ranking -- so
- *  it can find a file the window missed but cannot order the results. Merging
- *  its hits into the corpus and ranking the union locally gets both. */
+ *  Server-side `q` is a literal substring over filename, path, description and
+ *  assigned tag paths, with no ranking. It can find a file the window missed
+ *  but cannot order the results. Merging its hits into the corpus and ranking
+ *  the union locally gets both. */
 export function useFileCorpus({ filters, query, enabled }: Options): FileCorpus {
   const [corpus, setCorpus] = useState<{ key: string; files: FileRecord[]; truncated: boolean }>({
     key: "",

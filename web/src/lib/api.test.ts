@@ -91,6 +91,21 @@ describe("file query building", () => {
     expect(fileFilterParams({}).has("pinned")).toBe(false);
   });
 
+  it("should preserve repeated tag filters and both sides of tri-state filters", () => {
+    const selected = fileFilterParams({
+      tags: ["Trips/Iceland", "People/Alice"],
+      untagged: true,
+      described: false,
+    });
+    expect(selected.getAll("tag")).toEqual(["Trips/Iceland", "People/Alice"]);
+    expect(selected.get("untagged")).toBe("1");
+    expect(selected.get("described")).toBe("0");
+
+    const inverse = fileFilterParams({ untagged: false, described: true });
+    expect(inverse.get("untagged")).toBe("0");
+    expect(inverse.get("described")).toBe("1");
+  });
+
   it("should serialize a real 0,0 nearby centre for both file endpoints", () => {
     const params = fileFilterParams({ near: { lat: 0, lon: 0, radiusKm: 25 } });
     expect(params.get("near")).toBe("0,0,25");

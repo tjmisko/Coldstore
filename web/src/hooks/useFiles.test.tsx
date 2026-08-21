@@ -14,9 +14,13 @@ afterEach(() => {
 describe("useFiles", () => {
   it("should ask the API for exactly the filter it was given", async () => {
     stub = stubFetch([{ url: "/api/v1/files", body: [aFile()] }]);
+    const tags = ["Trips/Iceland", "People/Alice"];
 
     const { result } = renderHook(() =>
-      useFiles({ folder: "CameraRoll", pinned: true, pinSource: "restore", sort: "pinned_at" }),
+      useFiles({
+        folder: "CameraRoll", pinned: true, pinSource: "restore", sort: "pinned_at",
+        tags, untagged: false, described: true,
+      }),
     );
 
     await waitFor(() => expect(result.current.files).toHaveLength(1));
@@ -25,6 +29,10 @@ describe("useFiles", () => {
     expect(url).toContain("pinned=1");
     expect(url).toContain("pin_source=restore");
     expect(url).toContain("sort=pinned_at");
+    const params = new URL(url, "http://coldstore.test").searchParams;
+    expect(params.getAll("tag")).toEqual(tags);
+    expect(params.get("untagged")).toBe("0");
+    expect(params.get("described")).toBe("1");
   });
 
   it("should not show the previous filter's rows while the new filter is loading", async () => {

@@ -221,6 +221,9 @@ type FileQuery struct {
 	CapturedTo   string
 	Undated      bool
 	Near         *NearFilter
+	Tags         []string
+	Untagged     *bool
+	Described    *bool
 	// Conflicted selects rows with an UNRESOLVED section 4.1b conflict: a
 	// 'conflict' event newer than the last 'conflict_resolved' event for the
 	// same (folder, path). It is the only filter backed by the events table,
@@ -262,8 +265,40 @@ func (q FileQuery) filter() (string, []any) {
 		args = append(args, q.Extension)
 	}
 	if q.Search != "" {
-		clause.WriteString(" AND filename LIKE ?")
-		args = append(args, "%"+q.Search+"%")
+		textPattern := "%" + escapeLike(q.Search) + "%"
+		tagPattern := "%" + escapeLike(strings.ToLower(q.Search)) + "%"
+		clause.WriteString(` AND (
+			filename LIKE ? ESCAPE '\'
+			OR relative_path LIKE ? ESCAPE '\'
+			OR description LIKE ? ESCAPE '\'
+			OR EXISTS (
+				SELECT 1 FROM file_tags qft JOIN tags qt ON qt.id = qft.tag_id
+				WHERE qft.file_id = files.id AND qt.name_fold LIKE ? ESCAPE '\'
+			)
+		)`)
+		args = append(args, textPattern, textPattern, textPattern, tagPattern)
+	}
+	for _, fold := range q.Tags {
+		clause.WriteString(` AND EXISTS (
+			SELECT 1 FROM file_tags tft JOIN tags tt ON tt.id = tft.tag_id
+			WHERE tft.file_id = files.id
+			  AND (tt.name_fold = ? OR tt.name_fold LIKE ? ESCAPE '\')
+		)`)
+		args = append(args, fold, tagSubtreePattern(fold))
+	}
+	if q.Untagged != nil {
+		if *q.Untagged {
+			clause.WriteString(" AND NOT EXISTS (SELECT 1 FROM file_tags uft WHERE uft.file_id = files.id)")
+		} else {
+			clause.WriteString(" AND EXISTS (SELECT 1 FROM file_tags uft WHERE uft.file_id = files.id)")
+		}
+	}
+	if q.Described != nil {
+		if *q.Described {
+			clause.WriteString(" AND description <> ''")
+		} else {
+			clause.WriteString(" AND description = ''")
+		}
 	}
 	if q.Pinned != nil {
 		clause.WriteString(" AND pinned = ?")
@@ -318,6 +353,11 @@ const conflictedClause = `
 
 // ListFiles queries files with filtering, sorting, and pagination.
 func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
+	var err error
+	q, err = normalizeSearchFilters(q)
+	if err != nil {
+		return nil, err
+	}
 	if q.Near != nil && len(q.IDs) == 0 && !q.Near.valid() {
 		return nil, ErrInvalidNear
 	}
@@ -396,6 +436,10 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 // ListFiles, ignores sort/offset/limit, orders by id ASC, and returns at most
 // capacity ids together with the true total. ids is always non-nil.
 func (c *Catalog) ListFileIDs(q FileQuery, capacity int) (ids []int64, total int64, err error) {
+	q, err = normalizeSearchFilters(q)
+	if err != nil {
+		return nil, 0, err
+	}
 	if capacity <= 0 {
 		capacity = 20000
 	}

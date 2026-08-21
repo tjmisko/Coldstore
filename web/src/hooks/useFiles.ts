@@ -41,6 +41,7 @@ export interface UseFiles {
 export function useFiles(options: UseFilesOptions): UseFiles {
   const {
     folder, status, extension, search, pinned, pinSource, conflict,
+    tags, untagged, described,
     capturedFrom, capturedTo, undated, near,
     sort, limit = 60,
   } = options;
@@ -48,10 +49,12 @@ export function useFiles(options: UseFilesOptions): UseFiles {
   const filters = useMemo<FileFilters>(
     () => ({
       folder, status, extension, search, pinned, pinSource, conflict,
+      tags, untagged, described,
       capturedFrom, capturedTo, undated, near,
     }),
     [
       folder, status, extension, search, pinned, pinSource, conflict,
+      tags, untagged, described,
       capturedFrom, capturedTo, undated, near,
     ],
   );
