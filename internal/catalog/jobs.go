@@ -10,13 +10,29 @@ import (
 // ErrNoSuchJob is returned when a job id has no row.
 var ErrNoSuchJob = errors.New("no such job")
 
+// ErrPairSelectionChanged means a caller preflighted a closed pair selection,
+// but a pairing update added a member before the job transaction began.
+var ErrPairSelectionChanged = errors.New("pair selection changed after preflight")
+
 const jobColumns = `id, action, folder_label, state, total, done, failed, error,
 	created_at, started_at, finished_at`
 
-// CreateJob inserts the job and its items in ONE transaction. Duplicate ids in
-// fileIDs collapse via the (job_id, file_id) primary key and total is set from
-// the count actually inserted. A scan job has total = 1 and no items.
+// CreateJob expands pair groups and inserts the job and its items in ONE
+// transaction. Duplicate ids collapse via the (job_id, file_id) primary key
+// and total is set from the count actually inserted. A scan job has total = 1
+// and no items.
 func (c *Catalog) CreateJob(action, folderLabel string, fileIDs []int64) (int64, error) {
+	return c.createJob(action, folderLabel, fileIDs, false)
+}
+
+// CreatePreflightedMoveJob is CreateJob with a closure check for restore
+// selections whose bytes were already approved by the API. It never silently
+// inserts a companion which was absent from that budget preflight.
+func (c *Catalog) CreatePreflightedMoveJob(action, folderLabel string, fileIDs []int64) (int64, error) {
+	return c.createJob(action, folderLabel, fileIDs, true)
+}
+
+func (c *Catalog) createJob(action, folderLabel string, fileIDs []int64, requireClosed bool) (int64, error) {
 	switch action {
 	case JobActionRestore, JobActionArchive, JobActionScan:
 	default:
@@ -43,6 +59,17 @@ func (c *Catalog) CreateJob(action, folderLabel string, fileIDs []int64) (int64,
 	if action == JobActionScan {
 		total = 1
 	} else {
+		// Expansion belongs in the same transaction as job_items. A pairing
+		// write can never land between discovering a companion and committing
+		// the selection, which would enqueue half a Live Photo.
+		expanded, expandErr := expandPairGroups(tx, fileIDs)
+		if expandErr != nil {
+			return 0, fmt.Errorf("creating job items: %w", expandErr)
+		}
+		if requireClosed && !equalIDSets(fileIDs, expanded) {
+			return 0, ErrPairSelectionChanged
+		}
+		fileIDs = expanded
 		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO job_items (job_id, file_id) VALUES (?, ?)`)
 		if err != nil {
 			return 0, fmt.Errorf("creating job items: %w", err)
@@ -69,6 +96,25 @@ func (c *Catalog) CreateJob(action, folderLabel string, fileIDs []int64) (int64,
 		return 0, fmt.Errorf("creating job: commit: %w", err)
 	}
 	return jobID, nil
+}
+
+func equalIDSets(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[int64]struct{}, len(a))
+	for _, id := range a {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != len(b) {
+		return false
+	}
+	for _, id := range b {
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // NextPendingJob returns the lowest-id job that still has work, or nil.

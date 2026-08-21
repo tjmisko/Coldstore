@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -190,7 +191,8 @@ func (m *Mover) SetPinnedBulk(ids []int64, pinned bool) (int64, error) {
 // ---------------------------------------------------------------------------
 // moves
 
-// ArchiveByID moves one synced file to cold storage on explicit instruction.
+// ArchiveByID moves a synced file and every member of its pair group to cold
+// storage on explicit instruction.
 //
 // It bypasses the grace period and the budget -- a manual or job-driven
 // archive is something the owner asked for -- but it applies the free-space
@@ -199,7 +201,13 @@ func (m *Mover) SetPinnedBulk(ids []int64, pinned bool) (int64, error) {
 func (m *Mover) ArchiveByID(id int64) (*catalog.FileRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.archiveLocked(id, true)
+	if _, err := m.cat.GetFileByID(id); err != nil {
+		return nil, err
+	}
+	if err := m.archiveGroupLocked([]int64{id}, true, false); err != nil {
+		return nil, err
+	}
+	return m.cat.GetFileByID(id)
 }
 
 // ArchiveAutomatic is the quota tick's variant. It differs from ArchiveByID in
@@ -210,10 +218,83 @@ func (m *Mover) ArchiveByID(id int64) (*catalog.FileRecord, error) {
 func (m *Mover) ArchiveAutomatic(id int64) (*catalog.FileRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.archiveLocked(id, false)
+	if _, err := m.cat.GetFileByID(id); err != nil {
+		return nil, err
+	}
+	if err := m.archiveGroupLocked([]int64{id}, false, false); err != nil {
+		return nil, err
+	}
+	return m.cat.GetFileByID(id)
 }
 
-func (m *Mover) archiveLocked(id int64, explicit bool) (*catalog.FileRecord, error) {
+// ArchiveAutomaticGroup is the quota path. The supplied ids must already be a
+// complete group whose pin/persistence/grace checks the daemon performed. If
+// pairing changed since that snapshot, no bytes move and the next tick retries
+// with a fresh group rather than archiving an unchecked companion.
+func (m *Mover) ArchiveAutomaticGroup(ids []int64) ([]catalog.FileRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.archiveGroupLocked(ids, false, true); err != nil {
+		return nil, err
+	}
+	expanded, err := m.cat.ExpandPairGroups(ids)
+	if err != nil {
+		return nil, err
+	}
+	return m.cat.FilesByIDs(expanded)
+}
+
+func (m *Mover) archiveGroupLocked(ids []int64, explicit, requireClosed bool) error {
+	expanded, err := m.cat.ExpandPairGroups(ids)
+	if err != nil {
+		return err
+	}
+	if requireClosed && !sameIDs(ids, expanded) {
+		return fmt.Errorf("%w: pair membership changed before automatic archive", ErrFileStateChanged)
+	}
+	files, err := m.cat.FilesByIDs(expanded)
+	if err != nil {
+		return err
+	}
+	if len(files) != len(expanded) {
+		return fmt.Errorf("%w: pair group contains a file that no longer exists", ErrFileStateChanged)
+	}
+	covered := make(map[int64]struct{}, len(files))
+	for i := range files {
+		covered[files[i].ID] = struct{}{}
+		switch files[i].Status {
+		case catalog.StatusSynced:
+			if !explicit && files[i].Pinned {
+				return fmt.Errorf("%w: paired file %d became pinned", ErrFileStateChanged, files[i].ID)
+			}
+			fc, err := m.folderForMove(files[i].FolderLabel)
+			if err != nil {
+				return err
+			}
+			if err := m.sourceUnchanged(filepath.Join(fc.SyncthingPath, files[i].RelativePath), &files[i]); err != nil {
+				return err
+			}
+		case catalog.StatusArchived:
+			// Already in the requested state: an idempotent no-op.
+		default:
+			return fmt.Errorf("%w: paired file %d is %s", ErrFileStateChanged,
+				files[i].ID, files[i].Status)
+		}
+	}
+
+	for i := range files {
+		if files[i].Status == catalog.StatusArchived {
+			continue
+		}
+		if _, err := m.archiveLocked(files[i].ID, explicit, covered); err != nil {
+			m.logSplitGroups(expanded, "archive group stopped after a member failed")
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Mover) archiveLocked(id int64, explicit bool, covered map[int64]struct{}) (*catalog.FileRecord, error) {
 	// Re-read inside the lock; never trust what the caller was holding.
 	rec, err := m.cat.GetFileByID(id)
 	if err != nil {
@@ -225,6 +306,7 @@ func (m *Mover) archiveLocked(id int64, explicit bool) (*catalog.FileRecord, err
 	if rec.Status != catalog.StatusSynced {
 		return nil, fmt.Errorf("%w: file %d is %s", ErrFileStateChanged, id, rec.Status)
 	}
+	m.warnPairSplit(rec, covered)
 
 	fc, err := m.folderForMove(rec.FolderLabel)
 	if err != nil {
@@ -360,11 +442,78 @@ func (m *Mover) claimForArchive(id int64, explicit bool) (bool, error) {
 	return m.cat.ClaimUnpinnedFile(id)
 }
 
-// RestoreByID moves one archived file back to its syncthing folder and pins it.
+// RestoreByID moves an archived file and every member of its pair group back
+// to the Syncthing folder and pins each member that was restored.
 func (m *Mover) RestoreByID(id int64) (*catalog.FileRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, err := m.cat.GetFileByID(id); err != nil {
+		return nil, err
+	}
+	if err := m.restoreGroupLocked([]int64{id}); err != nil {
+		return nil, err
+	}
+	return m.cat.GetFileByID(id)
+}
 
+func (m *Mover) restoreGroupLocked(ids []int64) error {
+	expanded, err := m.cat.ExpandPairGroups(ids)
+	if err != nil {
+		return err
+	}
+	files, err := m.cat.FilesByIDs(expanded)
+	if err != nil {
+		return err
+	}
+	if len(files) != len(expanded) {
+		return fmt.Errorf("%w: pair group contains a file that no longer exists", ErrFileStateChanged)
+	}
+	hasArchived := false
+	for i := range files {
+		hasArchived = hasArchived || files[i].Status == catalog.StatusArchived
+	}
+	for i := range files {
+		switch files[i].Status {
+		case catalog.StatusArchived:
+			if _, err := m.folderForMove(files[i].FolderLabel); err != nil {
+				return err
+			}
+			src := m.restorer.ColdPath(files[i].FolderLabel, files[i].RelativePath)
+			if _, err := os.Lstat(src); err != nil {
+				return fmt.Errorf("%w: cannot stat %s: %v", ErrFileStateChanged, src, err)
+			}
+		case catalog.StatusSynced:
+			if !hasArchived {
+				continue // the complete selection is already restored
+			}
+			// Already in the requested state, but it is still a required group
+			// member. Refuse the restore if the catalog is stale and its bytes
+			// have disappeared or changed; otherwise restoring the archived
+			// members would leave a physical split behind.
+			fc, err := m.folderForMove(files[i].FolderLabel)
+			if err != nil {
+				return err
+			}
+			if err := m.sourceUnchanged(
+				filepath.Join(fc.SyncthingPath, files[i].RelativePath), &files[i]); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%w: paired file %d is %s", ErrFileStateChanged,
+				files[i].ID, files[i].Status)
+		}
+	}
+	for i := range files {
+		if files[i].Status == catalog.StatusArchived {
+			if _, err := m.restoreLocked(files[i].ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Mover) restoreLocked(id int64) (*catalog.FileRecord, error) {
 	rec, err := m.cat.GetFileByID(id)
 	if err != nil {
 		return nil, err
@@ -439,6 +588,93 @@ func (m *Mover) RestoreByID(id int64) (*catalog.FileRecord, error) {
 		"folder", rec.FolderLabel, "path", rec.RelativePath, "size", rec.SizeBytes)
 
 	return m.cat.GetFileByID(id)
+}
+
+// WithPairLock runs pairing-sensitive catalog work under the same lock as every
+// move. Metadata uses it while publishing a candidate cluster; job creation
+// uses it from expansion through restore preflight and item insertion. The
+// callback must not call another Mover method.
+func (m *Mover) WithPairLock(ctx context.Context, fn func(context.Context) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fn(ctx)
+}
+
+func sameIDs(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[int64]struct{}, len(a))
+	for _, id := range a {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != len(b) {
+		return false
+	}
+	for _, id := range b {
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Mover) warnPairSplit(rec *catalog.FileRecord, covered map[int64]struct{}) {
+	if rec.PairKey == "" {
+		return
+	}
+	ids, err := m.cat.ExpandPairGroups([]int64{rec.ID})
+	if err != nil {
+		m.logger.Error("cannot check pair before archive", "id", rec.ID, "error", err)
+		return
+	}
+	files, err := m.cat.FilesByIDs(ids)
+	if err != nil {
+		m.logger.Error("cannot read pair before archive", "id", rec.ID, "error", err)
+		return
+	}
+	for i := range files {
+		if files[i].ID == rec.ID || files[i].Status != catalog.StatusSynced {
+			continue
+		}
+		if _, ok := covered[files[i].ID]; ok {
+			continue
+		}
+		details := fmt.Sprintf("archive of %s omitted synced pair member %s (%s)",
+			rec.RelativePath, files[i].RelativePath, rec.PairKey)
+		m.cat.LogEvent("pair_split", rec.FolderLabel, rec.RelativePath, details)
+		m.logger.Warn("archive would split a pair", "folder", rec.FolderLabel,
+			"path", rec.RelativePath, "sibling", files[i].RelativePath, "pair_key", rec.PairKey)
+		return
+	}
+}
+
+func (m *Mover) logSplitGroups(ids []int64, reason string) {
+	files, err := m.cat.FilesByIDs(ids)
+	if err != nil {
+		return
+	}
+	byKey := make(map[string][]catalog.FileRecord)
+	for _, file := range files {
+		if file.PairKey != "" {
+			byKey[file.FolderLabel+"\x00"+file.PairKey] = append(
+				byKey[file.FolderLabel+"\x00"+file.PairKey], file)
+		}
+	}
+	for _, group := range byKey {
+		archived, synced := false, false
+		for _, file := range group {
+			archived = archived || file.Status == catalog.StatusArchived
+			synced = synced || file.Status == catalog.StatusSynced
+		}
+		if archived && synced {
+			m.cat.LogEvent("pair_split", group[0].FolderLabel, group[0].RelativePath,
+				reason+": "+group[0].PairKey)
+		}
+	}
 }
 
 // adoptDeviceCopy is the restore-conflict resolution: a file has reappeared at

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,18 +75,31 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		if !s.validateSelection(w, req.IDs) {
 			return
 		}
+		err := s.mover.WithPairLock(r.Context(), func(context.Context) error {
+			expanded, err := s.cat.ExpandPairGroups(req.IDs)
+			if err != nil {
+				return err
+			}
+			req.IDs = expanded
+			if req.Action == catalog.JobActionRestore && !req.Force {
+				if !s.restorePreflight(w, req.IDs) {
+					return nil // restorePreflight already answered the request
+				}
+			}
+			s.enqueue(w, req.Action, "", req.IDs)
+			return nil
+		})
+		if err != nil {
+			s.logger.Error("expanding paired job selection", "action", req.Action, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to create job")
+		}
+		return
 	case catalog.JobActionScan:
 		// ids are ignored for a scan; folder scopes it, "" means all folders.
 		req.IDs = nil
 	default:
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown action %q", req.Action))
 		return
-	}
-
-	if req.Action == catalog.JobActionRestore && !req.Force {
-		if !s.restorePreflight(w, req.IDs) {
-			return
-		}
 	}
 
 	folder := ""
@@ -214,8 +228,18 @@ func (s *Server) persistentPatterns(label string) ([]string, error) {
 // enqueue commits the job and pokes the worker. The poke is what makes a bulk
 // action feel immediate; without it the job waits for the worker's 2 s ticker.
 func (s *Server) enqueue(w http.ResponseWriter, action, folder string, ids []int64) {
-	jobID, err := s.cat.CreateJob(action, folder, ids)
+	var jobID int64
+	var err error
+	if action == catalog.JobActionRestore {
+		jobID, err = s.cat.CreatePreflightedMoveJob(action, folder, ids)
+	} else {
+		jobID, err = s.cat.CreateJob(action, folder, ids)
+	}
 	if err != nil {
+		if errors.Is(err, catalog.ErrPairSelectionChanged) {
+			writeError(w, http.StatusConflict, "pair membership changed; retry the restore")
+			return
+		}
 		s.logger.Error("creating job", "action", action, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create job")
 		return

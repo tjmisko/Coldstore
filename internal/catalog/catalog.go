@@ -741,14 +741,14 @@ func (c *Catalog) FolderLabelsForIDs(ids []int64) ([]string, error) {
 	return labels, nil
 }
 
-// CountEvictionsUpTo reports how many files the daemon would have to offload
-// out of a folder, oldest first, to free the given number of bytes. capped is
+// CountEvictionsUpTo reports how many physical files the daemon would have to
+// offload, in oldest-group-first order, to free the given bytes. Pair groups
+// are indivisible: their synced bytes and file counts are accumulated together. capped is
 // true when the scan hit its 50,000-row ceiling before reaching the target.
 //
-// protected is called with each candidate's relative path and reports whether
-// the offloader would refuse to evict that file for good; the row is then
-// counted neither towards the running total nor towards count. Pass nil to
-// count every unpinned synced row.
+// protected is called with each synced member's relative path and reports
+// whether the offloader would refuse to evict it for good; one protected
+// member excludes the complete group. Pass nil for no extra protection.
 //
 // The predicate is a parameter rather than another WHERE clause because the
 // one thing that protects a file permanently -- a persistent glob (design
@@ -770,35 +770,57 @@ func (c *Catalog) CountEvictionsUpTo(folder string, bytes int64,
 	}
 	const scanCap = 50000
 
-	rows, err := c.db.Query(`
-		SELECT relative_path, size_bytes FROM files
+	seeds, err := c.queryFiles(`SELECT `+fileColumns+` FROM files
 		WHERE folder_label = ? AND status = 'synced' AND pinned = 0
 		ORDER BY MAX(file_mtime, file_atime) ASC
 		LIMIT ?`, folder, scanCap)
 	if err != nil {
 		return 0, false, err
 	}
-	defer rows.Close()
+	ids := make([]int64, 0, len(seeds))
+	for _, seed := range seeds {
+		ids = append(ids, seed.ID)
+	}
+	expanded, err := c.ExpandPairGroups(ids)
+	if err != nil {
+		return 0, false, err
+	}
+	files, err := c.FilesByIDs(expanded)
+	if err != nil {
+		return 0, false, err
+	}
 
 	var running int64
-	var scanned int
-	for rows.Next() {
-		var relPath string
-		var size int64
-		if err := rows.Scan(&relPath, &size); err != nil {
-			return 0, false, err
+	for _, group := range orderedPairGroups(files) {
+		eligible := true
+		var groupBytes int64
+		groupCount := 0
+		for _, file := range group.files {
+			switch file.Status {
+			case StatusArchived:
+				continue
+			case StatusSynced:
+				if file.Pinned || (protected != nil && protected(file.RelativePath)) {
+					eligible = false
+				}
+				groupBytes += file.SizeBytes
+				groupCount++
+			default:
+				// The mover refuses missing and transient members before
+				// moving anything, so the estimate must not count this group.
+				eligible = false
+			}
 		}
-		scanned++
-		if protected != nil && protected(relPath) {
+		if !eligible || groupCount == 0 {
 			continue
 		}
-		running += size
-		count++
+		running += groupBytes
+		count += groupCount
 		if running >= bytes {
-			return count, false, rows.Err()
+			return count, false, nil
 		}
 	}
-	return count, scanned == scanCap, rows.Err()
+	return count, len(seeds) == scanCap, nil
 }
 
 // FolderCounts returns the per-status file tally for a folder.
@@ -822,24 +844,45 @@ func (c *Catalog) FolderCounts(folder string) (FolderCounts, error) {
 	return fc, err
 }
 
-// OffloadCandidates returns unpinned synced files in a folder, oldest first by
-// max(mtime, atime), capped at limit rows. A limit of zero or less means
-// defaultOffloadCandidateLimit. The cap is mandatory and there is deliberately
-// no unbounded variant: without it a 50,000-file camera roll materialises
-// 50,000 records on every tick.
+// OffloadCandidates seeds from unpinned synced rows, expands every selected
+// pair group, and returns complete groups ordered by their newest member's
+// max(mtime, atime). The seed query is capped at limit rows; expansion may
+// exceed the cap because truncating a group would recreate the split bug. A
+// limit of zero or less means defaultOffloadCandidateLimit.
 //
-// Persistent-glob filtering and the grace cutoff happen in the caller, in Go:
+// Returned companion rows can be pinned or already archived so the caller can
+// apply policy to the group as a unit. Persistent-glob filtering and the grace cutoff happen in the caller, in Go:
 // file_mtime and file_atime are TEXT columns, so comparing a bound Go time
 // against them is a string comparison with a timezone-dependent result.
 func (c *Catalog) OffloadCandidates(folder string, limit int) ([]FileRecord, error) {
 	if limit <= 0 {
 		limit = defaultOffloadCandidateLimit
 	}
-	return c.queryFiles(`SELECT `+fileColumns+`
+	seeds, err := c.queryFiles(`SELECT `+fileColumns+`
 		FROM files
 		WHERE folder_label = ? AND status = 'synced' AND pinned = 0
 		ORDER BY MAX(file_mtime, file_atime) ASC
 		LIMIT ?`, folder, limit)
+	if err != nil || len(seeds) == 0 {
+		return seeds, err
+	}
+	ids := make([]int64, 0, len(seeds))
+	for _, seed := range seeds {
+		ids = append(ids, seed.ID)
+	}
+	expanded, err := c.ExpandPairGroups(ids)
+	if err != nil {
+		return nil, err
+	}
+	files, err := c.FilesByIDs(expanded)
+	if err != nil {
+		return nil, err
+	}
+	ordered := make([]FileRecord, 0, len(files))
+	for _, group := range orderedPairGroups(files) {
+		ordered = append(ordered, group.files...)
+	}
+	return ordered, nil
 }
 
 // FileCount returns the total number of files matching the given status (or all if empty).

@@ -95,6 +95,19 @@ func (c *Catalog) RecordMetadataFailure(id int64, errMsg string, attemptedAt int
 	return err
 }
 
+// RecordPairingFailure requeues a file whose bulk metadata succeeded but whose
+// conditional Live Photo probe failed. Without clearing meta_scanned_at a
+// timeout would become a permanent silent non-pair, because the bulk queue
+// would never present the candidate again.
+func (c *Catalog) RecordPairingFailure(id int64, errMsg string, attemptedAt int64) error {
+	_, err := c.db.Exec(`
+		UPDATE files SET meta_scanned_at = NULL,
+			meta_attempts = meta_attempts + 1,
+			meta_last_attempt = ?, meta_error = ?
+		WHERE id = ?`, attemptedAt, errMsg, id)
+	return err
+}
+
 // ResetMetadataFailures clears only failed-attempt bookkeeping so an owner
 // rescan can retry repaired files. Successful rows stay scanned. Pass an empty
 // label to reset every folder.

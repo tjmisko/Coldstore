@@ -43,6 +43,11 @@ func (d *Daemon) extractMetadata(ctx context.Context) {
 		}
 		return filepath.Join(folderPaths[file.FolderLabel], file.RelativePath)
 	}
+	pairIndex, err := d.buildPairCandidateIndex()
+	if err != nil {
+		d.logger.Error("cannot build Live Photo candidate index", "error", err)
+		pairIndex = nil
+	}
 
 	seen := make(map[int64]bool)
 	processed := 0
@@ -79,12 +84,15 @@ func (d *Daemon) extractMetadata(ctx context.Context) {
 		}
 
 		d.logger.Info("extracting metadata", "count", len(fresh), "batch", batch+1)
-		d.processMetadataQueue(ctx, fresh, sourcePathFn, d.cfg.Daemon.ThumbnailWorkers)
+		d.processMetadataQueue(ctx, fresh, sourcePathFn, d.cfg.Daemon.ThumbnailWorkers, pairIndex)
 		processed += len(fresh)
 	}
 
 	if processed > 0 {
 		d.logger.Info("metadata pass complete", "processed", processed)
+	}
+	if ctx.Err() == nil {
+		d.backfillPairCandidates(ctx, pairIndex, sourcePathFn)
 	}
 }
 
@@ -92,13 +100,19 @@ func (d *Daemon) extractMetadata(ctx context.Context) {
 // concurrency. Shutdown never burns an attempt: only an extraction error while
 // the parent context remains live is attributed to the file.
 func (d *Daemon) processMetadataQueue(ctx context.Context, files []catalog.FileRecord,
-	sourcePathFn func(*catalog.FileRecord) string, workers int) {
+	sourcePathFn func(*catalog.FileRecord) string, workers int, indexes ...pairCandidateIndex) {
 
 	if len(files) == 0 {
 		return
 	}
 	if workers <= 0 {
 		workers = defaultMetadataWorkerCount
+	}
+	var pairIndex pairCandidateIndex
+	if len(indexes) > 0 {
+		pairIndex = indexes[0]
+	} else if _, ok := d.metadataExtractor.(metadataCandidateProber); ok {
+		pairIndex, _ = d.buildPairCandidateIndex()
 	}
 
 	queue := make(chan catalog.FileRecord, len(files))
@@ -119,8 +133,8 @@ func (d *Daemon) processMetadataQueue(ctx context.Context, files []catalog.FileR
 
 				value, err := d.metadataExtractor.Extract(ctx, sourcePathFn(&file), file.Extension)
 				if err == nil {
-					if writeErr := d.cat.SetExtractedMetadata(file.ID, value, time.Now().Unix()); writeErr != nil {
-						d.logger.Error("recording extracted metadata",
+					if writeErr := d.recordMetadataAndPair(ctx, file, value, sourcePathFn, pairIndex); writeErr != nil {
+						d.logger.Error("recording extracted metadata and pairing candidates",
 							"folder", file.FolderLabel, "path", file.RelativePath, "error", writeErr)
 						continue
 					}

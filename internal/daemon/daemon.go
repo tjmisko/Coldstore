@@ -99,6 +99,7 @@ type Daemon struct {
 	// that order while preventing overlapping passes.
 	derivedRunning atomic.Bool
 	derivedWG      sync.WaitGroup
+	pairAttempted  sync.Map // candidate-cluster key -> struct{}, reset on restart
 }
 
 // New builds the daemon around an existing Mover. The mover is a parameter
@@ -390,18 +391,9 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 	var evictedBytes int64
 	defer func() { d.reportBulkEviction(folder.FolderLabel, evicted, evictedBytes) }()
 
-	for _, file := range candidates {
+	for _, group := range groupPairCandidates(candidates) {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("offload loop interrupted: %w", err)
-		}
-
-		// Redundant with OffloadCandidates' `pinned = 0` and deliberately so:
-		// a future caller that forgets the SQL filter still cannot offload a
-		// pinned file. The authoritative layer is ClaimUnpinnedFile, inside
-		// the mover, which also catches a pin that lands after this query ran
-		// (design section 4.1).
-		if file.Pinned {
-			continue
 		}
 
 		// Re-query rather than decrementing a running total. Another actor --
@@ -417,28 +409,51 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 			break
 		}
 
-		// Skip persistent paths
-		if IsPersistent(file.RelativePath, allPatterns) {
-			continue
+		eligible := true
+		ids := make([]int64, 0, len(group))
+		groupCount := 0
+		var groupBytes int64
+		for i := range group {
+			file := &group[i]
+			ids = append(ids, file.ID)
+			switch file.Status {
+			case catalog.StatusArchived:
+				continue
+			case catalog.StatusSynced:
+			default:
+				eligible = false // missing/transient groups are never partially moved
+				continue
+			}
+			// Every policy is group-wide: protecting the still protects its
+			// MOV and sidecars, and vice versa.
+			if file.Pinned || IsPersistent(file.RelativePath, allPatterns) {
+				eligible = false
+				continue
+			}
+			lastActivity := file.FileMtime
+			if file.FileAtime.After(lastActivity) {
+				lastActivity = file.FileAtime
+			}
+			if lastActivity.After(graceCutoff) {
+				eligible = false
+				continue
+			}
+			diskPath := filepath.Join(folder.SyncthingPath, file.RelativePath)
+			info, err := os.Stat(diskPath)
+			if err != nil {
+				d.logger.Warn("cannot stat paired candidate, skipping group",
+					"path", diskPath, "error", err)
+				eligible = false
+				continue
+			}
+			if info.ModTime().After(graceCutoff) {
+				eligible = false
+				continue
+			}
+			groupCount++
+			groupBytes += file.SizeBytes
 		}
-
-		// Skip files within grace period, using max(mtime, atime)
-		lastActivity := file.FileMtime
-		if file.FileAtime.After(lastActivity) {
-			lastActivity = file.FileAtime
-		}
-		if lastActivity.After(graceCutoff) {
-			continue
-		}
-
-		// Re-check mtime on disk to avoid racing with active transfers
-		diskPath := filepath.Join(folder.SyncthingPath, file.RelativePath)
-		info, err := os.Stat(diskPath)
-		if err != nil {
-			d.logger.Warn("cannot stat file, skipping", "path", diskPath, "error", err)
-			continue
-		}
-		if info.ModTime().After(graceCutoff) {
+		if !eligible || groupCount == 0 {
 			continue
 		}
 
@@ -446,7 +461,7 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 		// every row transition. The automatic variant claims with
 		// ClaimUnpinnedFile, so a pin that commits between the candidate
 		// query above and the claim inside wins and the file stays (D2).
-		if _, err := d.mover.ArchiveAutomatic(file.ID); err != nil {
+		if _, err := d.mover.ArchiveAutomaticGroup(ids); err != nil {
 			switch {
 			case errors.Is(err, ErrColdStorageFull), errors.Is(err, ErrFolderUnavailable):
 				// Neither condition gets better by trying the next file.
@@ -455,19 +470,40 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 			case errors.Is(err, ErrFileStateChanged):
 				// Somebody else -- a pin, a restore, a manual archive -- got
 				// to this row first. Entirely ordinary.
-				d.logger.Debug("skipping file claimed by another actor",
-					"path", file.RelativePath, "error", err)
+				d.logger.Debug("skipping pair group claimed by another actor",
+					"path", group[0].RelativePath, "error", err)
 			default:
-				d.logger.Error("offload failed", "path", file.RelativePath, "error", err)
+				d.logger.Error("offload failed", "path", group[0].RelativePath, "error", err)
 			}
 			continue
 		}
 
-		evicted++
-		evictedBytes += file.SizeBytes
+		evicted += groupCount
+		evictedBytes += groupBytes
 	}
 
 	return nil
+}
+
+// groupPairCandidates preserves the catalog's oldest-group-first order while
+// making the policy loop structurally incapable of treating a member alone.
+func groupPairCandidates(files []catalog.FileRecord) [][]catalog.FileRecord {
+	groups := make([][]catalog.FileRecord, 0)
+	indexes := make(map[string]int)
+	for _, file := range files {
+		key := fmt.Sprintf("id:%d", file.ID)
+		if file.PairKey != "" {
+			key = file.FolderLabel + "\x00" + file.PairKey
+		}
+		idx, ok := indexes[key]
+		if !ok {
+			idx = len(groups)
+			indexes[key] = idx
+			groups = append(groups, nil)
+		}
+		groups[idx] = append(groups[idx], file)
+	}
+	return groups
 }
 
 // reportBulkEviction writes one loud event when a single enforcement pass took
