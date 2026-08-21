@@ -41,7 +41,7 @@ Tailwind neutral palette, `system-ui` type, no design tokens, no light mode.
 - [ ] C2. Selection affordance -- bigger, prettier checkboxes, tuned for photo tiles.
       Current: native `<input type="checkbox" class="accent-blue-500">` at `top-1 left-1`
       inside a `bg-black/50` chip (`web/src/components/Gallery.tsx:229`). Too small to hit on
-      a phone, and it disappears until hover.
+      a phone, and it disappears until hover. See BUG-1.
 - [ ] C3. Restyle the tile: badges, pin toggle, archived/pinned states, hover/focus rings.
 - [ ] C4. Restyle the file browser table, filter bar, selection bar, status bar, config panel.
 - [ ] C5. Empty states, loading states, error states.
@@ -100,6 +100,20 @@ and extension-less bookmark files render as a grey tile with the filename.
 - [ ] H8. Preview must work for **archived** files too, or explicitly say "restore to preview".
 
 ---
+
+## Bugs found while driving the seeded demo
+
+Not in the owner's notes -- found by screenshotting the running UI at 1440x900 and 390x844.
+
+- [ ] **BUG-1. Gallery selection is unreachable on a touch device.** The tile checkbox is
+      `opacity-0 group-hover:opacity-100` (`web/src/components/Gallery.tsx:227`). A phone has
+      no hover, so the checkbox never appears, and the only other way in --
+      `anySelected` -- cannot be reached because nothing can be selected first. The
+      gallery's entire multi-select feature is dead on the device the owner browses photos
+      from. Long-press to enter selection mode is the conventional fix; it lands with C2.
+- [ ] **BUG-2. The mobile sidebar toggle sits on top of the folder heading.** The button is
+      `fixed top-3 left-3` (`web/src/App.tsx:58`) and the heading has no left inset at that
+      breakpoint, so "CameraRoll" renders as "meraRoll" at 390px.
 
 ## Open questions for the interview
 
