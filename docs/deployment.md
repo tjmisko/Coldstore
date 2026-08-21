@@ -427,7 +427,9 @@ except root and the service user.
 
 Edit at minimum:
 
-- `cold_storage_path` -- the dataset from step 2.
+- `cold_storage_path` -- the volume from step 2.
+- `require_mountpoint = true`, unless cold storage really is a plain directory on
+  an existing filesystem. See [`[storage]`](#storage).
 - `listen_addr` -- this box's LAN address, from `ip -4 -o addr show scope global`.
 - one `[[folders]]` block per Syncthing folder, with an absolute `path`, a unique
   `label`, and a seed `budget`.
