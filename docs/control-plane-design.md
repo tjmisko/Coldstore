@@ -1076,6 +1076,13 @@ comment saying why, and a regression test (§8, step 3).
 
 ### 4.1a Persistent glob semantics — `filepath.Match` is the wrong matcher
 
+> **Status: IMPLEMENTED** (`daemon.IsPersistent`, `internal/daemon/scanner.go`), with the three
+> rules below, `match_count` on `GET /folders/{label}/persistent`, and the rules restated in
+> `coldstore.toml.example`, `docs/deployment.md` and the ConfigPanel help text. The example
+> patterns are now `Albums/Starred/` and `Favorites/`. The "logged once at load" half is not
+> implemented: a malformed pattern matches nothing and shows `protects 0 files`, which is the
+> feedback that matters, but nothing writes a log line about it.
+
 `IsPersistent` (`scanner.go`) uses `filepath.Match`, whose `*` **does not cross a path separator**.
 Both patterns shipped in `coldstore.toml.example` are of the form `Albums/Starred/*`, so today they
 protect exactly the loose files directly inside `Albums/Starred/` and **nothing nested**. An owner
@@ -2496,6 +2503,14 @@ Query parameters:
 | `offset` | int | ≥ 0, else 400 |
 | `limit` | int | 1–500; **clamped to 500**; ≤ 0 or non-numeric → 400 |
 
+**Two parameters were added beyond this table when the frontend was built, because §7.4 asks for
+two things this contract could not express:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `conflict` | `"1"` \| `"0"` | Unresolved §4.1b conflicts only: a `conflict` event newer than the last `conflict_resolved` event for the same (folder, path). The Conflicts filter pairs it with `status=archived`. `ResolveConflict` now logs `conflict_resolved`, so a resolved row leaves the filter |
+| `sort` | also `pinned_at` | Ascending, oldest pin first — what §7.4's "Auto-pinned on restore" and §7.6's wedge remedy are specified to show. Every sort now ends in `id ASC`, so an OFFSET-paged scroll cannot repeat a row when the sort key ties |
+
 `catalog.FileQuery` gains `Pinned *bool`, `PinSource string` and `IDs []int64` to match. `ids` is
 capped at 500 because it is a post-job reconciliation helper, not a bulk channel; §7.3's
 `refetchIds` chunks at 500 or falls back to a plain `refetch()`.
@@ -3306,6 +3321,19 @@ for synced files.
 
 ### 7.9 ConfigPanel — repaired
 
+> **Status: IMPLEMENTED, with three deviations.**
+> * The budget editor is a free-text size parsed by `parseSize`, not a "number of GB" box.
+>   Budgets here span kilobytes (the demo installation) to terabytes, and a GB-only input renders
+>   a 200 kB budget as `0.0002`. It accepts exactly what `coldstore.toml` accepts.
+> * **The stray-archive line is not built.** §5.11's sweep is NOT IMPLEMENTED, so nothing writes
+>   the report it would render, and a panel that can only ever say "nothing to report" is a claim
+>   that cold storage has been swept when it has not.
+> * **The `.stignore` chip is not built**, for the same reason: §3.8 is outstanding.
+>
+> The Syncthing chip renders only when `syncthing_type` is populated, which it never is until
+> §3.7 lands. The "unverified — set `[syncthing] api_key`" variant is deliberately omitted: there
+> is no Syncthing client in the daemon, so it would tell the owner to set a key that does nothing.
+
 Once reconciliation seeds `folder_configs`, the cards appear (today the panel shows only "No folder
 configs in database" on a fresh install, which also makes the persistent-path editor unreachable —
 it renders only behind `selectedFolder`, which is only set by a button inside a card that never
@@ -3628,7 +3656,7 @@ the call times out and no file exists at the final thumbnail path.
 enabled and one warning is logged.
 `TestEmptyAPIKeySkipsTheCheck` — no key, no requests attempted, one `syncthing_unverified` event.
 
-**Step 11 — Frontend foundations.**
+**Step 11 — Frontend foundations.** *(landed)*
 `lib/format.ts` (SI, one copy), `lib/api.ts`, the compliant hook shape retrofitted onto `useStatus`,
 `useFolders`, `usePersistentPaths` and `useFiles`, the `App.tsx` lint fix, the error banner, and the
 `ToastProvider`.
@@ -3636,7 +3664,10 @@ enabled and one warning is logged.
 succeeds. Manually: stop the daemon, load the UI, see "coldstore API unreachable" instead of a blank
 pane.
 
-**Step 12 — Frontend control plane, and the last deletions.**
+**Step 12 — Frontend control plane, and the last deletions.** *(landed; see §7.9 for what was
+deliberately not built, and note the proof below is now two suites: `make test-web` — vitest and
+Testing Library over jsdom — and `make test-playwright` — Chromium against the real daemon over a
+freshly seeded demo installation.)*
 `useSelection`, `useJob`, `useJobRunner`, `SelectionBar` with the bulk-pin endpoint and the
 over-budget confirm dialog, the Gallery tile conversion with checkbox, pin and the six filters, the
 FileBrowser checkbox and pin columns with the Archive action, the Lightbox pin, the StatusBar

@@ -11,11 +11,14 @@
 | `dev` | `go run ./cmd/coldstore --config coldstore.toml` | Run the Go daemon locally during development |
 | `dev-web` | `cd web && npm run dev` (Vite dev server) | Run the React frontend with hot reload |
 | `lint` | `cd web && npm run lint` (ESLint) | Check the React code before pushing; CI runs the same command |
-| `test` | `go test ./...` | Run unit tests (no build tags) |
+| `test` | `go test ./...` | Run Go unit tests (no build tags) |
+| `test-web` | `cd web && npm run test` (vitest) | Run the React unit and component tests: jsdom, stubbed `fetch`, no daemon and no browser |
 | `test-e2e` | `go test -tags e2e -count=1 -timeout 120s ./tests/e2e/...` | In-process e2e against real SQLite + temp dirs. No Docker, no Syncthing, no network |
 | `test-e2e-live` | `go test -tags e2e_live -count=1 -timeout 1800s -v ./tests/e2e/...`; the suite's own `TestMain` builds the binary, brings up two Syncthing devices plus the containerised daemon, pairs them, and tears down | Prove the things only real Syncthing can prove: that an offload propagates as a deletion, and a restore propagates back |
 | `test-e2e-live-down` | `docker compose -p coldstore-live -f docker/compose.test.yml down -v` | Clean up after `COLDSTORE_LIVE_KEEP=1` or an interrupted run |
-| `test-playwright` | `go test -tags playwright ./tests/e2e/...` | Run browser-level UI tests (stubs for now) |
+| `test-playwright` | `cd web && npx playwright test` | Drive the embedded UI in a real browser against a real daemon over a freshly seeded demo installation |
+| `demo` | `go run ./scripts/seed-demo`, then run the binary against it | A complete demo installation on `http://127.0.0.1:8090`, covering every state the control plane renders |
+| `node-modules-boundary` | Writes a stub `go.mod` into `web/node_modules` | Never called by hand; `deps` runs it so `go build ./...` does not walk into npm packages that ship Go source |
 | `clean` | Remove the `coldstore` binary and the built frontend, then restore the tracked `internal/api/dist/.gitkeep` stub | Reset build artifacts |
 | `install-binary` | `install -m 755 ./coldstore /usr/local/bin/coldstore`, with no build step | The runbook's install step: `make build && sudo make install-binary` |
 | `install` | Run `build`, then `install-binary` | Convenient, but **not** under `sudo`: it builds as root and leaves root-owned `web/dist/`, `internal/api/dist/` and `./coldstore` behind, which breaks the next unprivileged `make build` |
@@ -205,20 +208,56 @@ Written down so nobody reads a green run as more than it is.
   single most likely production failure -- is not exercised here. The container runs the
   bare binary.
 - **The SPA is not built into the test image**, so the live tier asserts nothing about the
-  frontend. The `frontend` CI job and the Playwright stubs own that.
+  frontend. The `frontend` CI job and the Playwright tier own that.
 
-### Playwright Stubs
+### React unit and component tests (`make test-web`)
+
+```bash
+make test-web
+# cd web && npm run test   (vitest run)
+```
+
+Vitest with jsdom and Testing Library, in `web/src/**/*.test.{ts,tsx}`. No daemon, no
+browser: `fetch` is replaced by `stubFetch` (`web/src/test/harness.tsx`), which answers by
+URL and method, records every call, and **throws on a request no test set up** -- an
+unexpected request is a defect, not a 404 to absorb quietly.
+
+`renderWithToasts` provides the toast context and collects what was reported, so a test
+asserts on the sentence the owner is shown rather than on a spy that proves only that
+something was called.
+
+What this tier is for: query building, selection semantics, the budget-bar arithmetic, the
+pin and restore repaint rules, the 409 confirm dialog's wording, and the error banner. All
+of it is deterministic and runs in a couple of seconds.
+
+### Browser tests (`make test-playwright`)
 
 ```bash
 make test-playwright
-# go test -tags playwright ./tests/e2e/...
+# cd web && npx playwright test
 ```
 
-Guarded by `//go:build playwright`. Currently all four tests skip immediately (`tests/e2e/playwright_stub_test.go:1-22`). Placeholders exist for:
-- Gallery view
-- File browser
-- Restore flow
-- Config panel
+`web/playwright.config.ts` starts `scripts/playwright-server.sh`, which builds the
+frontend into `internal/api/dist/`, seeds a throwaway installation under
+`/tmp/coldstore-e2e` with `scripts/seed-demo`, and runs the **real daemon** against it. So
+these tests drive the bundle the binary actually ships, over the real API, over a real
+SQLite catalog -- not a dev server and not a mock.
+
+`reuseExistingServer` is false and `workers` is 1, both deliberately: the assertions are
+written against a freshly seeded catalog, and several tests move real files, so a reused
+daemon or a second worker would have them asserting against each other's restores.
+
+The suite covers the flows a unit test cannot: shift-click ranges across the real grid, a
+bulk restore that runs as a job and repaints its rows as synced and pinned, the budget
+pre-flight dialog, resolving a conflict and watching the row leave the Conflicts tab, a
+budget edited in Settings surviving a reload, and a persistent pattern reporting how many
+files it really protects.
+
+Browsers are not installed by `npm ci`. Once per machine:
+
+```bash
+cd web && npx playwright install --with-deps chromium
+```
 
 ## CI Pipeline
 
@@ -231,6 +270,16 @@ Defined in `.github/workflows/ci.yml`. Triggers on push to `main` and on pull re
 2. `npm ci`
 3. `npm run lint` -- ESLint, including the React 19 `react-hooks` rules
 4. `npm run build` -- `tsc -b` typecheck plus the Vite production build
+5. `npm run test` -- the vitest unit and component suite
+
+**`playwright`** (runs always), `timeout-minutes: 20`:
+1. Checkout + setup Go + setup Node 22
+2. Install `ffmpeg` (the seeder generates thumbnails)
+3. `npm ci`, then `npx playwright install --with-deps chromium` -- `npm ci` installs the
+   runner, never the browsers
+4. `npx playwright test`, which starts the daemon itself through
+   `scripts/playwright-server.sh`
+5. On failure, upload `web/playwright-report` and `web/test-results`
 
 **`fresh-clone-build`** (runs always):
 1. Checkout + setup Go + setup Node 22 -- **no npm cache, no `npm ci`**
@@ -344,7 +393,8 @@ back into an untested claim.
 | Unit test for a package | `internal/<pkg>/*_test.go` | none |
 | E2E daemon/API test | `tests/e2e/<name>_test.go` | `e2e` |
 | Live test against the container and two real Syncthing devices | `tests/e2e/live_<name>_test.go` | `e2e_live` (alone -- never `e2e,e2e_live`) |
-| Browser test | `tests/e2e/<name>_test.go` | `playwright` |
+| React unit or component test | `web/src/<area>/<name>.test.tsx` | none (vitest) |
+| Browser test | `web/e2e/<name>.spec.ts` | none (playwright) |
 
 ### Build tag
 

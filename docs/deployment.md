@@ -783,25 +783,42 @@ The numeric part can be a float: `1.5TB`, `500MB`, `20GB` are all valid. Units u
 
 ### Persistent glob semantics
 
-Persistent patterns use Go's `filepath.Match` semantics:
+A persistent pattern marks files coldstore must never archive, whatever the budget says.
+Three rules are tried in order for each pattern (`daemon.IsPersistent`):
 
-- `*` matches any sequence of non-separator characters. It does **not** cross directory boundaries.
-- `?` matches any single non-separator character.
-- `[abc]` matches any character in the set.
-- Patterns are matched against the file's **relative path** within the folder.
+1. **A pattern ending in `/` or `/*` protects the entire subtree beneath it.**
+   `Albums/Starred/` and `Albums/Starred/*` both protect
+   `Albums/Starred/2019/IMG_1.jpg`.
+2. Otherwise the pattern is matched against the **full relative path** with Go's
+   `filepath.Match`, whose `*` does not cross a `/`. `Albums/*.raw` matches
+   `Albums/a.raw` and not `Albums/2019/a.raw`.
+3. Otherwise, if the pattern contains no `/`, it is matched against the **base name**, so
+   `*.raw` protects `Albums/2019/a.raw` wherever it sits.
+
+`?` matches a single non-separator character and `[abc]` matches a character in the set,
+as in `filepath.Match`. A malformed pattern matches nothing; it never matches everything.
 
 Examples:
 
 ```toml
 persistent = [
-  "Albums/Starred/*",      # all files directly inside Albums/Starred/
-  "Albums/Starred/*/*",    # one level deeper
-  "important.txt",         # a specific file at the folder root
-  "Docs/*.pdf",            # PDFs in the Docs/ directory only
+  "Albums/Starred/",       # the whole subtree, at any depth
+  "important.txt",         # that filename, anywhere in the folder
+  "Docs/*.pdf",            # PDFs directly inside Docs/, not in its subdirectories
 ]
 ```
 
-To protect an entire subtree, you need a pattern for each depth level -- `*` alone will not recurse. Persistent patterns can also be added at runtime via the API; those are stored in the `persistent_paths` table in the catalog database.
+Rule 1 exists because the version before it did not. Under plain `filepath.Match`,
+`Albums/Starred/*` protected exactly the loose files directly inside that directory and
+nothing nested -- so an owner whose starred albums were filed by year watched the folder
+they had explicitly marked never-archive empty off their phone one subfolder at a time,
+while two loose files at its root stayed put.
+
+Patterns can also be added and removed at runtime in **Settings** in the web UI; they live
+in the `persistent_paths` table in the catalog. The editor shows how many of the folder's
+on-device files each pattern currently protects, because a pattern that protects nothing
+looks exactly like one that protects everything -- a freshly typed pattern reading
+"protects 0 files" is the only warning you get that your favourites are unprotected.
 
 ## systemd setup
 

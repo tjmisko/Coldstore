@@ -25,6 +25,9 @@ make frontend     # build React app and copy to internal/api/dist/
 make build        # build frontend + Go binary
 make lint         # eslint the React app (CI runs the same command)
 make test         # go test ./...
+make test-web     # vitest: React unit and component tests (jsdom, stubbed fetch)
+make test-playwright  # chromium against the real daemon over a seeded demo install
+make demo         # seed a demo installation and run the daemon on it, :8090
 make install      # install binary to /usr/local/bin
 ```
 
@@ -44,8 +47,25 @@ Copy `coldstore.toml.example` to `coldstore.toml` and edit. See `docs/` for deta
 go test ./...                                          # unit
 go test -tags e2e -count=1 ./tests/e2e/...             # in-process e2e
 make test-e2e-live                                     # docker: the daemon + TWO real syncthing devices
+make test-web                                          # vitest + Testing Library, jsdom
+make test-playwright                                   # chromium against the real daemon
 cd web && npm run lint                                 # eslint
 ```
+
+The frontend has two tiers of its own. `make test-web` is jsdom with `fetch` stubbed by
+`web/src/test/harness.tsx`, which throws on a request no test set up. `make
+test-playwright` starts `scripts/playwright-server.sh`, which builds the bundle into
+`internal/api/dist/`, seeds a throwaway installation with `scripts/seed-demo` and runs the
+real binary against it -- so the browser tier drives the embedded UI, not a dev server.
+Browsers are not installed by `npm ci`: `cd web && npx playwright install --with-deps
+chromium`, once per machine.
+
+`scripts/seed-demo` is the fixture both the demo and the browser tier depend on. It builds
+four folders covering every state the control plane renders: pins of both `pin_source`
+values, a wedged folder, a disabled one, one no longer declared in `coldstore.toml`, a
+conflicted file and thumbnail failures. Without it half the UI is unreachable, which is
+how it went unexercised for as long as it did. It refuses to delete a `-root` it did not
+create (marker file `.coldstore-demo`).
 
 The live tier (`tests/e2e/live_*.go`, tag `e2e_live` **alone**) drives the containerised
 daemon over its published port and two paired Syncthing devices over their REST APIs. It
@@ -57,8 +77,8 @@ that tag list: that only re-runs the in-process suite, which is how the target s
 whole life starting a stack it never talked to. Coverage limits are written down in
 docs/build-and-test.md.
 
-CI (`.github/workflows/ci.yml`) runs five jobs: `frontend` (eslint + tsc + vite build),
-`fresh-clone-build`, `unit`, `e2e`, and `e2e-live`.
+CI (`.github/workflows/ci.yml`) runs six jobs: `frontend` (eslint + tsc + vite build +
+vitest), `fresh-clone-build`, `unit`, `e2e`, `playwright`, and `e2e-live`.
 
 `fresh-clone-build` runs `make build` with **no preceding `npm ci`**, because that is
 the state the deployment runbook's build command actually runs in (`web/node_modules` is
