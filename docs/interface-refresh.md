@@ -386,3 +386,39 @@ Only one thing, and it blocks section B: **domain or no domain.**
   free-tier terms are a poor fit for serving full-resolution photo and video.
 - These are not exclusive. Tailscale now costs nothing to adopt and forecloses nothing.
 
+
+---
+
+## Integration notes
+
+Four branches are in flight. They did not all fork from the same commit, and two of
+them will need a follow-up pass rather than a clean merge.
+
+| Branch | Forked at | Carries |
+|---|---|---|
+| `feat/interface-refresh` | `9bcb7e8` (main tip) | A, C, BUG-1, BUG-2 |
+| `worktree-agent-a57eb908…` | `9bcb7e8` (main tip) | H, BUG-3 |
+| `worktree-agent-accbd99e…` | `37ad497` (6 behind) | D, E, F, G |
+| `feat/tagging-design` | `37ad497` (6 behind) | `docs/tagging-design.md` only |
+
+1. **The keyboard branch predates the design tokens.** It forked before
+   `feat/interface-refresh` existed, and it was deliberately told not to restyle
+   anything so that a parallel restyle could not collide with it. So every component it
+   adds -- command palette, context menu, fuzzy finder, `?` cheatsheet -- is written
+   against raw Tailwind defaults (`bg-neutral-900`, `text-blue-400`). Those classes
+   still exist, so the merge compiles and renders; it just renders off-system. **Sweep
+   the new components onto the tokens as the first commit after that merge**, and
+   re-run the `SWEEP CLEAN` grep:
+   `grep -rn "neutral-\|amber-\|emerald-\|indigo-\|red-[0-9]\|blue-\|sky-" web/src --include=*.tsx | grep -v '\.test\.'`
+2. **`Lightbox.tsx` is unswept on purpose** (C7). The documents branch is rewriting its
+   render path for BUG-3 and the document previews. Sweep it once that lands, not before.
+3. **Both `37ad497` branches are missing six commits of main** -- the deploy runbook
+   rewrite, `[storage] require_mountpoint`, the node-lockfile build fix. All docs and
+   config; rebase or merge main into them before review rather than after.
+4. **The z ladder is now literals, not tokens.** Tailwind v4 has no `--z-*` theme
+   namespace, so `z-sidebar` and friends silently produced class names that did not
+   exist. Any new overlay from the keyboard branch must use the documented literal
+   ladder in `web/src/index.css`, not invent a token.
+5. **The table's native checkbox is `sr-only`** with a styled span over it, so anything
+   that clicks `input[type=checkbox]` directly will hang on Playwright's actionability
+   check. Use the `selectRow` helper in `web/e2e/helpers.ts`, or click the label.
