@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { prefetchReaders } from "./components/readers/prefetch";
 import { ConfigPanel } from "./components/ConfigPanel";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { FileBrowser } from "./components/FileBrowser";
@@ -44,6 +45,21 @@ function Shell() {
   }
 
   useDocumentTitle(view === "config" ? "Settings" : selectedFolder);
+
+  // Warm the document readers once the app is idle, so the first PDF opened
+  // does not wait on a 1.5 MB fetch. Deliberately NOT part of the initial
+  // render path: the gallery grid is what the app opens on, and it must not
+  // pay for pdf.js. requestIdleCallback where it exists, a timeout where it
+  // does not (Safari).
+  useEffect(() => {
+    const idle = window.requestIdleCallback;
+    if (typeof idle === "function") {
+      const handle = idle(() => prefetchReaders());
+      return () => window.cancelIdleCallback?.(handle);
+    }
+    const timer = window.setTimeout(prefetchReaders, 2000);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const selectFolder = useCallback((label: string, filter: FilterKey = "all") => {
     setSelectedFolder(label);

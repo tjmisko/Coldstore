@@ -1,5 +1,6 @@
 import type { PreviewDecision } from "../lib/preview";
 import type { FileRecord } from "../types/api";
+import { DocumentReader } from "./readers";
 
 interface PreviewSurfaceProps {
   file: FileRecord;
@@ -60,10 +61,9 @@ export function PreviewSurface({ file, preview }: PreviewSurfaceProps) {
     case "pdf":
     case "epub":
     case "text":
-      // The readers land in H4-H6. Until then say so plainly rather than
-      // handing the browser bytes it will mishandle, which is the bug this
-      // component exists to fix.
-      return <PreviewUnavailable filename={file.filename} reason="" />;
+      // Behind the app's one React.lazy boundary, reached only now -- when a
+      // document is actually opened -- so the gallery grid never loads pdf.js.
+      return <DocumentReader file={file} preview={preview} />;
 
     case "none":
     default:

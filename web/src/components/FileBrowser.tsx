@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatCount, formatDate, formatSize } from "../lib/format";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
 import type { FileRecord } from "../types/api";
 import { FilterBar } from "./FilterBar";
+import { Lightbox } from "./Lightbox";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
 
@@ -41,6 +42,7 @@ export function FileBrowser({
 
   const observer = useRef<IntersectionObserver | null>(null);
   const headerCheckbox = useRef<HTMLInputElement>(null);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -127,7 +129,7 @@ export function FileBrowser({
             </tr>
           </thead>
           <tbody>
-            {files.map((file) => (
+            {files.map((file, index) => (
               <Row
                 key={file.id}
                 file={file}
@@ -140,6 +142,7 @@ export function FileBrowser({
                 onArchive={() => void actions.archive(file)}
                 onResolve={(keep) => void actions.resolve(file, keep)}
                 onDownload={() => actions.download(file)}
+                onPreview={() => setPreviewIndex(index)}
               />
             ))}
           </tbody>
@@ -168,6 +171,17 @@ export function FileBrowser({
         files={files}
         onFinished={onFinished}
       />
+
+      {previewIndex !== null && files[previewIndex] && (
+        <Lightbox
+          files={files}
+          initialIndex={previewIndex}
+          onClose={() => setPreviewIndex(null)}
+          onLoadMore={loadMore}
+          hasMore={hasMore}
+          actions={actions}
+        />
+      )}
     </div>
   );
 }
@@ -183,6 +197,7 @@ interface RowProps {
   onArchive(): void;
   onResolve(keep: "device" | "archive"): void;
   onDownload(): void;
+  onPreview(): void;
 }
 
 function Row({
@@ -196,6 +211,7 @@ function Row({
   onArchive,
   onResolve,
   onDownload,
+  onPreview,
 }: RowProps) {
   return (
     <tr
@@ -227,7 +243,20 @@ function Row({
         <PinToggle file={file} onPin={onPin} />
       </td>
       <td className="py-2 pr-4">
-        <span className="text-neutral-200">{file.filename}</span>
+        {/* A button rather than a row click, so the checkbox and shift-range
+            selection above keep behaving exactly as they did. Documents open
+            in this view, not the gallery -- App picks the gallery only for
+            folders whose name looks photographic -- so without an opener here
+            the document readers are unreachable from the one place documents
+            are. */}
+        <button
+          type="button"
+          data-preview-open
+          onClick={onPreview}
+          className="text-neutral-200 hover:text-white hover:underline text-left"
+        >
+          {file.filename}
+        </button>
         {file.thumb_attempts >= 3 && (
           <span
             className="ml-1 text-amber-400"

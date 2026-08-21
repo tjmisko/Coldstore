@@ -54,6 +54,22 @@ export interface FileRecord {
   detected_type?: string;
 }
 
+/** One entry of an EPUB's reading order. `path` is the archive ENTRY NAME,
+ *  already resolved against the package document's directory, and is appended
+ *  to the resource route verbatim. The server validates it again on the way
+ *  back in -- a path component from a URL never gets to skip that. */
+export interface EpubSection {
+  path: string;
+  /** A human label when the book's guide supplies one, else "". */
+  label: string;
+}
+
+/** GET /api/v1/files/{id}/epub */
+export interface EpubSpine {
+  title: string;
+  sections: EpubSection[];
+}
+
 export interface FolderConfig {
   id: number;
   folder_label: string;

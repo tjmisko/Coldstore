@@ -1,6 +1,7 @@
 import type {
   BulkPinResponse,
   CatalogEvent,
+  EpubSpine,
   FileIDsResponse,
   FileRecord,
   FileSort,
@@ -145,6 +146,18 @@ export const api = {
   previewUrl: (id: number) => `/api/v1/files/${id}/preview`,
 
   thumbnailUrl: (thumbnailPath: string) => `/api/v1/thumbnails/${thumbnailPath}`,
+
+  /** The reading order of an EPUB, extracted server-side by the same parser
+   *  that finds its cover. Nothing is unzipped in the browser. */
+  epubSpine: (id: number, init?: RequestInit) =>
+    apiFetch<EpubSpine>(`/api/v1/files/${id}/epub`, init),
+
+  /** One resource out of an EPUB. `resource` is an archive entry name, encoded
+   *  segment by segment so a "/" inside it stays a path separator and
+   *  everything else -- spaces, "#", "?" -- does not change what is asked
+   *  for. The server validates the decoded name against the archive root. */
+  epubResourceUrl: (id: number, resource: string) =>
+    `/api/v1/files/${id}/epub/${resource.split("/").map(encodeURIComponent).join("/")}`,
 
   pin: (id: number, pinned: boolean) =>
     apiFetch<PinResponse>(`/api/v1/files/${id}/pin`, { method: pinned ? "POST" : "DELETE" }),
