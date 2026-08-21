@@ -449,9 +449,10 @@ around; a preflight command that undoes that is worse than no preflight.
 will, so this checks the real configuration rather than a hand-typed
 approximation of it, and the secret never appears on a command line.
 
-If your systemd rejects `--property=EnvironmentFile=` (it is accepted on
-Debian 12's systemd 252 and later), skip the preflight rather than passing the
-password on a command line: install the unit, `systemctl start coldstore`, and
+If your systemd rejects `--property=EnvironmentFile=` -- verified working on
+systemd 259, not verified on every older release -- skip the preflight rather
+than passing the password on a command line: install the unit,
+`systemctl start coldstore`, and
 read the same validation output from `journalctl -u coldstore -b`. Everything
 `--check` prints, the daemon prints too -- and it prints it from *inside* the
 sandbox, which is strictly more informative.
