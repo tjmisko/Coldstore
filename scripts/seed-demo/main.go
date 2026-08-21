@@ -33,6 +33,7 @@ import (
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 	"github.com/tjmisko/coldstore/internal/daemon"
+	"github.com/tjmisko/coldstore/internal/filetype"
 	"github.com/tjmisko/coldstore/internal/thumbnail"
 )
 
@@ -292,6 +293,23 @@ func seedFile(cat *catalog.Catalog, folder, dir, relPath string, mtime time.Time
 	if err != nil {
 		return seeded{}, err
 	}
+
+	// The scanner's content sniff, applied here too. Without it the demo's
+	// catalog is missing a column the real one always has, and the difference
+	// is not cosmetic: the Documents folder is seeded DISABLED, so no scan
+	// ever reaches it, and its extension-less "bookmarks" file would stay
+	// unclassified forever. That is exactly the file the preview work exists
+	// for, and a fixture that cannot reach it is a fixture that hides the
+	// feature.
+	detected, err := filetype.SniffFile(full)
+	if err != nil {
+		return seeded{}, fmt.Errorf("sniffing %s: %w", relPath, err)
+	}
+	if err := cat.SetDetectedType(saved.ID, detected); err != nil {
+		return seeded{}, fmt.Errorf("recording the type of %s: %w", relPath, err)
+	}
+	saved.DetectedType = detected
+
 	return seeded{id: saved.ID, name: relPath, path: full}, nil
 }
 
@@ -476,23 +494,42 @@ func seedDocuments(cat *catalog.Catalog, root string) error {
 	dir := filepath.Join(root, "sync", folderDocuments)
 	base := time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)
 
+	// Every size below is load-bearing: the folder's total has to stay above
+	// its 100 kB budget so the demo shows the over-budget state, and below the
+	// 500 kB the Playwright budget test raises it to. The real documents are
+	// padded to hit them.
 	docs := []struct {
 		name string
 		size int
+		// blankFirstPage makes a PDF whose page 1 is an empty cover sheet, so
+		// the "first page with content" heuristic has a case to work on that
+		// is not a synthetic unit-test fixture.
+		blankFirstPage bool
+		corrupt        bool
 	}{
-		{"2026-Q1-Report.pdf", 15_000}, {"2026-Q2-Report.pdf", 18_200},
-		{"Meeting-Notes-Jan.txt", 2_400}, {"Meeting-Notes-Feb.txt", 3_100},
-		{"Meeting-Notes-Mar.txt", 1_800}, {"Budget-2026.csv", 8_500},
-		{"Project-Proposal.pdf", 12_300}, {"Team-Roster.csv", 950},
-		{"Architecture-Diagram.pdf", 22_000}, {"Release-Notes-v2.md", 4_200},
-		{"Invoice-0042.pdf", 6_700}, {"Contract-Draft.pdf", 9_800},
-		{"README.txt", 1_200}, {"Changelog.txt", 5_600},
-		{"Important/Passport-Scan.pdf", 25_000},
+		{name: "2026-Q1-Report.pdf", size: 15_000},
+		{name: "2026-Q2-Report.pdf", size: 18_200, blankFirstPage: true},
+		{name: "Meeting-Notes-Jan.txt", size: 2_400},
+		{name: "Meeting-Notes-Feb.txt", size: 3_100},
+		{name: "Meeting-Notes-Mar.txt", size: 1_800},
+		{name: "Budget-2026.csv", size: 8_500},
+		{name: "Project-Proposal.pdf", size: 12_300},
+		{name: "Team-Roster.csv", size: 950},
+		// Announces itself as a PDF and is not one, on purpose: without a file
+		// that fails, the thumbnail-failure glyph, the thumb_error text and
+		// the retry action are unreachable in the demo.
+		{name: "Architecture-Diagram.pdf", size: 22_000, corrupt: true},
+		{name: "Release-Notes-v2.md", size: 4_200},
+		{name: "Pocket-Guide.epub", size: 6_700},
+		{name: "Contract-Draft.pdf", size: 9_800},
+		{name: "README.txt", size: 1_200},
+		{name: "bookmarks", size: 5_600},
+		{name: "Important/Passport-Scan.pdf", size: 25_000},
 	}
 	for i, d := range docs {
+		write := documentWriter(d.name, d.size, d.blankFirstPage, d.corrupt)
 		if _, err := seedFile(cat, folderDocuments, dir, d.name,
-			base.Add(time.Duration(i)*10*24*time.Hour),
-			func(path string) error { return writeFiller(path, d.size) }); err != nil {
+			base.Add(time.Duration(i)*10*24*time.Hour), write); err != nil {
 			return err
 		}
 	}

@@ -70,12 +70,17 @@ const (
 	wedgeWarningRefreshSeconds = 24 * 60 * 60
 )
 
-// thumbnailExts are all extensions the thumbnail generator supports.
-var thumbnailExts = []string{
-	".jpg", ".jpeg", ".png", ".webp",
-	".heif", ".heic",
-	".mp4", ".mov", ".avi", ".mkv", ".webm",
-}
+// thumbnailExts are all extensions the thumbnail generator supports. It is
+// asked of the generator rather than written out here: a second hand-kept copy
+// of the list is how a format ends up supported by the generator and never
+// selected by the queue.
+var thumbnailExts = thumbnail.SupportedExtensions()
+
+// thumbnailTypes is the second arm of the queue predicate: the content-sniffed
+// types the generator can render. It is what reaches a file with no extension,
+// which an extension-keyed query cannot select no matter how many formats the
+// generator learns.
+var thumbnailTypes = thumbnail.SupportedDetectedTypes()
 
 type Daemon struct {
 	cfg                 *config.Config
@@ -622,7 +627,7 @@ func (d *Daemon) generateThumbnails(ctx context.Context) {
 			return
 		}
 
-		files, err := d.cat.FilesNeedingThumbnails(thumbnailExts, thumbnailBatchSize)
+		files, err := d.cat.FilesNeedingThumbnailsByType(thumbnailExts, thumbnailTypes, thumbnailBatchSize)
 		if err != nil {
 			d.logger.Error("querying files for thumbnails", "error", err)
 			return

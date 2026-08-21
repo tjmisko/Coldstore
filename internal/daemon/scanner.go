@@ -17,6 +17,7 @@ import (
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
+	"github.com/tjmisko/coldstore/internal/filetype"
 )
 
 // ErrScanInProgress is returned when a scan is asked for while one is already
@@ -225,10 +226,68 @@ func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRec
 		return fmt.Errorf("marking missing files in %s: %w", folder.FolderLabel, err)
 	}
 
+	sniffed := s.sniffFolder(ctx, folder)
+
 	s.logger.Info("folder scan complete",
 		"label", folder.FolderLabel, "files_scanned", scanned,
-		"marked_missing", missing, "conflicts", conflicts)
+		"marked_missing", missing, "conflicts", conflicts, "sniffed", sniffed)
 	return nil
+}
+
+// sniffBatchesPerScan bounds how much content sniffing one folder's scan does.
+//
+// The sniff is a queue, not a step of the walk: rows enter it on insert and on
+// a change of mtime or size, and leave it once their type is recorded. So a
+// steady-state scan sniffs only what actually changed, and the very first scan
+// of a large folder converges over a few ticks instead of doing one open per
+// file in a single pass while the daemon is also walking the tree.
+const sniffBatchesPerScan = 10
+
+// sniffFolder fills in detected_type for rows that do not have one yet, and
+// returns how many it filled.
+//
+// Nothing here can fail the scan. A file that cannot be opened -- deleted
+// between the walk and the sniff, unreadable, a dangling symlink -- records
+// filetype.TypeUnknown and leaves the queue, because the alternative is a
+// permanently unreadable file being re-opened on every scan forever.
+func (s *Scanner) sniffFolder(ctx context.Context, folder catalog.FolderConfigRecord) int {
+	total := 0
+	for range sniffBatchesPerScan {
+		if ctx.Err() != nil {
+			return total
+		}
+		files, err := s.cat.FilesNeedingSniff(folder.FolderLabel, 0)
+		if err != nil {
+			s.logger.Warn("querying files needing content sniff",
+				"folder", folder.FolderLabel, "error", err)
+			return total
+		}
+		if len(files) == 0 {
+			return total
+		}
+
+		for i := range files {
+			if ctx.Err() != nil {
+				return total
+			}
+			f := &files[i]
+			abs := filepath.Join(folder.SyncthingPath, f.RelativePath)
+			detected, err := filetype.SniffFile(abs)
+			if err != nil {
+				s.logger.Debug("content sniff failed",
+					"folder", folder.FolderLabel, "path", f.RelativePath, "error", err)
+			}
+			if err := s.cat.SetDetectedType(f.ID, detected); err != nil {
+				s.logger.Warn("recording detected type",
+					"folder", folder.FolderLabel, "path", f.RelativePath, "error", err)
+				// The row stays queued. Returning stops this pass from
+				// spinning over the same unwritable batch ten times.
+				return total
+			}
+			total++
+		}
+	}
+	return total
 }
 
 // scanSkipSuffixes and scanSkipNames are design section 5.9's skip table.

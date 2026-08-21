@@ -42,8 +42,9 @@ node-modules-boundary:
 
 frontend: deps
 	cd web && npm run build
-	rm -rf internal/api/dist
-	cp -r web/dist internal/api/dist
+	mkdir -p internal/api/dist
+	find internal/api/dist -mindepth 1 -delete
+	cp -r web/dist/. internal/api/dist/
 	touch internal/api/dist/.gitkeep
 
 build: frontend
@@ -125,7 +126,7 @@ demo: binary
 
 clean:
 	rm -f $(BINARY)
-	rm -rf internal/api/dist
+	find internal/api/dist -mindepth 1 -delete
 	mkdir -p internal/api/dist
 	touch internal/api/dist/.gitkeep
 

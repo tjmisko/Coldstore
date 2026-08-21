@@ -38,18 +38,18 @@ deployment.
 
 ### 3. Merge `feat/documents` onto `feat/interface-refresh`
 
-- [ ] Merge from the interface-refresh worktree. Do not merge keymap again.
-- [ ] Resolve `App.tsx`: preserve current providers/state and add the document-reader idle
+- [x] Merge from the interface-refresh worktree. Do not merge keymap again.
+- [x] Resolve `App.tsx`: preserve current providers/state and add the document-reader idle
       prefetch.
-- [ ] Resolve `FileBrowser.tsx`: keep context-menu state and add preview state. Filename click,
+- [x] Resolve `FileBrowser.tsx`: keep context-menu state and add preview state. Filename click,
       keyboard Open and context-menu Open must all open the preview; none may remain a no-op
       or silently become Download.
-- [ ] Resolve `Lightbox.tsx`: keep `Portal`, focus trap, scroll lock, `useKeymapLayer`, shared
+- [x] Resolve `Lightbox.tsx`: keep `Portal`, focus trap, scroll lock, `useKeymapLayer`, shared
       `FileActions`, shared `BulkActions` and operator behavior; add `resolvePreview` and
       `PreviewSurface`. Do not restore the documents branch's private window listener.
-- [ ] Reconcile `docs/interface-refresh.md` manually even if Git auto-merges it: retain the
+- [x] Reconcile `docs/interface-refresh.md` manually even if Git auto-merges it: retain the
       interface branch's A/C/BUG status and the documents branch's H completion/deviations.
-- [ ] Confirm migration 6 is exactly the documents `detected_type` migration and every older
+- [x] Confirm migration 6 is exactly the documents `detected_type` migration and every older
       schema migrates to it.
 
 ### 4. Finish the combined visual sweep

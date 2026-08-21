@@ -83,6 +83,64 @@ func TestIconAssetsAreEmbeddedAndTyped(t *testing.T) {
 	}
 }
 
+func TestPDFReaderAssetsAreEmbeddedWhenTheFrontendIsBuilt(t *testing.T) {
+	skipWithoutBuiltFrontend(t)
+
+	// pdf.js loads these at runtime and its defaults fetch them from a CDN.
+	// The daemon runs on a LAN with no egress -- often behind Tailscale with
+	// nothing else reachable -- so a CDN fetch is not a slow reader, it is a
+	// blank one. vite.config.ts copies them out of node_modules; this is what
+	// notices if that plugin ever stops running.
+	required := []string{
+		// The standard-14 font programs, for older PDFs that use Helvetica
+		// and friends without embedding them.
+		"dist/pdfjs/standard_fonts/FoxitSerif.pfb",
+		"dist/pdfjs/standard_fonts/LiberationSans-Regular.ttf",
+		// The JPEG 2000 and colour-management decoders, for scans.
+		"dist/pdfjs/wasm/openjpeg.wasm",
+		"dist/pdfjs/wasm/qcms_bg.wasm",
+	}
+	for _, name := range required {
+		if _, err := distFS.ReadFile(name); err != nil {
+			t.Errorf("%s is not embedded: %v", name, err)
+		}
+	}
+}
+
+func TestPDFReaderWasmIsTypedWhenServed(t *testing.T) {
+	skipWithoutBuiltFrontend(t)
+
+	// WebAssembly.instantiateStreaming refuses anything that is not
+	// application/wasm. Go's builtin MIME table carries .wasm, so this does
+	// not depend on the host having /etc/mime.types -- which the daemon's
+	// host may not.
+	rec := serveStatic(t, "/pdfjs/wasm/openjpeg.wasm")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/wasm") {
+		t.Errorf("Content-Type = %q, want application/wasm -- the SPA fallback may have served index.html", got)
+	}
+}
+
+func TestCJKCharacterMapsAreNotShippedInTheBinary(t *testing.T) {
+	skipWithoutBuiltFrontend(t)
+
+	// cmaps/ is 1.7 MB of CJK encodings this installation has no use for, and
+	// it is deliberately not copied. If it reappears, the copy plugin has
+	// started shipping everything.
+	entries, err := distFS.ReadDir("dist/pdfjs")
+	if err != nil {
+		t.Fatalf("reading dist/pdfjs: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() == "cmaps" {
+			t.Error("dist/pdfjs/cmaps is embedded; it is 1.7 MB of CJK encodings this install does not need")
+		}
+	}
+}
+
 func TestIconSourcesAreNotShippedInTheBinary(t *testing.T) {
 	skipWithoutBuiltFrontend(t)
 

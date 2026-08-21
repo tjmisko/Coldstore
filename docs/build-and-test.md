@@ -274,7 +274,8 @@ Defined in `.github/workflows/ci.yml`. Triggers on push to `main` and on pull re
 
 **`playwright`** (runs always), `timeout-minutes: 20`:
 1. Checkout + setup Go + setup Node 22
-2. Install `ffmpeg` (the seeder generates thumbnails)
+2. Install `ffmpeg` and `poppler-utils` (the daemon generates thumbnails against the
+   seeded install, and PDF thumbnails shell out to `pdftocairo`)
 3. `npm ci`, then `npx playwright install --with-deps chromium` -- `npm ci` installs the
    runner, never the browsers
 4. `npx playwright test`, which starts the daemon itself through
@@ -302,8 +303,10 @@ No `mkdir -p internal/api/dist` is needed in any job: `internal/api/dist/.gitkee
 
 **`e2e`** (runs always):
 1. Checkout + setup Go
-2. Install `ffmpeg` (needed for video thumbnail tests)
+2. Install `ffmpeg` and `poppler-utils` (needed for video and PDF thumbnail tests)
 3. `go test -tags e2e -count=1 -timeout 120s ./tests/e2e/...`
+
+`fresh-clone-build` deliberately installs neither. It builds; it does not render.
 
 **`e2e-live`** (runs on PRs and pushes to main), `timeout-minutes: 30`:
 1. Checkout + setup Go

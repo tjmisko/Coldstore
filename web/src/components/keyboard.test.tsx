@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import App from "../App";
@@ -406,6 +406,28 @@ describe("the text-entry guard", () => {
   });
 });
 
+describe("preview opening", () => {
+  it("should open the file under the keyboard cursor", async () => {
+    renderBrowser();
+    await browserReady();
+
+    type("<CR>");
+
+    expect(await screen.findByRole("dialog", { name: "file_01.jpg" })).toBeInTheDocument();
+    expect(document.querySelector("[data-preview-kind='image']")).not.toBeNull();
+  });
+
+  it("should open a filename click in the same preview lightbox", async () => {
+    renderBrowser();
+    await browserReady();
+
+    await userEvent.click(within(row(2)).getByRole("button", { name: "file_02.jpg" }));
+
+    expect(await screen.findByRole("dialog", { name: "file_02.jpg" })).toBeInTheDocument();
+    expect(document.querySelector("[data-preview-kind='image']")).not.toBeNull();
+  });
+});
+
 describe("the context menu", () => {
   it("should act on the whole selection when it is opened inside one", async () => {
     renderBrowser();
@@ -451,6 +473,17 @@ describe("the context menu", () => {
     type("<Space>m");
 
     expect(await screen.findByRole("menu")).toHaveTextContent("file_01.jpg");
+  });
+
+  it("should make Open show the preview instead of downloading", async () => {
+    renderBrowser();
+    await browserReady();
+
+    fireEvent.contextMenu(row(3));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Open" }));
+
+    expect(await screen.findByRole("dialog", { name: "file_03.jpg" })).toBeInTheDocument();
+    expect(document.querySelector("[data-preview-kind='image']")).not.toBeNull();
   });
 });
 

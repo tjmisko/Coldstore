@@ -46,6 +46,28 @@ export interface FileRecord {
   thumb_attempts: number;
   thumb_last_attempt?: number;
   thumb_error?: string;
+  /** What the file's leading bytes say it is, as opposed to `mime_type`, which
+   *  is only what its extension claims. Absent on a row the scanner has not
+   *  sniffed yet. It is the ONLY thing that can classify a file with no
+   *  extension -- a bookmark export called "reading" has an empty `extension`
+   *  and an empty `mime_type`. */
+  detected_type?: string;
+}
+
+/** One entry of an EPUB's reading order. `path` is the archive ENTRY NAME,
+ *  already resolved against the package document's directory, and is appended
+ *  to the resource route verbatim. The server validates it again on the way
+ *  back in -- a path component from a URL never gets to skip that. */
+export interface EpubSection {
+  path: string;
+  /** A human label when the book's guide supplies one, else "". */
+  label: string;
+}
+
+/** GET /api/v1/files/{id}/epub */
+export interface EpubSpine {
+  title: string;
+  sections: EpubSection[];
 }
 
 export interface FolderConfig {

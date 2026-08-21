@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,15 +78,94 @@ func TestCanThumbnail(t *testing.T) {
 		{".heic", true},
 		{".mp4", true},
 		{".mov", true},
-		{".pdf", false},
+		{".gif", true},
+		{".pdf", true},
 		{".txt", false},
 		{".doc", false},
+		{".epub", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.ext, func(t *testing.T) {
 			if got := CanThumbnail(tt.ext); got != tt.want {
 				t.Errorf("CanThumbnail(%q) = %v, want %v", tt.ext, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSupportedExtensionsShouldAgreeWithCanThumbnailWhenEitherChanges(t *testing.T) {
+	supported := SupportedExtensions()
+	if len(supported) == 0 {
+		t.Fatal("SupportedExtensions() returned nothing")
+	}
+
+	inList := make(map[string]bool, len(supported))
+	for _, ext := range supported {
+		if inList[ext] {
+			t.Errorf("SupportedExtensions() lists %q twice", ext)
+		}
+		inList[ext] = true
+		if !CanThumbnail(ext) {
+			t.Errorf("SupportedExtensions() lists %q but CanThumbnail(%q) is false", ext, ext)
+		}
+	}
+
+	// The other direction: nothing the generator handles may be missing from
+	// the queue's list. Reaching into the category maps rather than the
+	// exported list is the point -- a new category that forgot to register in
+	// extCategories would still be caught by the Generate dispatch test below.
+	for _, set := range extCategories {
+		for ext := range set {
+			if !inList[ext] {
+				t.Errorf("CanThumbnail accepts %q but SupportedExtensions() omits it", ext)
+			}
+		}
+	}
+}
+
+func TestSupportedExtensionsShouldBeSortedWhenReturned(t *testing.T) {
+	supported := SupportedExtensions()
+	if !sort.StringsAreSorted(supported) {
+		t.Errorf("SupportedExtensions() is not sorted: %v", supported)
+	}
+}
+
+func TestGenerateShouldRejectAnExtensionWhenItIsNotSupported(t *testing.T) {
+	gen, _ := setupTestThumb(t)
+
+	record := &catalog.FileRecord{
+		FolderLabel:  "Docs",
+		RelativePath: "notes.xyz",
+		Extension:    ".xyz",
+	}
+	err := gen.Generate(record, filepath.Join(t.TempDir(), "notes.xyz"))
+	if err == nil {
+		t.Fatal("Generate accepted an unsupported extension")
+	}
+	if !strings.Contains(err.Error(), "unsupported extension") {
+		t.Errorf("want an unsupported-extension error, got %v", err)
+	}
+}
+
+func TestGenerateShouldDispatchEveryExtensionWhenItIsSupported(t *testing.T) {
+	// Guards the third consumer of extCategories: Generate's switch. A
+	// category registered in extCategories but missing an arm in the switch
+	// would make CanThumbnail promise a format Generate rejects outright.
+	gen, _ := setupTestThumb(t)
+
+	for _, ext := range SupportedExtensions() {
+		t.Run(ext, func(t *testing.T) {
+			record := &catalog.FileRecord{
+				FolderLabel:  "Docs",
+				RelativePath: "sample" + ext,
+				Extension:    ext,
+			}
+			// The source does not exist, so every arm fails -- but it must
+			// fail on the file, not on the dispatch.
+			err := gen.Generate(record, filepath.Join(t.TempDir(), "sample"+ext))
+			if err != nil && strings.Contains(err.Error(), "unsupported extension") {
+				t.Errorf("Generate has no arm for %q", ext)
 			}
 		})
 	}

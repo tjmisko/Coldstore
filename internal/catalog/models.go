@@ -60,6 +60,12 @@ type FileRecord struct {
 	ThumbAttempts    int        `json:"thumb_attempts"`
 	ThumbLastAttempt *int64     `json:"thumb_last_attempt,omitempty"`
 	ThumbError       string     `json:"thumb_error,omitempty"`
+
+	// DetectedType is the content-sniffed type: what the file's leading bytes
+	// say it is, as opposed to MimeType, which is only what its extension
+	// claims. Empty means the scanner has not sniffed this row yet;
+	// filetype.TypeUnknown means it did and recognised nothing.
+	DetectedType string `json:"detected_type,omitempty"`
 }
 
 type FolderConfigRecord struct {

@@ -5,12 +5,14 @@ import { useKeymapLayer } from "../hooks/useKeymapLayer";
 import { useScrollLock } from "../hooks/useScrollLock";
 import { resolveMotion, resolveRange, spanIndices } from "../keymap/motions";
 import type { Command } from "../keymap/types";
+import { resolvePreview } from "../lib/preview";
 import { Z } from "../lib/zLayers";
 import type { BulkActions } from "../hooks/useBulkActions";
 import type { FileActions } from "../hooks/useFileWorkspace";
 import type { FileRecord } from "../types/api";
 import { PinToggle } from "./PinToggle";
 import { Portal } from "./Portal";
+import { PreviewSurface } from "./PreviewSurface";
 
 interface LightboxProps {
   files: FileRecord[];
@@ -139,11 +141,12 @@ export function Lightbox({
     }
   };
 
-  // Only a file that produced a thumbnail is renderable as an image, and only
-  // one that is on the device or in cold storage can be downloaded at all.
-  const imgSrc = file.thumbnail_path && file.status !== "missing"
-    ? `/api/v1/files/${file.id}/download`
-    : "";
+  // What this file actually is, per type -- not "it has a thumbnail, so it
+  // must be an image". That proxy was wrong for every format the daemon
+  // thumbnails but a browser cannot draw: opening a video handed the browser
+  // the full original as an <img src>, downloading every byte of it over the
+  // LAN to render a broken-image icon.
+  const preview = resolvePreview(file);
 
   return (
     <Portal>
@@ -196,17 +199,12 @@ export function Lightbox({
           </button>
         )}
 
-        {/* Main image */}
-        <div className="max-w-[90vw] max-h-[80vh] flex items-center justify-center">
-          {imgSrc ? (
-            <img
-              src={imgSrc}
-              alt={file.filename}
-              className="max-w-full max-h-[80vh] object-contain"
-            />
-          ) : (
-            <div className="text-neutral-500 text-lg">{file.filename}</div>
-          )}
+        {/* Main viewport */}
+        <div
+          className="max-w-[90vw] max-h-[80vh] w-full flex items-center justify-center"
+          data-preview-kind={preview.kind}
+        >
+          <PreviewSurface file={file} preview={preview} />
         </div>
 
         {/* Bottom bar */}

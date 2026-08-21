@@ -7,6 +7,7 @@ import { useViewport } from "../hooks/useViewport";
 import type { FileRecord } from "../types/api";
 import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
 import { FilterBar } from "./FilterBar";
+import { Lightbox } from "./Lightbox";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
 
@@ -75,6 +76,7 @@ export function FileBrowser({
   const observer = useRef<IntersectionObserver | null>(null);
   const headerCheckbox = useRef<HTMLInputElement>(null);
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -135,9 +137,9 @@ export function FileBrowser({
     actions,
     bulk,
     conflictMode: preset.key === "conflicts",
-    onOpen: () => {},
+    onOpen: setPreviewIndex,
     onContextMenu: (index) => openMenu(index, null),
-    active: menu === null,
+    active: previewIndex === null && menu === null,
     reveal,
   });
 
@@ -235,6 +237,7 @@ export function FileBrowser({
                 onArchive={() => void actions.archive(file)}
                 onResolve={(keep) => void actions.resolve(file, keep)}
                 onDownload={() => actions.download(file)}
+                onPreview={() => setPreviewIndex(index)}
                 onMenu={(at) => {
                   cursor.setIndex(index);
                   openMenu(index, at);
@@ -265,13 +268,25 @@ export function FileBrowser({
         </div>
       )}
 
+      {previewIndex !== null && files[previewIndex] && (
+        <Lightbox
+          files={files}
+          initialIndex={previewIndex}
+          onClose={() => setPreviewIndex(null)}
+          onLoadMore={loadMore}
+          hasMore={hasMore}
+          actions={actions}
+          bulk={bulk}
+        />
+      )}
+
       {menu && (
         <ContextMenu
           target={menu}
           conflictMode={preset.key === "conflicts"}
           actions={actions}
           bulk={bulk}
-          onOpen={() => actions.download(menu.file)}
+          onOpen={() => setPreviewIndex(files.findIndex((file) => file.id === menu.file.id))}
           onClose={() => setMenu(null)}
         />
       )}
@@ -294,6 +309,7 @@ interface RowProps {
   onArchive(): void;
   onResolve(keep: "device" | "archive"): void;
   onDownload(): void;
+  onPreview(): void;
   onMenu(at: { x: number; y: number }): void;
 }
 
@@ -310,6 +326,7 @@ function Row({
   onArchive,
   onResolve,
   onDownload,
+  onPreview,
   onMenu,
 }: RowProps) {
   return (
@@ -371,7 +388,20 @@ function Row({
         <PinToggle file={file} onPin={onPin} />
       </td>
       <td className="py-2.5 pr-4">
-        <span className="text-ink">{file.filename}</span>
+        {/* A button rather than a row click, so the checkbox and shift-range
+            selection above keep behaving exactly as they did. Documents open
+            in this view, not the gallery -- App picks the gallery only for
+            folders whose name looks photographic -- so without an opener here
+            the document readers are unreachable from the one place documents
+            are. */}
+        <button
+          type="button"
+          data-preview-open
+          onClick={onPreview}
+          className="text-ink hover:underline text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+        >
+          {file.filename}
+        </button>
         {file.thumb_attempts >= 3 && (
           <span
             className="ml-1.5 text-alarm"

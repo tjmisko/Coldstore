@@ -211,19 +211,19 @@ Notes that decided those:
 
 ### Blockers that must be cleared first
 
-- [ ] H0a. **`thumbnailExts` (`daemon.go:73-78`) is a second hand-maintained copy of
+- [x] H0a. **`thumbnailExts` (`daemon.go:73-78`) is a second hand-maintained copy of
       `CanThumbnail` (`thumbnail.go:52`).** Nothing ties them together and nothing tests that
       they agree; adding a format to one and not the other means the generator supports it
       while the queue never selects it. Collapse into one exported
       `thumbnail.SupportedExtensions()` **before** touching anything else here.
-- [ ] H0b. **Extension-less files cannot be reached at all by an extension-keyed change.**
+- [x] H0b. **Extension-less files cannot be reached at all by an extension-keyed change.**
       `mime_type` comes from `mime.TypeByExtension` (`scanner.go:174-175`) and there is **no
       content sniffing anywhere in the repo**; `FilesNeedingThumbnails` filters
       `extension IN (...)` (`catalog.go:803`), which is `''` for exactly the bookmark files
       this is for. Needs migration 6 adding `detected_type`, a 512-byte magic-number read in
       the scanner gated on insert-or-mtime-change, and an `OR detected_type IN (...)` in the
       queue predicate.
-- [ ] H0c. **`scripts/seed-demo` writes fake PDFs** -- `seedDocuments`
+- [x] H0c. **`scripts/seed-demo` writes fake PDFs** -- `seedDocuments`
       (`scripts/seed-demo/main.go:475-497`) fills six `.pdf` files with filler bytes. The
       moment `.pdf` joins the allowlist all six fail three times and Documents fills with
       failure glyphs; the Playwright suite asserts on gallery and glyph state, so
@@ -231,27 +231,27 @@ Notes that decided those:
       minimal valid one-page PDF is ~700 bytes of literal text, a minimal EPUB is a dozen
       lines of `archive/zip`. Keep one deliberately corrupt file so the failure path stays
       covered.
-- [ ] H0d. **BUG-3 must be fixed before H1 ships, not after.** `Lightbox.tsx:128` treats
+- [x] H0d. **BUG-3 must be fixed before H1 ships, not after.** `Lightbox.tsx:128` treats
       "has a thumbnail" as "is an image", so the first PDF thumbnail turns every PDF into a
       broken `<img>` pointing at 20 MB of PDF bytes.
-- [ ] H0e. **`Content-Disposition: attachment` is unconditional**
+- [x] H0e. **`Content-Disposition: attachment` is unconditional**
       (`handlers_files.go:229`). Preview needs a new inline route, and an explicit
       `Content-Type` -- `ServeFile` sniffs from the extension and `.epub` is not in Go's
       default MIME table.
-- [ ] H0f. **`db.SetMaxOpenConns(1)`** (`catalog.go:70`) -- every handler serialises against
+- [x] H0f. **`db.SetMaxOpenConns(1)`** (`catalog.go:70`) -- every handler serialises against
       the quota tick and the job worker. A synchronous render inside a request handler would
       block the daemon; slow work goes on the job queue, which is the lesson
       `handlers_status.go:38-45` already records from the old inline scan.
-- [ ] H0g. CI needs `poppler-utils` in the `e2e` and `playwright` jobs alongside ffmpeg, or
+- [x] H0g. CI needs `poppler-utils` in the `e2e` and `playwright` jobs alongside ffmpeg, or
       the new thumbnails silently do not generate there. `fresh-clone-build` does not need it.
 
-- [ ] H1. PDF thumbnail via `pdftocairo` to stdout, decoded and resized through the existing
+- [x] H1. PDF thumbnail via `pdftocairo` to stdout, decoded and resized through the existing
       `saveThumb` path so the 400px/q80 contract comes free. Mirror `generateHEIF`
       (`thumbnail.go:199-231`) line for line, and reuse the subprocess harness verbatim --
       `Setpgid`, process-group SIGKILL on cancel, `WaitDelay = 2s`, a 30s deadline
       (`thumbnail.go:161-197`) -- plus a `SetPDFRenderer(binary, timeout)` seam mirroring
       `SetFFmpeg` so the fake-binary test pattern in `ffmpeg_test.go` extends to it.
-- [ ] H2. EPUB thumbnail: five-branch cover lookup (EPUB3 `properties="cover-image"`; EPUB2
+- [x] H2. EPUB thumbnail: five-branch cover lookup (EPUB3 `properties="cover-image"`; EPUB2
       `<meta name="cover">` by id; the same by filename; a manifest id of
       `cover`/`cover-image`/`coverimage`; `<guide type="cover">` then its first `<img>`),
       falling back to a spine walk for the first document containing an image. Resolve every
@@ -260,12 +260,12 @@ Notes that decided those:
       resolved paths and absurd declared sizes. Also: **register `image/gif`**
       (`thumbnail.go:12-20` does not), since some older covers are GIF. Return a clean
       `thumb_error` for SVG covers rather than pulling in a rasterizer.
-- [ ] H3. "First page with content": render page 1 at thumbnail size, compute **ink
+- [x] H3. "First page with content": render page 1 at thumbnail size, compute **ink
       coverage** on a stride with a ~3% border margin ignored; below ~0.5% try page 2 then 3,
       then keep page 1 regardless -- never fail a file over this. Cap at 3 renders on one
       shared deadline. Coverage, not standard deviation: they disagree on gradient covers and
       coverage is the one that behaves on scans.
-- [ ] H4. PDF preview via `react-pdf` (MIT, pins `pdfjs-dist` exactly). **Not** the native
+- [x] H4. PDF preview via `react-pdf` (MIT, pins `pdfjs-dist` exactly). **Not** the native
       `<embed>`/`<iframe>`: iOS Safari renders only the first page until tapped to full
       screen, Samsung Internet and Opera Mobile hand off or download outright, and the
       unconditional `Content-Disposition: attachment` turns a native embed into a download.
@@ -273,7 +273,7 @@ Notes that decided those:
       so Vite emits it as a hashed asset the embedded FS serves -- no CDN. Ship
       `standard_fonts/` (+780 kB, needed by older PDFs that rely on the standard-14 without
       embedding); **skip `cmaps/`** (+1.2 MB, CJK only).
-- [ ] H5. EPUB preview: extend the H2 zip reader into
+- [x] H5. EPUB preview: extend the H2 zip reader into
       `GET /api/v1/files/{id}/epub/{resource...}` plus a spine/TOC endpoint, rendered in a
       sandboxed iframe with rewritten resource URLs. **0 KB of bundle**, no unzipping 20 MB
       in a phone browser, and it reuses a parser that will already be tested. Gives up
@@ -283,7 +283,7 @@ Notes that decided those:
       the URL extension and the download route has none.
       **New traversal surface**: the untrusted component is a zip entry name, so validate
       resolved paths against the archive root explicitly rather than relying on mux cleaning.
-- [ ] H6. Plaintext preview, including files with **no extension** (bookmarks). Detect in Go,
+- [x] H6. Plaintext preview, including files with **no extension** (bookmarks). Detect in Go,
       never in the browser: magic numbers first, then git's heuristic -- a NUL byte in the
       first 8000 bytes, or invalid UTF-8, means binary. `http.DetectContentType` is not
       enough on its own; it returns `application/octet-stream` for anything without a magic
@@ -293,7 +293,7 @@ Notes that decided those:
       reads past screen one. Client side is `<pre class="whitespace-pre-wrap font-mono">`.
       **Skip syntax highlighting** -- highlight.js core plus grammars is 80-150 kB for
       content that is bookmarks and notes.
-- [ ] H7. Bundle budget. Note the counterintuitive part: **`React.lazy` does not shrink the
+- [x] H7. Bundle budget. Note the counterintuitive part: **`React.lazy` does not shrink the
       Go binary** -- `//go:embed all:dist` embeds every file whether split or not. Splitting
       buys first paint, not size. Budget: dist 278 KB today -> ~2.6 MB, binary 14.4 -> ~17 MB.
       One `React.lazy` boundary holding pdf.js, imported **on lightbox open for a previewable
@@ -301,7 +301,7 @@ Notes that decided those:
       demand-paged from the executable's read-only segment, so they cost evictable page cache
       rather than daemon RSS -- which is exactly why +2.6 MB of frontend and +5.6 MB of
       `pdfium.wasm` are not comparable numbers.
-- [ ] H8. Preview must work for **archived** files too, or explicitly say "restore to preview".
+- [x] H8. Preview must work for **archived** files too, or explicitly say "restore to preview".
 - [ ] H9. **Thumbnails exist at exactly one size** -- `maxEdge = 400`, JPEG q80,
       `.thumb.jpg` (`internal/thumbnail/thumbnail.go:25-28`). There is no larger derivative,
       which is why the lightbox loads the full original instead (see BUG-3). A preview tier
@@ -309,6 +309,37 @@ Notes that decided those:
 - [ ] H10. Host reality check for H3: the microserver is a **Debian 12 HP N40L, 3.8 GB RAM,
       2 x 1.5 GHz**. Whatever renders PDF pages has to be cheap, and the thumbnail worker
       pool is already sharing those two cores with the scanner.
+
+### What shipped, and where it left the plan
+
+H0a-H8 and BUG-3 are in. Four things differ from the research above, all
+discovered against the real code:
+
+1. **The EPUB reader is server-extracted, not epub.js.** H5's own analysis
+   preferred it and it turned out to be the cheaper build too, because the
+   container parsing had to exist for H2 anyway. It lives in `internal/epub`,
+   shared by the cover thumbnailer and the API, so the traversal check exists
+   once. epub.js still drops in behind the same lazy boundary if paginated
+   columns and CFI memory turn out to matter.
+2. **pdf.js 5 needs a `wasm/` directory the research did not know about** --
+   the JPEG 2000 and colour-management decoders, +800 kB. It is shipped, because
+   without it scanned PDFs fail on a box with no egress. `cmaps/` is still
+   skipped. Built `dist` is 3.4 MB rather than the budgeted 2.6 MB.
+3. **The Files view needed a lightbox.** Documents open there, not in the
+   gallery -- `App` picks the gallery only for folders whose name looks
+   photographic -- so the readers would have been unreachable from the one place
+   documents actually are. The filename is the trigger, not the row, which
+   leaves the checkbox and shift-range selection untouched.
+4. **`seed-demo` has to sniff its own files.** The Documents folder is seeded
+   DISABLED, so no scan ever reaches it, so its extension-less `bookmarks` file
+   had an empty `detected_type` and the frontend could not classify it. A
+   fixture whose catalog is missing a column the real one always has hides the
+   feature it exists to exercise.
+
+H9 (a second, larger thumbnail derivative) is **not** done and is no longer
+urgent: the lightbox no longer loads a full original to render an image it
+cannot decode. It stays open as a quality improvement -- a 400px thumbnail
+standing in for a HEIC is visibly soft at full screen.
 
 ## I. Operational status dump
 
@@ -355,7 +386,7 @@ Not in the owner's notes -- found by screenshotting the running UI at 1440x900 a
 - [x] **BUG-2. The mobile sidebar toggle sits on top of the folder heading.** The button is
       `fixed top-3 left-3` (`web/src/App.tsx:58`) and the heading has no left inset at that
       breakpoint, so "CameraRoll" renders as "meraRoll" at 390px. Fixed in 7978fd5.
-- [ ] **BUG-3. The lightbox puts raw video and HEIC bytes inside an `<img>` tag.**
+- [x] **BUG-3. The lightbox puts raw video and HEIC bytes inside an `<img>` tag.**
       `Lightbox.tsx:128` picks its source as "has a thumbnail and is not missing, therefore
       renderable as an image" -- but `internal/thumbnail` also thumbnails `.heif .heic` and
       `.mp4 .mov .avi .mkv .webm` (`thumbnail.go:36-50`). So opening a video hands the

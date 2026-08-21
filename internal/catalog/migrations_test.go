@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,7 +114,7 @@ func TestOpenShouldWriteTheAdvisorySchemaMarkerWhenMigrationSucceeds(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "5\n"; string(marker) != want {
+	if want := fmt.Sprintf("%d\n", schemaVersion); string(marker) != want {
 		t.Errorf("marker = %q, want %q", string(marker), want)
 	}
 }
@@ -199,6 +200,11 @@ func TestMigrateShouldPreserveEveryRowWhenTheDatabaseUsesTheOldSchema(t *testing
 	}
 	if file.ThumbAttempts != 0 {
 		t.Errorf("ThumbAttempts = %d, want 0", file.ThumbAttempts)
+	}
+	if file.DetectedType != "" {
+		// Empty means "never sniffed", which is what puts a migrated row into
+		// FilesNeedingSniff so the catalog backfills itself once.
+		t.Errorf("DetectedType = %q, want empty", file.DetectedType)
 	}
 
 	fc, err := cat.FolderConfigByLabel("Photos")

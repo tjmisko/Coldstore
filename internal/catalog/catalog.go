@@ -37,6 +37,12 @@ const maxThumbnailAttempts = 3
 // materialises when the caller does not say.
 const defaultThumbnailLimit = 200
 
+// defaultSniffLimit caps how many files one FilesNeedingSniff call
+// materialises. Content sniffing opens a file per row, so the cap is what
+// keeps the first scan of a large folder from turning into tens of thousands
+// of opens in a single pass.
+const defaultSniffLimit = 2000
+
 // idChunkSize caps how many ids go into a single IN (...) clause.
 const idChunkSize = 500
 
@@ -46,7 +52,7 @@ const idChunkSize = 500
 const fileColumns = `id, folder_label, relative_path, filename, extension, mime_type,
 	size_bytes, file_mtime, file_atime, first_seen, archived_at, status,
 	thumbnail_path, content_hash, pinned, pinned_at, pin_source, last_seen,
-	thumb_attempts, thumb_last_attempt, thumb_error`
+	thumb_attempts, thumb_last_attempt, thumb_error, detected_type`
 
 type Catalog struct {
 	db *sql.DB
@@ -134,6 +140,19 @@ func (c *Catalog) UpsertFile(f *FileRecord, scanGeneration int64) (conflict bool
 			file_mtime = CASE WHEN files.status = 'archived' THEN files.file_mtime ELSE excluded.file_mtime END,
 			file_atime = CASE WHEN files.status = 'archived' THEN files.file_atime ELSE excluded.file_atime END,
 			mime_type  = CASE WHEN files.status = 'archived' THEN files.mime_type  ELSE excluded.mime_type  END,
+			-- The sniffed type describes bytes, so it survives everything
+			-- except the bytes changing. Clearing it back to '' is what puts
+			-- the row into FilesNeedingSniff again; without this arm a file
+			-- replaced in place would keep the type of whatever used to be
+			-- there. An archived row's bytes are in cold storage and cannot
+			-- have changed under a scan of the syncthing folder, so it keeps
+			-- what it has.
+			detected_type = CASE
+				WHEN files.status = 'archived' THEN files.detected_type
+				WHEN files.file_mtime <> excluded.file_mtime THEN ''
+				WHEN files.size_bytes <> excluded.size_bytes THEN ''
+				ELSE files.detected_type
+			END,
 			last_seen  = excluded.last_seen,
 			status = CASE
 				WHEN files.status = 'missing' THEN 'synced'
@@ -784,27 +803,83 @@ func (c *Catalog) UpdateThumbnailPath(id int64, thumbPath string) error {
 //
 // As with OffloadCandidates the cap is mandatory and there is no unbounded
 // variant to reach for by accident.
+//
+// It matches on extension alone, which cannot reach a file that has none. See
+// FilesNeedingThumbnailsByType.
 func (c *Catalog) FilesNeedingThumbnails(extensions []string, limit int) ([]FileRecord, error) {
-	if len(extensions) == 0 {
+	return c.FilesNeedingThumbnailsByType(extensions, nil, limit)
+}
+
+// FilesNeedingThumbnailsByType is FilesNeedingThumbnails with a second arm
+// matching on the content-sniffed type. A file qualifies on EITHER its
+// extension or its detected type; passing nil for detectedTypes gives the
+// extension-only behaviour.
+//
+// That second arm is what makes an extension-less file reachable at all. Both
+// extension and mime_type are derived from the filename, so a bookmark export
+// called "reading" has an empty extension and an empty mime_type, and is
+// invisible to an extension-keyed predicate no matter how many formats the
+// generator learns. detected_type comes from the bytes.
+func (c *Catalog) FilesNeedingThumbnailsByType(extensions, detectedTypes []string, limit int) ([]FileRecord, error) {
+	if len(extensions) == 0 && len(detectedTypes) == 0 {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = defaultThumbnailLimit
 	}
 
-	args := make([]any, 0, len(extensions)+2)
-	for _, ext := range extensions {
-		args = append(args, ext)
+	args := make([]any, 0, len(extensions)+len(detectedTypes)+2)
+	var arms []string
+	if len(extensions) > 0 {
+		arms = append(arms, `extension IN (`+placeholders(len(extensions))+`)`)
+		for _, ext := range extensions {
+			args = append(args, ext)
+		}
+	}
+	if len(detectedTypes) > 0 {
+		arms = append(arms, `detected_type IN (`+placeholders(len(detectedTypes))+`)`)
+		for _, t := range detectedTypes {
+			args = append(args, t)
+		}
 	}
 	args = append(args, maxThumbnailAttempts, limit)
 
 	return c.queryFiles(`SELECT `+fileColumns+`
 		FROM files
-		WHERE thumbnail_path = '' AND extension IN (`+placeholders(len(extensions))+`)
+		WHERE thumbnail_path = '' AND (`+strings.Join(arms, " OR ")+`)
 		AND status IN ('synced', 'archived')
 		AND thumb_attempts < ?
 		ORDER BY file_mtime DESC
 		LIMIT ?`, args...)
+}
+
+// FilesNeedingSniff returns rows in one folder whose detected_type has never
+// been filled in, capped at limit. Empty means "not sniffed"; a sniff that
+// recognised nothing writes filetype.TypeUnknown instead, so a file the
+// scanner cannot identify leaves this queue after one read rather than being
+// re-opened on every scan for the life of the installation.
+//
+// Only synced rows: an archived file's bytes live in cold storage and the
+// scanner walks the syncthing folder, so it has no path to read. Archived rows
+// keep whatever type they were sniffed as before they were offloaded.
+func (c *Catalog) FilesNeedingSniff(folder string, limit int) ([]FileRecord, error) {
+	if limit <= 0 {
+		limit = defaultSniffLimit
+	}
+	return c.queryFiles(`SELECT `+fileColumns+`
+		FROM files
+		WHERE detected_type = '' AND status = 'synced' AND folder_label = ?
+		ORDER BY id
+		LIMIT ?`, folder, limit)
+}
+
+// SetDetectedType records the result of a content sniff.
+func (c *Catalog) SetDetectedType(id int64, detected string) error {
+	if detected == "" {
+		return errors.New("refusing to store an empty detected_type: it would re-queue the file forever")
+	}
+	_, err := c.db.Exec(`UPDATE files SET detected_type = ? WHERE id = ?`, detected, id)
+	return err
 }
 
 // RecordThumbnailFailure increments a file's attempt counter and records why
@@ -1160,7 +1235,7 @@ func scanFile(s fileScanner) (*FileRecord, error) {
 	err := s.Scan(&f.ID, &f.FolderLabel, &f.RelativePath, &f.Filename, &f.Extension,
 		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FileAtime, &f.FirstSeen, &archivedAt,
 		&f.Status, &f.ThumbnailPath, &f.ContentHash, &f.Pinned, &pinnedAt, &f.PinSource,
-		&f.LastSeen, &f.ThumbAttempts, &lastAttempt, &f.ThumbError)
+		&f.LastSeen, &f.ThumbAttempts, &lastAttempt, &f.ThumbError, &f.DetectedType)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoSuchFile
 	}

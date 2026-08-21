@@ -23,12 +23,13 @@ var migrations = []migration{
 	{3, migration3FolderState},
 	{4, migration4Jobs},
 	{5, migration5ThumbnailFailures},
+	{6, migration6DetectedType},
 }
 
 // schemaVersion is the version a freshly migrated database reports.
 // It equals the highest entry above and is bumped in the same commit as that
 // entry.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // SchemaVersion returns the schema version this binary writes.
 func SchemaVersion() int { return schemaVersion }
@@ -258,4 +259,30 @@ ALTER TABLE files ADD COLUMN thumb_error TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX idx_files_thumb_queue
 	ON files(thumbnail_path, thumb_attempts, status);
+`
+
+// migration6DetectedType adds the content-sniffed type (H0b).
+//
+// mime_type is derived from the extension, so it is empty for exactly the
+// files this column exists to reach: the extension-less bookmark exports and
+// notes that sync alongside a camera roll. An extension-keyed thumbnail or
+// preview queue can never select them.
+//
+// The default is the empty string, which every pre-existing row therefore
+// takes. That is the correct starting state and is load-bearing: empty means
+// "not yet sniffed", so the next scan backfills the whole catalog once and
+// then stops. A file the sniff genuinely cannot identify records
+// 'application/octet-stream' rather than staying empty, so it is not re-read
+// forever.
+//
+// The index is on (detected_type, thumbnail_path, thumb_attempts) rather than
+// extending idx_files_thumb_queue, because the queue predicate becomes a
+// disjunction -- extension IN (...) OR detected_type IN (...) -- and SQLite
+// serves an OR of two indexed branches far better than one composite index it
+// can only use for half the clause.
+const migration6DetectedType = `
+ALTER TABLE files ADD COLUMN detected_type TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX idx_files_detected_type_queue
+	ON files(detected_type, thumbnail_path, thumb_attempts, status);
 `

@@ -61,8 +61,10 @@ catalog_sync_interval_minutes = 30
 # Concurrent thumbnail decoders. The Go image path decodes a whole frame into
 # memory -- a 48 MP JPEG is ~190 MB of RGBA while being resized -- so on a small
 # box with little or no swap, use 1. See docs/deployment.md, "What actually gets
-# a thumbnail": the allowlist is jpg/png/webp, heic/heif, and common video. PDFs
-# and epubs get nothing, silently.
+# a thumbnail": the allowlist is jpg/png/webp/gif, heic/heif, common video, pdf
+# and epub. PDFs need poppler-utils installed (`pdftocairo`); everything else
+# needs only ffmpeg, and epub needs nothing. A file with NO extension is reached
+# by its content: the scanner sniffs each new or changed file once.
 thumbnail_workers = 2
 grace_period_minutes = 30
 

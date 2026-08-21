@@ -1,6 +1,7 @@
 import type {
   BulkPinResponse,
   CatalogEvent,
+  EpubSpine,
   FileIDsResponse,
   FileRecord,
   FileSort,
@@ -136,7 +137,27 @@ export const api = {
     apiFetch<FileIDsResponse>(`/api/v1/files/ids?${fileFilterParams(filters)}`),
 
   downloadUrl: (id: number) => `/api/v1/files/${id}/download`,
+
+  /** The INLINE route. downloadUrl sets Content-Disposition: attachment
+   *  unconditionally, so pointing a reader or an iframe at it makes the
+   *  browser save the file instead of showing it. This one states an explicit
+   *  Content-Type and sends nosniff. Archived files stream straight out of
+   *  cold storage; previewing one does not restore it. */
+  previewUrl: (id: number) => `/api/v1/files/${id}/preview`,
+
   thumbnailUrl: (thumbnailPath: string) => `/api/v1/thumbnails/${thumbnailPath}`,
+
+  /** The reading order of an EPUB, extracted server-side by the same parser
+   *  that finds its cover. Nothing is unzipped in the browser. */
+  epubSpine: (id: number, init?: RequestInit) =>
+    apiFetch<EpubSpine>(`/api/v1/files/${id}/epub`, init),
+
+  /** One resource out of an EPUB. `resource` is an archive entry name, encoded
+   *  segment by segment so a "/" inside it stays a path separator and
+   *  everything else -- spaces, "#", "?" -- does not change what is asked
+   *  for. The server validates the decoded name against the archive root. */
+  epubResourceUrl: (id: number, resource: string) =>
+    `/api/v1/files/${id}/epub/${resource.split("/").map(encodeURIComponent).join("/")}`,
 
   pin: (id: number, pinned: boolean) =>
     apiFetch<PinResponse>(`/api/v1/files/${id}/pin`, { method: pinned ? "POST" : "DELETE" }),
