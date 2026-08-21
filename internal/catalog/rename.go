@@ -33,7 +33,7 @@ func (c *Catalog) AffectedPersistentPatterns(folder, rel string) ([]string, erro
 	warnings := make([]string, 0)
 	for _, persistent := range paths {
 		pattern := strings.TrimPrefix(strings.ReplaceAll(persistent.Pattern, "\\", "/"), "./")
-		if pattern == rel || strings.HasPrefix(pattern, rel+"/") {
+		if strings.HasPrefix(pattern, rel) {
 			warnings = append(warnings, persistent.Pattern)
 		}
 	}

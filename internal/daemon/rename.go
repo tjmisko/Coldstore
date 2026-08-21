@@ -20,6 +20,7 @@ var (
 	ErrRenameSource      = errors.New("rename source does not exist")
 	ErrRenameTransient   = errors.New("rename source contains a moving file")
 	ErrRenamePair        = errors.New("rename would split a pair group")
+	errRenameIncomplete  = errors.New("rename is incomplete and must be retried")
 )
 
 // CleanRenamePath accepts only the canonical slash-separated representation
@@ -45,10 +46,16 @@ func CleanRenamePath(raw string) (string, error) {
 }
 
 type renameFSAction struct {
+	root        string
 	source      string
 	destination string
 	directory   bool
 	resume      bool
+}
+
+type renameDerivedRemoval struct {
+	root     string
+	filename string
 }
 
 type renamePlan struct {
@@ -60,7 +67,7 @@ type renamePlan struct {
 	files        []catalog.FileRecord
 	fileRenames  []catalog.FileRename
 	actions      []renameFSAction
-	removeThumbs []string
+	removeThumbs []renameDerivedRemoval
 	warnings     []string
 }
 
@@ -103,6 +110,10 @@ func (m *Mover) WithRenamePreflight(ctx context.Context, folder, from, to string
 func (m *Mover) RenamePath(ctx context.Context, folder, from, to string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.scannerMu != nil {
+		m.scannerMu.Lock()
+		defer m.scannerMu.Unlock()
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -115,21 +126,21 @@ func (m *Mover) RenamePath(ctx context.Context, folder, from, to string) error {
 		return nil
 	}
 	for _, action := range plan.actions {
-		if err := performRenameAction(action); err != nil {
-			return err
+		if err := performRenameActionWithHook(action, m.beforeRenameCommit); err != nil {
+			return fmt.Errorf("%w: %w", errRenameIncomplete, err)
 		}
 	}
 	for _, thumb := range plan.removeThumbs {
 		if err := removeDerivedFile(thumb); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", errRenameIncomplete, err)
 		}
 	}
 	if plan.directory {
 		if _, err := m.cat.RenameDirectoryRows(folder, plan.from, plan.to); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", errRenameIncomplete, err)
 		}
 	} else if err := m.cat.RenameFileRows(folder, plan.fileRenames); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errRenameIncomplete, err)
 	}
 	m.cat.LogEvent("folder_renamed", folder, plan.from, "renamed to "+plan.to)
 	return nil
@@ -210,6 +221,9 @@ func (m *Mover) planRename(folder, fromRaw, toRaw string, allowResume bool) (*re
 	}
 	plan.directory = hasDescendant || (deviceExists && deviceInfo.IsDir()) ||
 		(archiveExists && archiveInfo.IsDir()) || (thumbExists && thumbInfo.IsDir())
+	if err := validateRenameDestination(to, plan.directory); err != nil {
+		return nil, err
+	}
 
 	if len(files) == 0 && !deviceExists && !archiveExists && !thumbExists {
 		if allowResume && len(destinationRows) > 0 {
@@ -306,7 +320,7 @@ func (m *Mover) planDirectoryRename(plan *renamePlan, deviceRoot, archiveRoot st
 			return nil, err
 		}
 		plan.actions = append(plan.actions, renameFSAction{
-			source: source, destination: destination, directory: true, resume: true,
+			root: root, source: source, destination: destination, directory: true, resume: true,
 		})
 	}
 	if err := preflightActions(plan.actions, allowResume); err != nil {
@@ -387,7 +401,7 @@ func (m *Mover) planFileRename(plan *renamePlan, deviceRoot, archiveRoot string,
 				expectedPhysical = true
 			}
 			plan.actions = append(plan.actions, renameFSAction{
-				source: src, destination: dst, resume: resume,
+				root: root, source: src, destination: dst, resume: resume,
 			})
 		}
 		if !expectedPhysical {
@@ -418,10 +432,12 @@ func (m *Mover) planFileRename(plan *renamePlan, deviceRoot, archiveRoot string,
 			} else if exists {
 				return nil, fmt.Errorf("%w: thumbnail %s", ErrRenameConflict, newThumbRel)
 			}
-			plan.removeThumbs = append(plan.removeThumbs, oldThumb)
+			plan.removeThumbs = append(plan.removeThumbs, renameDerivedRemoval{
+				root: thumbRoot, filename: oldThumb,
+			})
 		} else {
 			plan.actions = append(plan.actions, renameFSAction{
-				source: oldThumb, destination: newThumb, resume: file.ThumbnailPath != "",
+				root: thumbRoot, source: oldThumb, destination: newThumb, resume: file.ThumbnailPath != "",
 			})
 		}
 	}
@@ -503,12 +519,15 @@ func preflightActions(actions []renameFSAction, allowResume bool) error {
 		if err != nil {
 			return err
 		}
-		_, destinationExists, err := lstatOptional(action.destination)
+		destinationInfo, destinationExists, err := lstatOptional(action.destination)
 		if err != nil {
 			return err
 		}
 		if sourceExists && sourceInfo.IsDir() != action.directory {
 			return fmt.Errorf("%w: source has unexpected type: %s", ErrRenameConflict, action.source)
+		}
+		if destinationExists && destinationInfo.IsDir() != action.directory {
+			return fmt.Errorf("%w: destination has unexpected type: %s", ErrRenameConflict, action.destination)
 		}
 		if destinationExists && (sourceExists || !allowResume || !action.resume) {
 			return fmt.Errorf("%w: %s", ErrRenameConflict, action.destination)
@@ -518,42 +537,27 @@ func preflightActions(actions []renameFSAction, allowResume bool) error {
 }
 
 func performRenameAction(action renameFSAction) error {
-	_, sourceExists, err := lstatOptional(action.source)
-	if err != nil {
-		return err
-	}
-	_, destinationExists, err := lstatOptional(action.destination)
-	if err != nil {
-		return err
-	}
-	if destinationExists {
-		if sourceExists || !action.resume {
-			return fmt.Errorf("%w: %s", ErrRenameConflict, action.destination)
-		}
-		return nil
-	}
-	if !sourceExists {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(action.destination), 0o755); err != nil {
-		return fmt.Errorf("creating rename destination parent: %w", err)
-	}
-	if err := os.Rename(action.source, action.destination); err != nil {
-		return fmt.Errorf("renaming %s to %s: %w", action.source, action.destination, err)
-	}
-	return nil
+	return performRenameActionWithHook(action, nil)
 }
 
-func removeDerivedFile(filename string) error {
-	info, exists, err := lstatOptional(filename)
-	if err != nil || !exists {
-		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("%w: old thumbnail is a directory: %s", ErrRenameConflict, filename)
-	}
-	if err := os.Remove(filename); err != nil {
-		return fmt.Errorf("removing obsolete thumbnail %s: %w", filename, err)
+func performRenameActionWithHook(action renameFSAction, beforeCommit func(renameFSAction) error) error {
+	return performBoundRename(action, beforeCommit)
+}
+
+func removeDerivedFile(removal renameDerivedRemoval) error {
+	return removeBoundFile(removal)
+}
+
+func validateRenameDestination(relative string, directory bool) error {
+	segments := strings.Split(relative, "/")
+	for i, segment := range segments {
+		isFinal := i == len(segments)-1
+		if (!isFinal || directory) && strings.HasPrefix(segment, ".") {
+			return fmt.Errorf("%w: destination enters a scanner-ignored hidden directory", ErrInvalidRenamePath)
+		}
+		if skipScanEntry(segment) {
+			return fmt.Errorf("%w: destination uses scanner-ignored name %q", ErrInvalidRenamePath, segment)
+		}
 	}
 	return nil
 }

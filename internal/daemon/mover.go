@@ -78,6 +78,13 @@ const (
 type Mover struct {
 	mu sync.Mutex
 
+	// scannerMu is the process scanner's existing exclusion lock. Rename holds
+	// it across all filesystem actions and the catalog commit so a periodic walk
+	// cannot publish the destination coordinate inside that deliberate window of
+	// filesystem/catalog disagreement. Scanner never takes the mover lock, so
+	// this lock order cannot cycle.
+	scannerMu *sync.Mutex
+
 	cat       *catalog.Catalog
 	cfg       *config.Config
 	logger    *slog.Logger
@@ -95,6 +102,16 @@ type Mover struct {
 	// outside, because everything else that could move that row is queued
 	// behind the mutex this method already holds.
 	adoptRow func(id, sizeBytes int64, mtime, atime time.Time) (bool, error)
+
+	// beforeRenameCommit is an adversarial-test seam at the last possible point
+	// before the atomic no-replace syscall. Production leaves it nil.
+	beforeRenameCommit func(renameFSAction) error
+}
+
+func (m *Mover) bindScanner(scanner *Scanner) {
+	if scanner != nil {
+		m.scannerMu = &scanner.mu
+	}
 }
 
 func NewMover(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Mover {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -522,5 +523,263 @@ func TestRenamePreflightAndMoveShareTheMoverMutex(t *testing.T) {
 	}
 	if err := <-archiveDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRenameAtomicCommitRefusesDestinationCreatedAfterCheck(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	seedSyncedFile(t, cat, syncDir, "old.jpg", 1)
+	mover := NewMover(cfg, cat, testLogger())
+	destination := filepath.Join(syncDir, "new.jpg")
+	mover.beforeRenameCommit = func(action renameFSAction) error {
+		if action.destination != destination {
+			return nil
+		}
+		return os.WriteFile(destination, []byte("concurrent Syncthing delivery"), 0o644)
+	}
+
+	err := mover.RenamePath(context.Background(), "TestFolder", "old.jpg", "new.jpg")
+	if !errors.Is(err, ErrRenameConflict) || !errors.Is(err, errRenameIncomplete) {
+		t.Fatalf("rename error = %v, want retryable conflict", err)
+	}
+	if contents, err := os.ReadFile(destination); err != nil || string(contents) != "concurrent Syncthing delivery" {
+		t.Fatalf("concurrent destination changed: %q, %v", contents, err)
+	}
+	if _, err := os.Stat(filepath.Join(syncDir, "old.jpg")); err != nil {
+		t.Fatalf("source disappeared after no-replace refusal: %v", err)
+	}
+}
+
+func TestRenameJobRetriesAPartialThreeTreeMoveInsteadOfTerminalizingIt(t *testing.T) {
+	env := newWorkerEnv(t)
+	device := seedSyncedFile(t, env.cat, env.syncDir, "old/device.jpg", 1)
+	archived := seedSyncedFile(t, env.cat, env.syncDir, "old/archive.jpg", 1)
+	env.mover.SetSpaceCheck(plentyOfSpace)
+	if _, err := env.mover.ArchiveByID(archived.ID); err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := env.cat.CreateRenameJob("TestFolder", "old", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := env.cat.GetJob(jobID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveRoot := env.mover.restorer.ArchiveRoot("TestFolder")
+	injected := false
+	env.mover.beforeRenameCommit = func(action renameFSAction) error {
+		if !injected && action.root == archiveRoot {
+			injected = true
+			return syscall.EIO
+		}
+		return nil
+	}
+
+	if err := env.worker.runJob(context.Background(), job); !errors.Is(err, errRenameIncomplete) {
+		t.Fatalf("partial run error = %v", err)
+	}
+	partial := env.job(t, jobID)
+	if partial.State != catalog.JobStateRunning || partial.Done != 0 || partial.FailedCount != 0 {
+		t.Fatalf("partial rename was terminalized: %+v", partial)
+	}
+	if _, err := os.Stat(filepath.Join(env.syncDir, "new/device.jpg")); err != nil {
+		t.Fatalf("device step did not complete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(archiveRoot, "old/archive.jpg")); err != nil {
+		t.Fatalf("archive source should remain for retry: %v", err)
+	}
+	if _, err := env.cat.GetFileByID(device.ID); err != nil {
+		t.Fatalf("catalog row disappeared during partial move: %v", err)
+	}
+
+	env.mover.beforeRenameCommit = nil
+	items, jobs, err := env.cat.ResumeInterruptedJobs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items != 0 || jobs != 1 {
+		t.Fatalf("startup recovery resumed items/jobs = %d/%d, want 0/1", items, jobs)
+	}
+	fresh := NewWorker(env.cat, env.mover, env.scanner, testLogger())
+	fresh.RunOnce(context.Background())
+	finished := env.job(t, jobID)
+	if finished.State != catalog.JobStateDone || finished.Done != 1 || finished.FailedCount != 0 {
+		t.Fatalf("retried rename job = %+v", finished)
+	}
+	for _, filename := range []string{
+		filepath.Join(env.syncDir, "new/device.jpg"),
+		filepath.Join(archiveRoot, "new/archive.jpg"),
+	} {
+		if _, err := os.Stat(filename); err != nil {
+			t.Errorf("resumed tree member %s: %v", filename, err)
+		}
+	}
+	for _, rel := range []string{"new/device.jpg", "new/archive.jpg"} {
+		if _, err := env.cat.GetFile("TestFolder", rel); err != nil {
+			t.Errorf("resumed catalog coordinate %s: %v", rel, err)
+		}
+	}
+}
+
+func TestRenameExcludesScannerAcrossFilesystemAndCatalogCommit(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	seedSyncedFile(t, cat, syncDir, "old/a.jpg", 1)
+	mover := NewMover(cfg, cat, testLogger())
+	scanner := NewScanner(cfg, cat, testLogger())
+	_ = NewWorker(cat, mover, scanner, testLogger()) // binds the shared scanner lock
+	folder, err := cat.FolderConfigByLabel("TestFolder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	mover.beforeRenameCommit = func(action renameFSAction) error {
+		if action.root == syncDir {
+			close(started)
+			<-release
+		}
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- mover.RenamePath(context.Background(), "TestFolder", "old", "new")
+	}()
+	<-started
+	if err := scanner.ScanFolderContext(context.Background(), *folder); !errors.Is(err, ErrScanInProgress) {
+		close(release)
+		t.Fatalf("scan during rename error = %v, want ErrScanInProgress", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.GetFile("TestFolder", "new/a.jpg"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRenameRejectsScannerIgnoredAndSyncthingControlDestinations(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		target    string
+		directory bool
+	}{
+		{name: "hidden parent", source: "old.jpg", target: ".hidden/new.jpg"},
+		{name: "hidden directory", source: "old/a.jpg", target: ".hidden", directory: true},
+		{name: "syncthing ignore file", source: "old.jpg", target: ".stignore"},
+		{name: "syncthing temporary", source: "old.jpg", target: ".syncthing.new.tmp"},
+		{name: "temporary suffix", source: "old.jpg", target: "new.tmp"},
+		{name: "coldstore scratch", source: "old.jpg", target: "new.coldstore-tmp"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			syncDir, _, cfg, cat := setupTestEnv(t)
+			declarePolicy(t, cfg, cat)
+			seedSyncedFile(t, cat, syncDir, test.source, 1)
+			mover := NewMover(cfg, cat, testLogger())
+			from := test.source
+			if test.directory {
+				from = filepath.Dir(test.source)
+			}
+			if _, err := mover.PreflightRename(context.Background(), "TestFolder", from, test.target); !errors.Is(err, ErrInvalidRenamePath) {
+				t.Fatalf("preflight error = %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(syncDir, test.source)); err != nil {
+				t.Fatalf("source changed after refused destination: %v", err)
+			}
+		})
+	}
+}
+
+func TestRenameResumeRejectsWrongDestinationKind(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	seedSyncedFile(t, cat, syncDir, "old/a.jpg", 1)
+	mover := NewMover(cfg, cat, testLogger())
+	plan, err := mover.planRename("TestFolder", "old", "new", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range plan.actions {
+		if action.root == syncDir {
+			if err := performRenameAction(action); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Remove(filepath.Join(syncDir, "new/a.jpg")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(syncDir, "new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(syncDir, "new"), []byte("wrong kind"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = mover.RenamePath(context.Background(), "TestFolder", "old", "new")
+	if !errors.Is(err, ErrRenameConflict) {
+		t.Fatalf("wrong-kind resume error = %v", err)
+	}
+	if _, err := cat.GetFile("TestFolder", "old/a.jpg"); err != nil {
+		t.Fatalf("catalog committed onto wrong-kind destination: %v", err)
+	}
+}
+
+func TestRenameWarnsForEveryTextualPersistentPrefix(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	seedSyncedFile(t, cat, syncDir, "old/a.jpg", 1)
+	for _, pattern := range []string{"old/**", "old*.jpg", "older/**", "unrelated/**"} {
+		if err := cat.AddPersistentPath("TestFolder", pattern); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mover := NewMover(cfg, cat, testLogger())
+	warnings, err := mover.PreflightRename(context.Background(), "TestFolder", "old", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"old*.jpg", "old/**", "older/**"}
+	if len(warnings) != len(want) {
+		t.Fatalf("warnings = %v, want %v", warnings, want)
+	}
+	for i := range want {
+		if warnings[i] != want[i] {
+			t.Fatalf("warnings = %v, want %v", warnings, want)
+		}
+	}
+}
+
+func TestRenameExecutionRejectsParentSymlinkInsertedAfterPlanning(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	declarePolicy(t, cfg, cat)
+	seedSyncedFile(t, cat, syncDir, "old.jpg", 1)
+	mover := NewMover(cfg, cat, testLogger())
+	plan, err := mover.planRename("TestFolder", "old.jpg", "swapped/new.jpg", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(syncDir, "swapped")); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range plan.actions {
+		if action.root != syncDir {
+			continue
+		}
+		if err := performRenameAction(action); err == nil {
+			t.Fatal("rename followed a parent symlink inserted after planning")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outside, "new.jpg")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rename escaped through substituted symlink: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(syncDir, "old.jpg")); err != nil {
+		t.Fatalf("source moved through substituted symlink: %v", err)
 	}
 }

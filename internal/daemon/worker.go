@@ -56,6 +56,7 @@ type Worker struct {
 }
 
 func NewWorker(cat *catalog.Catalog, mover *Mover, scanner *Scanner, logger *slog.Logger) *Worker {
+	mover.bindScanner(scanner)
 	return &Worker{
 		cat:          cat,
 		mover:        mover,
@@ -154,6 +155,15 @@ func (w *Worker) runRenameJob(ctx context.Context, job *catalog.Job) error {
 	if ctx.Err() != nil {
 		w.logger.Info("rename job interrupted by shutdown", "job", job.ID)
 		return nil
+	}
+	// Once a filesystem plan has started, an error may mean an earlier tree is
+	// already at its destination. Keep the synthetic item running so this worker
+	// retries its idempotent payload and startup recovery can requeue it after a
+	// crash. Marking it failed here would strand the three trees split forever.
+	if errors.Is(err, errRenameIncomplete) {
+		w.logger.Warn("rename incomplete; retaining job for retry",
+			"job", job.ID, "folder", job.FolderLabel, "error", err)
+		return err
 	}
 	msg := ""
 	if err != nil {

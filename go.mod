@@ -9,6 +9,7 @@ require (
 	github.com/evanoberholster/imagemeta v1.0.0
 	github.com/mattn/go-sqlite3 v1.14.34
 	golang.org/x/image v0.36.0
+	golang.org/x/sys v0.38.0
 )
 
 require (
