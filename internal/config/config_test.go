@@ -137,8 +137,11 @@ budget = "1GB"
 	if cfg.Storage.ColdStoragePath != "/srv/coldstore" {
 		t.Errorf("default ColdStoragePath = %q, want /srv/coldstore", cfg.Storage.ColdStoragePath)
 	}
-	if cfg.Server.ListenAddr != "0.0.0.0:8090" {
-		t.Errorf("default ListenAddr = %q, want 0.0.0.0:8090", cfg.Server.ListenAddr)
+	// An omitted listen_addr must default to loopback, never to every
+	// interface: silence in the config file must not be the thing that puts an
+	// unauthenticated control plane on the LAN (D5).
+	if cfg.Server.ListenAddr != DefaultListenAddr {
+		t.Errorf("default ListenAddr = %q, want %q", cfg.Server.ListenAddr, DefaultListenAddr)
 	}
 }
 

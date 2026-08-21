@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/tjmisko/coldstore/internal/api"
@@ -16,17 +18,37 @@ import (
 func main() {
 	configPath := flag.String("config", "coldstore.toml", "path to config file")
 	scanOnce := flag.Bool("scan", false, "run a single catalog scan and exit")
+	checkOnly := flag.Bool("check", false, "validate the config and the machine, print the result, and exit")
 	flag.Parse()
 
+	// Config is loaded and validated before anything else exists -- before the
+	// catalog is opened and long before a socket is bound. config.Load performs
+	// the D5 binding refusal, so an unauthenticated control plane cannot reach a
+	// listening port even for the instant it takes the daemon to fail later on
+	// (design 3.2, steps 1-2).
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
 		os.Exit(1)
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
+
+	warnings, err := cfg.CheckEnvironment()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+		os.Exit(1)
+	}
+	for _, w := range warnings {
+		logger.Warn("preflight", "detail", w)
+	}
+
+	if *checkOnly {
+		reportPreflight(os.Stdout, cfg, *configPath, warnings)
+		return
+	}
 
 	dbPath := cfg.Storage.ColdStoragePath + "/catalog.db"
 	cat, err := catalog.Open(dbPath)
@@ -115,4 +137,68 @@ func main() {
 		logger.Error("daemon exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// reportPreflight prints what --check found. It exists so the owner can answer
+// "is this box ready?" without starting the daemon, touching the catalog or
+// binding a port -- everything above this point is read-only apart from one
+// create-and-delete writability probe per directory.
+func reportPreflight(w io.Writer, cfg *config.Config, configPath string, warnings []string) {
+	loopback, _ := config.IsLoopbackListenAddr(cfg.Server.ListenAddr)
+	reach := "LAN"
+	if loopback {
+		reach = "this host only"
+	}
+	auth := "DISABLED"
+	if cfg.Server.Username != "" && cfg.Server.Password != "" {
+		auth = "basic auth as " + cfg.Server.Username
+	}
+
+	fmt.Fprintf(w, "config           %s\n", configPath)
+	fmt.Fprintf(w, "cold storage     %s (exists, writable)\n", cfg.Storage.ColdStoragePath)
+	fmt.Fprintf(w, "listen           %s -- reachable from %s\n", cfg.Server.ListenAddr, reach)
+	fmt.Fprintf(w, "auth             %s\n", auth)
+	fmt.Fprintf(w, "folders          %d declared\n", len(cfg.Folders))
+	for _, f := range cfg.Folders {
+		fmt.Fprintf(w, "  %-20s %s (seed budget %s)\n", f.Label, f.Path, f.Budget)
+	}
+
+	printReadWritePaths(w, cfg)
+
+	if len(warnings) == 0 {
+		fmt.Fprintln(w, "\npreflight OK, no warnings")
+		return
+	}
+	fmt.Fprintf(w, "\npreflight OK with %d warning(s):\n", len(warnings))
+	for _, warning := range warnings {
+		fmt.Fprintf(w, "  - %s\n", warning)
+	}
+	fmt.Fprintln(w, "\nWarnings are not fatal. A folder that is missing or has no .stfolder is")
+	fmt.Fprintln(w, "skipped until it appears, which is what lets the daemon survive being")
+	fmt.Fprintln(w, "started before its mount.")
+}
+
+// printReadWritePaths emits the exact ReadWritePaths= line this config needs,
+// and says plainly that --check cannot verify the one in the unit.
+//
+// This exists because --check is otherwise a liar about the single most common
+// first-deployment mistake. Run by hand it is NOT inside the unit's sandbox, so
+// every path looks writable and it prints "preflight OK" for a configuration
+// that will exit 1 the moment systemd starts it with ProtectSystem=strict and a
+// folder missing from ReadWritePaths=. Printing the line the owner should have
+// is the most --check can honestly do from outside; the daemon itself performs
+// the same probe inside the sandbox on every real start, which is where that
+// mistake is actually caught.
+func printReadWritePaths(w io.Writer, cfg *config.Config) {
+	paths := make([]string, 0, len(cfg.Folders)+1)
+	paths = append(paths, cfg.Storage.ColdStoragePath)
+	for _, f := range cfg.Folders {
+		paths = append(paths, f.Path)
+	}
+
+	fmt.Fprintf(w, "\nsystemd          ReadWritePaths=%s\n", strings.Join(paths, " "))
+	fmt.Fprintln(w, "                 --check runs OUTSIDE the unit's sandbox and cannot verify")
+	fmt.Fprintln(w, "                 this line. Copy it into /etc/systemd/system/coldstore.service;")
+	fmt.Fprintln(w, "                 a path missing from it makes the daemon exit 1 at startup")
+	fmt.Fprintln(w, "                 with EROFS, not silently misbehave later.")
 }

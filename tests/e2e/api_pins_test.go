@@ -203,15 +203,27 @@ func TestAPIPinShouldWarnEveryTimeWhenTheFolderIsAlreadyWedged(t *testing.T) {
 	}
 }
 
-func TestAPIPinShouldExplainWhenTheFileHasAlreadyFinishedArchiving(t *testing.T) {
+// The wording matters, not just the presence of a warning. Pinning something
+// that has been in cold storage for weeks is ordinary; telling the owner it
+// "finished archiving while the pin was being applied" reports a race that
+// never happened and sends them hunting a daemon that just took a file they
+// were trying to keep.
+func TestAPIPinShouldNotClaimARaceWhenTheFileWasAlreadyInColdStorage(t *testing.T) {
 	env := newTestEnv(t, withBudget("TestFolder", 10000))
-	file := seedAgedFile(t, env, "left.jpg", 400)
+	file := seedAgedFile(t, env, "long-gone.jpg", 400)
 	env.archive(t, file.ID)
 
 	resp := pin(t, env, file.ID)
 
 	if resp.Warning == nil {
 		t.Fatal("pinning an archived file must explain that the pin is latent")
+	}
+	if contains(*resp.Warning, "finished archiving while the pin was being applied") {
+		t.Errorf("warning = %q, but this file was archived long before the request arrived",
+			*resp.Warning)
+	}
+	if !contains(*resp.Warning, "cold storage") {
+		t.Errorf("warning = %q, want it to say where the file actually is", *resp.Warning)
 	}
 	if !contains(*resp.Warning, "restore it") {
 		t.Errorf("warning = %q, want it to say the pin takes effect on restore", *resp.Warning)

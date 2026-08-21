@@ -15,11 +15,25 @@ import (
 // 500 ids and there is no progress reporting to hide a long one behind.
 const maxBulkPinIDs = 5000
 
-// archivedDuringPinWarning is returned when a pin lands on a file the daemon
-// was already moving out. The pin still applies -- it becomes a latent
-// instruction that takes effect on restore -- but the owner is told the truth
-// rather than being shown a filled badge on a file that has left the device.
+// The two archived-file warnings. Both say the pin is latent, because in both
+// cases the owner is looking at a filled badge on a file that is not on the
+// device; they differ in what they claim happened, and only one of them may
+// claim a race.
+//
+// archivedDuringPinWarning is for a pin that lost a race it never knew it was
+// in: Mover.SetPinned takes the mover mutex, so a pin issued against a file the
+// daemon is already offloading blocks until that move finishes and returns a
+// row that was synced when the request arrived and archived when it left.
+//
+// archivedPinWarning is for the ordinary case -- pinning something that was
+// already in cold storage, which is legal and expected (design section 6.5).
+// Telling that owner their file "finished archiving while the pin was being
+// applied" describes an event that did not happen, and sends them looking for
+// a daemon that just took a file they were trying to keep.
 const archivedDuringPinWarning = "this file finished archiving while the pin was being applied; " +
+	"the pin will take effect when you restore it"
+
+const archivedPinWarning = "this file is in cold storage; " +
 	"the pin will take effect when you restore it"
 
 type pinResponse struct {
@@ -51,6 +65,15 @@ func (s *Server) setPin(w http.ResponseWriter, r *http.Request, pinned bool) {
 		return
 	}
 
+	// The status BEFORE the write is the only way to tell the two archived
+	// warnings apart. Reading it outside the mover mutex is not a weakness of
+	// the check, it is the check: the window this read leaves open is exactly
+	// the window in which a concurrent offload can overtake the request.
+	statusBefore, ok := s.statusBeforePin(w, id)
+	if !ok {
+		return
+	}
+
 	// Through the mover, so the write cannot commit while a move of this file
 	// is in flight. If the daemon was already offloading it, this blocks until
 	// the move finishes and then writes against the settled row (D2).
@@ -75,8 +98,25 @@ func (s *Server) setPin(w http.ResponseWriter, r *http.Request, pinned bool) {
 	writeJSON(w, http.StatusOK, pinResponse{
 		File:    *file,
 		Folder:  folder,
-		Warning: pinWarning(pinned, file.Status, folder),
+		Warning: pinWarning(pinned, statusBefore, file.Status, folder),
 	})
+}
+
+// statusBeforePin reads the row the caller is about to pin. It answers the
+// request itself -- 404 for an id that does not exist, 500 for a database that
+// cannot be read -- and reports false when it has.
+func (s *Server) statusBeforePin(w http.ResponseWriter, id int64) (catalog.FileStatus, bool) {
+	file, err := s.cat.GetFileByID(id)
+	if err == nil {
+		return file.Status, true
+	}
+	if errors.Is(err, catalog.ErrNoSuchFile) {
+		writeError(w, http.StatusNotFound, "file not found")
+		return "", false
+	}
+	s.logger.Error("reading file before pin", "id", id, "error", err)
+	writeError(w, http.StatusInternalServerError, "failed to read file")
+	return "", false
 }
 
 // handleBulkPin is one request, one mover-mutex acquisition, one chunked
@@ -138,7 +178,7 @@ func (s *Server) handleBulkPin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// pinWarning implements the two warnings of design section 6.5.
+// pinWarning implements the warnings of design section 6.5.
 //
 // The budget warning is a STATE test -- pinned bytes exceed the budget after
 // the write -- and not a transition test. With a transition reading, pinning
@@ -146,14 +186,22 @@ func (s *Server) handleBulkPin(w http.ResponseWriter, r *http.Request) {
 // and look routine, which is the opposite of what D3 is for. The pin is
 // applied either way: the owner is allowed to wedge their own folder as long
 // as they are told.
-func pinWarning(pinned bool, status catalog.FileStatus, folder folderStatus) *string {
+//
+// The archived warning, by contrast, IS a transition test, which is what
+// before is for. Both wordings say the pin is latent; only a row that arrived
+// un-archived and left archived may say the archive happened during the
+// request.
+func pinWarning(pinned bool, before, after catalog.FileStatus, folder folderStatus) *string {
 	if !pinned {
 		return nil
 	}
-	// The archiving warning wins when both apply, because it explains
-	// something the owner is otherwise about to misread.
-	if status == catalog.StatusArchived {
-		w := archivedDuringPinWarning
+	// An archived warning wins when both apply, because it explains something
+	// the owner is otherwise about to misread.
+	if after == catalog.StatusArchived {
+		w := archivedPinWarning
+		if before != catalog.StatusArchived {
+			w = archivedDuringPinWarning
+		}
 		return &w
 	}
 	if folder.Wedged {

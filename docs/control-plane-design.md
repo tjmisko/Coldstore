@@ -1473,7 +1473,9 @@ that move finishes and then commits against the settled row. If the file ended u
 is recorded on the archived row and the `200` response carries the real post-write `FileRecord`
 (`status: "archived"`) plus
 `warning: "this file finished archiving while the pin was being applied; the pin will take effect
-when you restore it"`. The owner is told the truth instead of being shown a lie.
+when you restore it"`. The owner is told the truth instead of being shown a lie. That exact wording
+is reserved for this case — a row that was **not** archived when the request arrived; §6.5 has the
+other wording, for the ordinary pin on a file that was already in cold storage.
 
 **Rejected alternative:** letting the pin win by discarding a completed, byte-verified destination
 and rewriting the source. Reverting a finished move is strictly more dangerous than the problem it
@@ -2297,7 +2299,7 @@ for label, add := range sizes:
     total, _ := cat.FolderSizes(label)
     if total + add > fc.BudgetBytes && !req.Force:
         overage := total + add - fc.BudgetBytes
-        evictions := cat.CountUnpinnedSyncedOldestUpTo(label, overage)  // how many files that is
+        evictions := cat.CountEvictionsUpTo(label, overage, IsPersistent(fc))  // how many files that is
         return 409 {
           "error": "restoring these files would exceed the folder budget",
           "folder": label,
@@ -2313,17 +2315,37 @@ confirm dialog that names the number:
 > about **2,500 other files** to make room, and Syncthing will delete them from your devices.
 > [Cancel] [Restore anyway]
 
-`CountUnpinnedSyncedOldestUpTo(label, bytes)` is a single ordered scan of
+`CountEvictionsUpTo(label, bytes, protected)` is a single ordered scan of
 `idx_files_folder_status_pinned` counting rows until the running sum reaches `bytes`; it is capped at
-50,000 rows and reports the cap.
+50,000 rows and reports the cap. `protected` is the caller's predicate for "the offloader would never
+evict this", and the handler passes `IsPersistent` against the folder's persistent globs: a starred
+file is not an eviction, and counting it promises the owner a deletion that cannot happen. The glob
+semantics stay in `internal/daemon`, which is why this is a predicate and not another `WHERE` clause.
+The grace period is deliberately **not** applied — grace delays an eviction, it does not prevent one,
+so filtering on it would under-report a mass deletion that still happens an hour later.
 
 **2. Make mass eviction loud regardless of cause.** The pre-flight cannot catch a folder that goes
 over budget because the owner shot a wedding, or lowered the budget in the UI. So: when a single
-`enforceFolder` pass archives **more than 100 files or more than 10% of the folder's file count**,
-write one `bulk_eviction` event with the count and the byte total, log it at `Warn`, and surface it
-in the StatusBar as a dismissible strip — not only in a table the ConfigPanel shows ten rows of.
+`enforceFolder` pass archives **more than 100 files, or more than 10% of the folder's file count
+when the pass took at least 10 files**, write one `bulk_eviction` event with the count and the byte
+total, log it at `Warn`, and surface it in the StatusBar as a dismissible strip — not only in a
+table the ConfigPanel shows ten rows of.
+
+The 10-file floor under the percentage arm is load-bearing: one file out of six is 16%, so without
+it a folder of a dozen holiday videos writes a mass-eviction warning every time an ordinary tick
+sheds a single file, and a warning that fires on the normal case is not a warning. The absolute
+100-file arm still fires whatever the folder's size.
 
 ### 5.11 The stray-archive sweep
+
+> **Status: NOT IMPLEMENTED.** Nothing in the tree walks cold storage for unreferenced files and no
+> `stray_archive` event is ever written. The scanner skips both `*.coldstore-tmp` and
+> `*.coldstore-superseded` by name, so such a file is never catalogued, never counted and never
+> downloadable, and a `Warn` log line at the moment it is created is the whole of the owner's
+> notification. Do not write a code comment that promises this sweep until it exists — two did, and
+> a reviewer had to chase them down. On the restore path the aside also lands *inside* the Syncthing
+> folder, which is why the runbook's `.stignore` guidance is two lines (`*.coldstore-tmp` **and**
+> `*.coldstore-superseded*`) rather than one.
 
 Several paths in this document deliberately leave bytes in cold storage that no `files` row points
 at: `.coldstore-superseded` copies from §4.1b, §5.2b and §5.6, and any pre-existing orphan created by
@@ -2636,14 +2658,26 @@ Response `200`:
 §4.5 exactly. **The pin is applied either way** (D3: the user may knowingly wedge their own folder).
 The `folder` block lets the UI update the budget bar without a second round trip.
 
-There is a second warning, unrelated to the budget. Because `Mover.SetPinned` takes the mover mutex
-(§4.6), a pin issued against a file the daemon is already offloading blocks until that move finishes.
-If the returned `file.status` is `archived`, `warning` is:
+There is a second warning, unrelated to the budget: whenever the returned `file.status` is
+`archived`, the owner is looking at a filled pin badge on a file that is not on the device, and
+`warning` says the pin is latent. Which wording it uses is a **transition** test on the status the
+row had when the request arrived, not a state test on the status it has when the request leaves:
 
-> this file finished archiving while the pin was being applied; the pin will take effect when you
-> restore it
+> **already `archived` on arrival** — the ordinary case, and legal (see the status table below):
+> `this file is in cold storage; the pin will take effect when you restore it`
+>
+> **not `archived` on arrival** — the pin lost a race it never knew it was in. Because
+> `Mover.SetPinned` takes the mover mutex (§4.6), a pin issued against a file the daemon is already
+> offloading blocks until that move finishes and returns a row that changed underneath it:
+> `this file finished archiving while the pin was being applied; the pin will take effect when you
+> restore it`
 
-Both warnings can apply; the archiving one wins, because it explains something the owner is otherwise
+The distinction is not cosmetic. Reporting the race for every pin on an archived file tells an owner
+who pinned a photo that has been in cold storage for weeks that the daemon just took it, which sends
+them looking for an offload that never happened. The handler therefore reads the row once before the
+mover call; the window that read leaves open is exactly the window a concurrent offload can overtake.
+
+An archived warning wins over the budget one, because it explains something the owner is otherwise
 about to misread.
 
 The write sets `pin_source = "user"` and `pinned_at = now`. `DELETE` clears `pinned`, `pinned_at` and

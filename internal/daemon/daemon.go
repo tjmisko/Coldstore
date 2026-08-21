@@ -47,6 +47,17 @@ const (
 	bulkEvictionFileThreshold   = 100
 	bulkEvictionFractionPercent = 10
 
+	// bulkEvictionMinFiles is the floor under the percentage arm. Without it
+	// "more than 10% of the folder's file count" makes every ordinary tick on
+	// a small folder a mass eviction: one file out of six is 16%, so a folder
+	// of a dozen holiday videos would log a WARN and write a bulk_eviction row
+	// every time it shed a single file. The events table is what the Activity
+	// list reads, and a warning that fires on the normal case is not a
+	// warning. Below this many files the percentage says nothing worth
+	// interrupting the owner for; above 100 the absolute arm still fires
+	// whatever the folder's size.
+	bulkEvictionMinFiles = 10
+
 	// JobRetentionSeconds is how long a terminal job stays readable before the
 	// catalog tick purges it. Without a purge the jobs and job_items tables
 	// grow without bound (design section 5.7).
@@ -295,7 +306,7 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 	// last_enforced_at, so "last checked N minutes ago" never freezes on a
 	// live daemon, and it applies the wedge latch, which has to be able to
 	// CLEAR on the within-budget path (design section 4.4).
-	defer d.enforceEpilogue(folder.FolderLabel, folder.BudgetBytes)
+	defer d.enforceEpilogue(folder.FolderLabel)
 
 	// Nothing may be moved into or out of a folder whose root is not really
 	// there. Deduped at an hour: an unmounted drive stays unmounted, and one
@@ -472,7 +483,7 @@ func (d *Daemon) reportBulkEviction(label string, count int, bytes int64) {
 	}
 
 	big := count > bulkEvictionFileThreshold
-	if !big && counts.Total > 0 {
+	if !big && count >= bulkEvictionMinFiles && counts.Total > 0 {
 		big = int64(count)*100 > counts.Total*bulkEvictionFractionPercent
 	}
 	if !big {
@@ -492,8 +503,33 @@ func (d *Daemon) reportBulkEviction(label string, count int, bytes int64) {
 // The latch lives in folder_configs.wedge_warned_at rather than in a map on
 // the Daemon, because an in-memory flag resets on every restart and a systemd
 // restart loop would re-flood the events table with the same warning.
-func (d *Daemon) enforceEpilogue(label string, budget int64) {
+func (d *Daemon) enforceEpilogue(label string) {
 	now := time.Now().Unix()
+
+	// Deferred, not tail-called. last_enforced_at is what "last checked N
+	// minutes ago" reads, and the two reads below can fail transiently. If a
+	// failure skipped the stamp, the UI would freeze that timestamp at the
+	// moment the trouble started and report a healthy daemon as a stopped one
+	// -- the exact symptom the stamp exists to expose.
+	defer func() {
+		if err := d.cat.SetLastEnforcedAt(label, now); err != nil {
+			d.logger.Warn("cannot record enforcement time", "folder", label, "error", err)
+		}
+	}()
+
+	// Re-read, FIRST: the UI may have changed the policy while the pass was
+	// running, and wedge_warned_at may have been written by an earlier tick.
+	// The budget the tick started with is stale by definition, so the wedge
+	// decision and the number quoted in the warning both come from here. A
+	// budget raised mid-pass must not produce a wedge warning quoting the old
+	// one, and a budget lowered mid-pass must not hide a real wedge until the
+	// next tick.
+	fc, err := d.cat.FolderConfigByLabel(label)
+	if err != nil {
+		d.logger.Error("epilogue: folder config", "folder", label, "error", err)
+		return
+	}
+	budget := fc.BudgetBytes
 
 	total, pinned, err := d.cat.FolderSizes(label)
 	if err != nil {
@@ -501,14 +537,6 @@ func (d *Daemon) enforceEpilogue(label string, budget int64) {
 		return
 	}
 	b := catalog.FolderBudget{BudgetBytes: budget, TotalBytes: total, PinnedBytes: pinned}
-
-	// Re-read: the UI may have changed the policy while the pass was running,
-	// and wedge_warned_at may have been written by an earlier tick.
-	fc, err := d.cat.FolderConfigByLabel(label)
-	if err != nil {
-		d.logger.Error("epilogue: folder config", "folder", label, "error", err)
-		return
-	}
 
 	switch {
 	case b.Wedged():
@@ -535,10 +563,6 @@ func (d *Daemon) enforceEpilogue(label string, budget int64) {
 					"folder", label, "error", err)
 			}
 		}
-	}
-
-	if err := d.cat.SetLastEnforcedAt(label, now); err != nil {
-		d.logger.Warn("cannot record enforcement time", "folder", label, "error", err)
 	}
 }
 

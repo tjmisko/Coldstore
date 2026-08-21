@@ -295,8 +295,7 @@ func crossDeviceMove(src, dst string, logger *slog.Logger) error {
 
 	abandonTmp := func(cause error) error {
 		tmpFile.Close()
-		os.Remove(tmp)
-		return cause
+		return discardTmp(src, tmp, dst, before, logger, cause)
 	}
 
 	// 3. Copy.
@@ -314,38 +313,38 @@ func crossDeviceMove(src, dst string, logger *slog.Logger) error {
 		return abandonTmp(fmt.Errorf("syncing destination: %w", err))
 	}
 	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("closing destination: %w", err)
+		return discardTmp(src, tmp, dst, before, logger,
+			fmt.Errorf("closing destination: %w", err))
 	}
 	if err := syncDirPath(filepath.Dir(tmp)); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("syncing destination directory: %w", err)
+		return discardTmp(src, tmp, dst, before, logger,
+			fmt.Errorf("syncing destination directory: %w", err))
 	}
 
 	// 5. Verify what the filesystem actually kept, by reading it back.
 	diskSum, diskSize, err := hashFile(tmp)
 	if err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("re-reading destination: %w", err)
+		return discardTmp(src, tmp, dst, before, logger,
+			fmt.Errorf("re-reading destination: %w", err))
 	}
 	if diskSize != before.size {
-		os.Remove(tmp)
-		return fmt.Errorf("size mismatch on disk: %d bytes landed, expected %d", diskSize, before.size)
+		return discardTmp(src, tmp, dst, before, logger,
+			fmt.Errorf("size mismatch on disk: %d bytes landed, expected %d", diskSize, before.size))
 	}
 	if string(diskSum) != string(streamHash.Sum(nil)) {
-		os.Remove(tmp)
-		return errors.New("hash mismatch: the copy on disk differs from the bytes that were sent")
+		return discardTmp(src, tmp, dst, before, logger,
+			errors.New("hash mismatch: the copy on disk differs from the bytes that were sent"))
 	}
 
 	// 6. Metadata. Both are fatal: a wrong mode is a permissions bug and a
 	// wrong mtime destroys the only surviving record of the file's date.
 	if err := os.Chmod(tmp, before.mode.Perm()); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("preserving mode on %s: %w", tmp, err)
+		return discardTmp(src, tmp, dst, before, logger,
+			fmt.Errorf("preserving mode on %s: %w", tmp, err))
 	}
 	if err := os.Chtimes(tmp, before.atime, before.mtime); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("preserving timestamps on %s: %w", tmp, err)
+		return discardTmp(src, tmp, dst, before, logger,
+			fmt.Errorf("preserving timestamps on %s: %w", tmp, err))
 	}
 
 	// 7. Commit. Same directory, and NON-REPLACING: the destination was clear
@@ -357,8 +356,8 @@ func crossDeviceMove(src, dst string, logger *slog.Logger) error {
 		if errors.Is(err, ErrDestinationExists) {
 			return abandonTmpOnCollision(src, tmp, dst, before, logger)
 		}
-		os.Remove(tmp)
-		return fmt.Errorf("committing %s: %w", dst, err)
+		return discardTmp(src, tmp, dst, before, logger,
+			fmt.Errorf("committing %s: %w", dst, err))
 	}
 	// commitNoReplace linked rather than renamed; drop the temp name. Failing
 	// here costs one stray directory entry, never any bytes.
@@ -397,6 +396,64 @@ func crossDeviceMove(src, dst string, logger *slog.Logger) error {
 	}
 
 	return os.Remove(src)
+}
+
+// discardTmp cleans up the temp sibling a cross-device move is giving up on,
+// and returns cause unchanged so the caller's wrapping and every errors.Is on
+// it still work.
+//
+// It asks abandonTmpOnCollision's question -- is the source still there and
+// still the same file? -- because the answer decides whether the temp is
+// redundant or irreplaceable:
+//
+//   - source present and unchanged: the temp holds no bytes the source does
+//     not, so it goes and the caller retries on the next tick.
+//   - source gone, or rebound to a different inode while the copy ran: the
+//     temp is the ONLY copy of those bytes. Invariant 9 keeps it, under a
+//     .coldstore-superseded name, and says so loudly.
+//
+// Every failure after the copy begins routes through here. The collision path
+// was never special; it was only the first one written down, and every other
+// exit unlinked the temp unconditionally -- which, in the narrow case where the
+// source had vanished mid-copy, destroyed the last copy of the file.
+//
+// A temp that never passed verification is kept too. It may be short or
+// corrupt, but .coldstore-superseded is a name no catalog row references and
+// no restore serves; the owner gets to decide whether a damaged photo beats no
+// photo, and coldstore does not get to decide it for them by calling unlink.
+//
+// TWO THINGS THIS DOES NOT DO, both real gaps rather than oversights:
+//
+//   - On a RESTORE, dst is inside the Syncthing folder, so the aside lands
+//     there. Syncthing will propagate it under that name to every device unless
+//     the folder's .stignore carries BOTH `*.coldstore-tmp` and
+//     `*.coldstore-superseded*` -- the trailing star matters, asidePath also
+//     produces `.coldstore-superseded.2`, `.3`, and so on. coldstore does not
+//     write .stignore itself (design section 3.8); the deployment runbook tells
+//     the owner to. The scanner skipping the suffix only keeps it out of the
+//     catalog, it does nothing about Syncthing.
+//   - Nothing reports the file afterwards. Design section 5.11's stray-archive
+//     sweep is not implemented, so the Warn below is the whole of the owner's
+//     notification.
+func discardTmp(src, tmp, dst string, before fileIdentity, logger *slog.Logger, cause error) error {
+	srcInfo, srcErr := os.Lstat(src)
+	if srcErr == nil && before.sameFile(identityFromInfo(srcInfo)) {
+		if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+			logger.Warn("cannot remove the temp sibling after an abandoned move",
+				"path", tmp, "error", err)
+		}
+		return cause
+	}
+
+	aside := asidePath(dst)
+	if err := os.Rename(tmp, aside); err != nil {
+		logger.Error("cannot keep the only surviving copy of a vanished source",
+			"tmp", tmp, "aside", aside, "error", err)
+		return cause
+	}
+	logger.Warn("the move failed and its source is gone; kept the copy",
+		"src", src, "dst", dst, "superseded", aside, "cause", cause)
+	return cause
 }
 
 // abandonTmpOnCollision handles the one outcome invariant 10 exists for: the

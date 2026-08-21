@@ -5,6 +5,7 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tjmisko/coldstore/internal/config"
@@ -123,7 +124,129 @@ budget = "1GB"
 	if cfg.Daemon.ThumbnailWorkers != 2 {
 		t.Errorf("thumbnail_workers default = %d", cfg.Daemon.ThumbnailWorkers)
 	}
-	if cfg.Server.ListenAddr != "0.0.0.0:8090" {
-		t.Errorf("listen_addr default = %q", cfg.Server.ListenAddr)
+	// Loopback, not 0.0.0.0: an omitted listen_addr must not be what puts the
+	// control plane on the network (D5).
+	if cfg.Server.ListenAddr != config.DefaultListenAddr {
+		t.Errorf("listen_addr default = %q, want %q", cfg.Server.ListenAddr, config.DefaultListenAddr)
+	}
+}
+
+// writeCfg writes a config file and returns its path.
+func writeCfg(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "coldstore.toml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+const folderBlock = `
+[[folders]]
+label = "Photos"
+path = "/tmp/photos"
+budget = "10GB"
+`
+
+func TestConfigLoadShouldRefuseWhenBoundOffLoopbackWithoutCredentials(t *testing.T) {
+	path := writeCfg(t, `
+[server]
+listen_addr = "0.0.0.0:8090"
+`+folderBlock)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("config.Load accepted an unauthenticated 0.0.0.0 bind")
+	}
+	if !strings.Contains(err.Error(), "refusing to start") {
+		t.Errorf("error does not read as a refusal: %v", err)
+	}
+}
+
+func TestConfigLoadShouldAcceptOffLoopbackBindWhenCredentialsComeFromTheEnvironment(t *testing.T) {
+	// The password never has to be in the file the owner might paste into a bug
+	// report: COLDSTORE_USERNAME / COLDSTORE_PASSWORD supply it instead.
+	t.Setenv(config.EnvUsername, "owner")
+	t.Setenv(config.EnvPassword, "a-long-random-password")
+
+	path := writeCfg(t, `
+[server]
+listen_addr = "0.0.0.0:8090"
+`+folderBlock)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("config.Load = %v, want nil", err)
+	}
+	if cfg.Server.Username != "owner" || cfg.Server.Password != "a-long-random-password" {
+		t.Errorf("credentials = %q/%q, want the environment values",
+			cfg.Server.Username, cfg.Server.Password)
+	}
+}
+
+func TestConfigLoadShouldPreferTheEnvironmentPasswordOverTheFileOne(t *testing.T) {
+	t.Setenv(config.EnvPassword, "from-env")
+
+	path := writeCfg(t, `
+[server]
+listen_addr = "127.0.0.1:8090"
+username = "owner"
+password = "from-file"
+`+folderBlock)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Password != "from-env" {
+		t.Errorf("password = %q, want the environment to win", cfg.Server.Password)
+	}
+}
+
+func TestConfigLoadShouldRefuseWhenNoFoldersAreDeclared(t *testing.T) {
+	path := writeCfg(t, `
+[storage]
+cold_storage_path = "/tmp/cold"
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("config.Load accepted a config with no folders")
+	}
+}
+
+func TestConfigLoadShouldRefuseWhenColdStorageIsInsideAManagedFolder(t *testing.T) {
+	path := writeCfg(t, `
+[storage]
+cold_storage_path = "/tmp/photos/cold"
+
+[[folders]]
+label = "Photos"
+path = "/tmp/photos"
+budget = "10GB"
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("config.Load accepted an archive nested inside the folder it archives")
+	}
+}
+
+func TestShippedExampleConfigShouldLoadAndBeSafeByDefault(t *testing.T) {
+	// The documented happy path is `cp coldstore.toml.example ...`. If the
+	// shipped file does not load, or loads into an exposed daemon, the runbook
+	// is lying.
+	cfg, err := config.Load(filepath.Join("..", "..", "coldstore.toml.example"))
+	if err != nil {
+		t.Fatalf("coldstore.toml.example does not load: %v", err)
+	}
+
+	loopback, err := config.IsLoopbackListenAddr(cfg.Server.ListenAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authed := cfg.Server.Username != "" && cfg.Server.Password != ""
+	if !loopback && !authed {
+		t.Errorf("the shipped example binds %q with no credentials", cfg.Server.ListenAddr)
 	}
 }

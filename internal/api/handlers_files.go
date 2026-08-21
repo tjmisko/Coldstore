@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -165,9 +166,17 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 404 means "no such file id" and nothing else. Collapsing every error
+	// into it tells the UI a corrupt, locked or closed database is a file the
+	// owner deleted -- the one diagnosis that makes them stop looking.
 	file, err := s.cat.GetFileByID(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "file not found")
+		if errors.Is(err, catalog.ErrNoSuchFile) {
+			writeError(w, http.StatusNotFound, "file not found")
+			return
+		}
+		s.logger.Error("reading file for download", "id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to read file")
 		return
 	}
 
@@ -177,6 +186,15 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		// cat.FolderPath, not cfg.Folders: it resolves disabled and orphaned
 		// folders too, which is what keeps an orphan's files browsable (3.4).
 		folderPath, err := s.cat.FolderPath(file.FolderLabel)
+		if err != nil && !errors.Is(err, catalog.ErrNoSuchFolder) {
+			// Same distinction one level down: no folder row is a real 409,
+			// but a database that cannot be read is not a folder that is
+			// merely unmounted.
+			s.logger.Error("reading folder for download",
+				"folder", file.FolderLabel, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to read folder")
+			return
+		}
 		if err != nil {
 			s.logger.Warn("cannot resolve folder for download",
 				"folder", file.FolderLabel, "error", err)

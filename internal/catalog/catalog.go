@@ -611,17 +611,37 @@ func (c *Catalog) FolderLabelsForIDs(ids []int64) ([]string, error) {
 	return labels, nil
 }
 
-// CountUnpinnedSyncedOldestUpTo reports how many files the daemon would have to
-// offload, oldest first, to free the given number of bytes. capped is true when
-// the scan hit its 50,000-row ceiling before reaching the target.
-func (c *Catalog) CountUnpinnedSyncedOldestUpTo(folder string, bytes int64) (count int, capped bool, err error) {
+// CountEvictionsUpTo reports how many files the daemon would have to offload
+// out of a folder, oldest first, to free the given number of bytes. capped is
+// true when the scan hit its 50,000-row ceiling before reaching the target.
+//
+// protected is called with each candidate's relative path and reports whether
+// the offloader would refuse to evict that file for good; the row is then
+// counted neither towards the running total nor towards count. Pass nil to
+// count every unpinned synced row.
+//
+// The predicate is a parameter rather than another WHERE clause because the
+// one thing that protects a file permanently -- a persistent glob (design
+// section 4.1a) -- is filepath.Match against patterns whose semantics live in
+// internal/daemon, which internal/catalog must not import. Re-implementing
+// them here as SQL LIKE would drift from the offloader the first time those
+// semantics change, and this count exists precisely to predict the offloader.
+//
+// The grace period is deliberately NOT applied. Grace delays an eviction, it
+// does not prevent one, so a file inside its grace window is still a file the
+// owner is about to lose from their devices. This count feeds a confirmation
+// dialog; under-reporting it is a false reassurance about a mass deletion that
+// happens anyway, an hour later.
+func (c *Catalog) CountEvictionsUpTo(folder string, bytes int64,
+	protected func(relPath string) bool) (count int, capped bool, err error) {
+
 	if bytes <= 0 {
 		return 0, false, nil
 	}
 	const scanCap = 50000
 
 	rows, err := c.db.Query(`
-		SELECT size_bytes FROM files
+		SELECT relative_path, size_bytes FROM files
 		WHERE folder_label = ? AND status = 'synced' AND pinned = 0
 		ORDER BY MAX(file_mtime, file_atime) ASC
 		LIMIT ?`, folder, scanCap)
@@ -633,11 +653,15 @@ func (c *Catalog) CountUnpinnedSyncedOldestUpTo(folder string, bytes int64) (cou
 	var running int64
 	var scanned int
 	for rows.Next() {
+		var relPath string
 		var size int64
-		if err := rows.Scan(&size); err != nil {
+		if err := rows.Scan(&relPath, &size); err != nil {
 			return 0, false, err
 		}
 		scanned++
+		if protected != nil && protected(relPath) {
+			continue
+		}
 		running += size
 		count++
 		if running >= bytes {
@@ -1023,8 +1047,10 @@ func (c *Catalog) LogEvent(eventType, folder, path, details string) error {
 // EventClassWarning selects every event type EXCEPT the three routine
 // per-file ones. A single enforcement pass writes hundreds of archive rows, so
 // an unfiltered "last 10 events for this folder" would never once show the
-// wedge warning, the cold-storage warning or the stray-archive report -- the
-// three things the list exists to show (design section 6.12).
+// wedge warning or the cold-storage warning -- the things the list exists to
+// show (design section 6.12). Section 5.11's stray-archive report is the third
+// intended member of that set and is not implemented, so no event of that kind
+// is written today.
 const EventClassWarning = "warning"
 
 // routineEventTypes are the types EventClassWarning filters out.

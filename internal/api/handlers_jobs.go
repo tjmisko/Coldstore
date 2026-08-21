@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/tjmisko/coldstore/internal/catalog"
+	"github.com/tjmisko/coldstore/internal/daemon"
 )
 
 // maxJobIDs caps a single selection. It is ONE constant, used by both
@@ -155,7 +156,7 @@ func (s *Server) restorePreflight(w http.ResponseWriter, ids []int64) bool {
 		}
 
 		overage := total + add - fc.BudgetBytes
-		evictions, _, err := s.cat.CountUnpinnedSyncedOldestUpTo(label, overage)
+		evictions, err := s.estimateEvictions(label, overage)
 		if err != nil {
 			s.logger.Error("restore pre-flight: counting evictions", "folder", label, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to create job")
@@ -171,6 +172,43 @@ func (s *Server) restorePreflight(w http.ResponseWriter, ids []int64) bool {
 		return false
 	}
 	return true
+}
+
+// estimateEvictions counts the files the offloader would really archive out of
+// a folder to claw back overage bytes.
+//
+// "Really" is the whole point, and it is why this is not a bare row count. A
+// candidate covered by a persistent glob is never evicted, no matter how old
+// it is or how far over budget the folder goes (design section 4.1a). Counting
+// it here puts a number in front of the owner -- "coldstore will archive about
+// N other files, and Syncthing will delete them from your devices" -- for a
+// consequence that cannot occur, which is the same species of untruth section
+// 5.10 added this dialog to prevent.
+func (s *Server) estimateEvictions(label string, overage int64) (int, error) {
+	patterns, err := s.persistentPatterns(label)
+	if err != nil {
+		return 0, err
+	}
+	count, _, err := s.cat.CountEvictionsUpTo(label, overage, func(relPath string) bool {
+		return daemon.IsPersistent(relPath, patterns)
+	})
+	return count, err
+}
+
+// persistentPatterns reads a folder's persistent globs from the database. The
+// database is the only source: the TOML globs were copied into
+// persistent_paths when the folder was seeded (design section 3.2), so merging
+// cfg here would resurrect a glob the owner has since deleted.
+func (s *Server) persistentPatterns(label string) ([]string, error) {
+	paths, err := s.cat.ListPersistentPaths(label)
+	if err != nil {
+		return nil, err
+	}
+	patterns := make([]string, 0, len(paths))
+	for _, p := range paths {
+		patterns = append(patterns, p.Pattern)
+	}
+	return patterns, nil
 }
 
 // enqueue commits the job and pokes the worker. The poke is what makes a bulk

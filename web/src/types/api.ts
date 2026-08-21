@@ -97,8 +97,11 @@ export interface FolderStatus {
 
 /** POST/DELETE /api/v1/files/{id}/pin. `warning` is non-null iff the folder's
  *  pinned bytes exceed its budget AFTER the write -- a state test, not a
- *  transition test -- or the file finished archiving while the pin was being
- *  applied. The pin is applied either way. */
+ *  transition test -- or the pinned file is in cold storage, where the pin is
+ *  latent until a restore. The cold-storage wording distinguishes a file that
+ *  was already archived when the request arrived from one the daemon archived
+ *  during it; only the latter says the archive happened just now. The pin is
+ *  applied either way. */
 export interface PinResponse {
   file: FileRecord;
   folder: FolderStatus;
@@ -168,7 +171,14 @@ export interface JobCreated {
 /** The 409 body from POST /api/v1/jobs when a restore would push a folder past
  *  its budget. The daemon's answer to that is to evict a comparable volume of
  *  files the owner never selected, so the dialog has to be able to say how
- *  many. */
+ *  many.
+ *
+ *  `estimated_evictions` counts only files the offloader would really take:
+ *  anything a persistent glob protects is excluded, because it is never
+ *  evicted at any budget. It can legitimately be 0 -- the restore still
+ *  exceeds the budget, but nothing is left that coldstore is allowed to
+ *  archive, so the folder simply goes over and wedges. The dialog has to be
+ *  able to say that too, rather than naming a file that cannot move. */
 export interface BudgetPreflightError {
   error: string;
   folder: string;

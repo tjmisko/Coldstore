@@ -39,6 +39,31 @@ jobs:
       - name: Typecheck and build
         run: npm run build
 
+  # The deployment runbook's very first build command, run in the state a real
+  # owner runs it in: a checkout that has never been built.
+  #
+  # `web/node_modules` is gitignored, and `make frontend` used to go straight to
+  # `npm run build` -- so a fresh clone died on `sh: tsc: command not found`
+  # before the owner reached step 5. The `frontend` job above cannot catch that,
+  # because it runs `npm ci` itself. This job must NOT: no npm cache, no npm ci,
+  # nothing but `make build`. The Makefile's `deps` prerequisite is the fix, and
+  # this is what keeps it fixed.
+  fresh-clone-build:
+    name: make build on a tree that has never been built
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: make build (no preceding npm ci, on purpose)
+        run: make build
+      - name: The binary and the embedded SPA must both exist
+        run: test -x ./coldstore && test -f internal/api/dist/index.html
+
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -61,23 +86,29 @@ jobs:
       - run: go test -tags e2e -count=1 -timeout 120s ./tests/e2e/...
 
   e2e-live:
+    name: e2e-live (two Syncthing devices + the containerised daemon)
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    # The live tier waits on real quota ticks and real Syncthing index exchange.
+    # A local clean run is ~2.5 minutes; this is headroom, not an expectation.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build binary
-        # docker/Dockerfile.test COPYs this binary from the repo root into the image.
-        run: go build -o coldstore ./cmd/coldstore
-      - name: Start services
-        run: docker compose -f docker/compose.test.yml up -d --build --wait
+      # No `docker compose up` step, and no separate `go build` step: TestMain in
+      # tests/e2e/live_main_test.go builds the binary the image copies, brings the
+      # stack up, pairs the two Syncthing devices, dumps container logs on
+      # failure, and tears everything down. Splitting that between the workflow
+      # and the test binary is exactly how this job came to start a stack it never
+      # talked to.
+      #
+      # `-tags e2e_live` builds ONLY tests/e2e/live_*.go. Do not add `e2e` back:
+      # that re-runs the in-process suite the `e2e` job has already run, and it
+      # was what made a green run here mean nothing.
       - name: Run live e2e tests
-        run: go test -tags e2e,e2e_live -count=1 -timeout 300s ./tests/e2e/...
-      - name: Dump container logs
-        if: failure()
-        run: docker compose -f docker/compose.test.yml logs --no-color
-      - name: Tear down
+        run: make test-e2e-live
+      - name: Tear down (belt and braces)
         if: always()
-        run: docker compose -f docker/compose.test.yml down -v
+        run: docker compose -p coldstore-live -f docker/compose.test.yml down -v --remove-orphans || true

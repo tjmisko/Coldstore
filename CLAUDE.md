@@ -43,9 +43,23 @@ Copy `coldstore.toml.example` to `coldstore.toml` and edit. See `docs/` for deta
 ```bash
 go test ./...                                          # unit
 go test -tags e2e -count=1 ./tests/e2e/...             # in-process e2e
-make test-e2e-live                                     # docker: coldstore + real syncthing
+make test-e2e-live                                     # docker: the daemon + TWO real syncthing devices
 cd web && npm run lint                                 # eslint
 ```
 
-CI (`.github/workflows/ci.yml`) runs four jobs: `frontend` (eslint + tsc + vite build),
-`unit`, `e2e`, and `e2e-live`.
+The live tier (`tests/e2e/live_*.go`, tag `e2e_live` **alone**) drives the containerised
+daemon over its published port and two paired Syncthing devices over their REST APIs. It
+is the only place the product's central claim is executed: that archiving a file makes
+Syncthing delete it from the owner's other devices, and restoring brings it back. Its
+`TestMain` owns the containers -- build, up, pair, run, log on failure, `down -v` -- so
+`go test -tags e2e_live ./tests/e2e/...` is a complete run on its own. Never add `e2e` to
+that tag list: that only re-runs the in-process suite, which is how the target spent its
+whole life starting a stack it never talked to. Coverage limits are written down in
+docs/build-and-test.md.
+
+CI (`.github/workflows/ci.yml`) runs five jobs: `frontend` (eslint + tsc + vite build),
+`fresh-clone-build`, `unit`, `e2e`, and `e2e-live`.
+
+`fresh-clone-build` runs `make build` with **no preceding `npm ci`**, because that is
+the state the deployment runbook's build command actually runs in (`web/node_modules` is
+gitignored). Do not add an `npm ci` step to it -- that is the bug it exists to catch.

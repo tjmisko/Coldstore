@@ -1,15 +1,197 @@
+### coldstore.service -- install to /etc/systemd/system/coldstore.service
+###
+### THREE THINGS MUST BE EDITED BEFORE THIS UNIT WILL WORK ON YOUR MACHINE:
+###   1. User= / Group=      -- must be the account Syncthing runs as (see below)
+###   2. RequiresMountsFor=  -- your cold storage mount point
+###   3. ReadWritePaths=     -- cold_storage_path plus EVERY [[folders]].path
+###                            (`coldstore --check` prints this line for you)
+### AND ON ZFS WITH A NATIVE mountpoint=, also uncomment the After/Wants pair
+### below RequiresMountsFor -- that directive alone does not order against
+### zfs-mount.service. docs/deployment.md walks through all of it.
+
 [Unit]
-Description=Coldstore - Syncthing Archive Daemon
-After=network.target syncthing.service
+Description=coldstore -- Syncthing cold-storage daemon
+Documentation=https://github.com/tjmisko/coldstore
+
+# After, never Requires: coldstore does not talk to Syncthing over any socket, so
+# it starts and runs perfectly well with Syncthing down. Ordering only avoids a
+# pointless "folder not ready" warning on a cold boot.
+After=network-online.target syncthing.service
+Wants=network-online.target
+
+# The real dependency is the storage, not the network. A boot that starts
+# coldstore before the pool is mounted makes the daemon exit 1: cold_storage_path
+# is missing and coldstore deliberately will not create it.
+#
+# RequiresMountsFor works by finding the .mount UNIT that provides the path. That
+# covers fstab entries, automounts, and ZFS datasets with mountpoint=legacy.
+#
+#   *** IT DOES NOT COVER A NATIVE-MOUNTPOINT ZFS DATASET. ***
+#
+# A dataset with `mountpoint=/srv/coldstore` is mounted by zfs-mount.service,
+# which is a service, not a .mount unit, so at boot there is no unit for systemd
+# to infer from the path and the ordering silently resolves to the nearest
+# existing mount (usually -.mount, i.e. /). Find out which case you are in:
+#
+#     findmnt -no SOURCE,FSTYPE /srv/coldstore        # zfs at all?
+#     zfs get -H -o value mountpoint tank/coldstore   # a path = native, or 'legacy'
+#
+# A native mountpoint means uncommenting the two lines below as well. 'legacy'
+# (mounted from /etc/fstab) or any non-ZFS filesystem means RequiresMountsFor=
+# alone is enough.
+#
+# Add one RequiresMountsFor path per [[folders]].path on a separate volume.
+RequiresMountsFor=/srv/coldstore
+#After=zfs-mount.service
+#Wants=zfs-mount.service
+
+# NO START LIMIT, deliberately.
+#
+# The obvious setting -- StartLimitIntervalSec=300 with StartLimitBurst=5 and
+# RestartSec=10s -- gives up permanently 51 seconds after the first failure and
+# leaves the unit `failed` until a human runs `systemctl reset-failed coldstore`.
+# `systemctl start` alone does not clear it. On the single most likely first-boot
+# failure, a pool that has not mounted yet, 51 seconds of headroom turns a
+# transient ordering problem into a service that stays down until someone logs
+# in -- exactly the outcome config.CheckEnvironment goes out of its way to avoid
+# by making a missing folder path a warning rather than an error.
+#
+# So: retry forever, once a minute. A genuine config error still surfaces
+# immediately and loudly at the top of `systemctl status coldstore`, one journal
+# line a minute is not a flood, and the daemon binds no port and touches no file
+# on the failing path.
+StartLimitIntervalSec=0
 
 [Service]
-Type=simple
-ExecStart=/usr/local/bin/coldstore --config /etc/coldstore/coldstore.toml
-Restart=on-failure
+Type=exec
+
+# ---------------------------------------------------------------------------
+# IDENTITY
+#
+# Run as the SAME account Syncthing runs as. This is not a formality:
+#   * coldstore deletes files out of the Syncthing folder and writes them back on
+#     restore. It needs the same write access Syncthing has.
+#   * A restored file is created by coldstore. If it were owned by a different
+#     user, Syncthing could no longer modify or delete it, and the folder would
+#     start throwing permission errors on the next remote change.
+# A dedicated `coldstore` user is only worth it if you also put it in Syncthing's
+# group and set g+w on every managed folder. On a single-owner home box, sharing
+# the account is the simpler correct answer.
+# ---------------------------------------------------------------------------
 User=tjmisko
+Group=tjmisko
+
+ExecStart=/usr/local/bin/coldstore --config /etc/coldstore/coldstore.toml
+
+# Optional (the leading `-` means "ignore if absent"). This is where
+# COLDSTORE_USERNAME and COLDSTORE_PASSWORD belong, so the web-UI password is not
+# in coldstore.toml. chmod 600 it. systemd never echoes its contents to the
+# journal or to `systemctl show`.
+EnvironmentFile=-/etc/coldstore/coldstore.env
+
 WorkingDirectory=/srv/coldstore
 StandardOutput=journal
 StandardError=journal
 
+# 60s, not 10s: the thing worth waiting for is a slow pool import, and there is
+# no start limit above to burn through.
+Restart=on-failure
+RestartSec=60s
+
+# Shutdown is a data-safety setting, not a politeness one. On SIGTERM the daemon
+# cancels its context and finishes the move it is in the middle of; a move that is
+# killed instead leaves a row in `archiving` for startup recovery to resolve. The
+# 90 s default is not enough for a large file on a slow pool.
+TimeoutStopSec=120
+KillSignal=SIGTERM
+
+# catalog.db and the thumbnails are owner-only.
+#
+# This does NOT govern archived or restored FILES: every move chmods the copy
+# back to the source file's own mode (internal/daemon/move.go), so an archived
+# 0644 photo is 0644 in cold storage and a restored one goes back into the
+# Syncthing folder with the mode it had. That is deliberate -- a restore that
+# tightened permissions would propagate the new mode to every synced device --
+# so do not "fix" that chmod to match this line.
+UMask=0077
+
+# ---------------------------------------------------------------------------
+# FILESYSTEM SANDBOX
+#
+# ProtectSystem=strict makes the ENTIRE filesystem read-only except /dev, /proc,
+# /sys and what ReadWritePaths= lists. That is the right shape for this daemon:
+# it needs write access to exactly two kinds of place, and nothing else.
+#
+# Every ReadWritePaths entry below is load-bearing, and a missing one is a HARD
+# STARTUP FAILURE, not a surprise hours later: config.CheckEnvironment probes
+# cold storage and every mounted folder (one with .stfolder -- i.e. every real
+# Syncthing folder) for writability before the catalog is opened, that probe runs
+# inside this sandbox, and EROFS there makes the daemon exit 1. The message names
+# ReadWritePaths= explicitly, because the same probe failing with EACCES means
+# something completely different (wrong User=) and chown cannot fix a path the
+# sandbox has made read-only.
+#
+# `coldstore --check` run by hand does NOT see this sandbox and will print
+# "preflight OK" for a unit that is missing an entry -- but it prints the exact
+# ReadWritePaths= line your config needs, so copy that.
+#
+#   /srv/coldstore            cold_storage_path: catalog.db (+ -wal, -shm),
+#                             archive/, thumbnails/, and the .coldstore-tmp
+#                             siblings every move writes before renaming.
+#   /home/tjmisko/CameraRoll  a [[folders]].path. coldstore DELETES from here to
+#   /home/tjmisko/Books       free space and WRITES here on restore. Read-only
+#                             would break the entire product.
+#
+# ProtectHome=read-only is compatible with those /home entries: ReadWritePaths is
+# applied after ProtectHome and punches through it (verified with systemd-run).
+# What it buys is that every OTHER user's home stays read-only even if a future
+# ReadWritePaths edit is sloppy. ProtectHome=tmpfs would hide the managed folders
+# themselves and is not usable here.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/coldstore /home/tjmisko/CameraRoll /home/tjmisko/Books
+
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# The daemon serves HTTP and ffmpeg needs nothing else. No AF_NETLINK, no raw
+# sockets, no AF_PACKET.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# LAN-only, enforced by the kernel as well as by config.ValidateServerBinding.
+# The three RFC1918 ranges plus link-local cover every home network; loopback
+# covers an SSH tunnel to a loopback bind. If your LAN is on something else, or
+# the UI is unreachable after enabling this, add your range or comment the pair
+# out -- coldstore needs no outbound access at all.
+IPAddressDeny=any
+IPAddressAllow=localhost 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fe80::/10 fd00::/8
+
+# NOT enabled, deliberately:
+#   MemoryDenyWriteExecute=yes -- the Go runtime is fine with it, but ffmpeg
+#     pulls in codec and hardware-acceleration libraries that have historically
+#     mapped W+X pages. Breaking thumbnails is a worse trade than this hardening
+#     is worth. Turn it on if your thumbnails still generate.
+#   PrivateUsers=yes -- untested against the cross-device move path, which cares
+#     about file ownership on both sides.
+
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

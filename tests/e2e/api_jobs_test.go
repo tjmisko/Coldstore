@@ -283,6 +283,69 @@ func TestJobsEndpointShouldDeduplicateTheSelectionWhenTheSameIdIsSentTwice(t *te
 	}
 }
 
+// The number in the refusal is a promise about what coldstore will do to the
+// owner's other devices, so it may not count a file coldstore will never
+// touch. A persistent glob protects its matches permanently (design section
+// 4.1a): the offloader skips them at every budget, at every age, forever.
+func TestRestoreRefusalShouldNotPromiseEvictionsThatAPersistentGlobForbids(t *testing.T) {
+	env := newTestEnv(t,
+		withBudget("TestFolder", 1000),
+		withPersistent("TestFolder", "Starred/*"))
+
+	// One archived file to bring back, and one on-device file that is the only
+	// thing old enough and loose enough to be a candidate -- except that it is
+	// starred, which takes it out of the running for good.
+	cold := seedAgedFile(t, env, "cold.jpg", 900)
+	env.archive(t, cold.ID)
+	seedAgedFile(t, env, "Starred/fav.jpg", 400)
+
+	w := do(t, env, "POST", "/api/v1/jobs",
+		map[string]any{"action": "restore", "ids": []int64{cold.ID}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", w.Code, w.Body.String())
+	}
+	var refusal budgetPreflightJSON
+	if err := json.NewDecoder(w.Body).Decode(&refusal); err != nil {
+		t.Fatal(err)
+	}
+	// 400 on device + 900 restored - 1000 budget.
+	if refusal.OverageBytes != 300 {
+		t.Errorf("overage_bytes = %d, want 300", refusal.OverageBytes)
+	}
+	if refusal.EstimatedEvictions != 0 {
+		t.Errorf("estimated_evictions = %d, want 0: the only candidate is protected by "+
+			"Starred/* and can never be evicted, so the dialog would promise a deletion "+
+			"that cannot happen", refusal.EstimatedEvictions)
+	}
+}
+
+// The mirror of the test above, so the fix cannot be "always report zero": an
+// unprotected candidate still has to be counted.
+func TestRestoreRefusalShouldStillCountTheCandidatesNoGlobProtects(t *testing.T) {
+	env := newTestEnv(t,
+		withBudget("TestFolder", 1000),
+		withPersistent("TestFolder", "Starred/*"))
+
+	cold := seedAgedFile(t, env, "cold.jpg", 900)
+	env.archive(t, cold.ID)
+	seedAgedFile(t, env, "Starred/fav.jpg", 200)
+	seedAgedFile(t, env, "loose.jpg", 200)
+
+	w := do(t, env, "POST", "/api/v1/jobs",
+		map[string]any{"action": "restore", "ids": []int64{cold.ID}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", w.Code, w.Body.String())
+	}
+	var refusal budgetPreflightJSON
+	if err := json.NewDecoder(w.Body).Decode(&refusal); err != nil {
+		t.Fatal(err)
+	}
+	if refusal.EstimatedEvictions != 1 {
+		t.Errorf("estimated_evictions = %d, want 1: loose.jpg is unprotected and would go",
+			refusal.EstimatedEvictions)
+	}
+}
+
 // Design section 5.10 fix 1. A restore the daemon would immediately undo, by
 // evicting a comparable volume of files the owner never selected, is refused
 // with the numbers the UI needs to say so out loud.

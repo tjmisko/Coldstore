@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -517,7 +518,7 @@ func TestListFilesShouldFilterByPinSourceWhenAskedForAutoPinnedFiles(t *testing.
 	}
 }
 
-func TestCountUnpinnedSyncedOldestUpToShouldCountTheEvictionsAFolderWouldSufferWhenRestoringOverBudget(t *testing.T) {
+func TestCountEvictionsUpToShouldCountTheEvictionsAFolderWouldSufferWhenRestoringOverBudget(t *testing.T) {
 	cat := setupTestCatalog(t)
 	base := time.Now().UTC().Add(-100 * time.Hour)
 
@@ -529,7 +530,7 @@ func TestCountUnpinnedSyncedOldestUpToShouldCountTheEvictionsAFolderWouldSufferW
 		t.Fatal(err)
 	}
 
-	count, capped, err := cat.CountUnpinnedSyncedOldestUpTo("Photos", 250)
+	count, capped, err := cat.CountEvictionsUpTo("Photos", 250, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,6 +539,55 @@ func TestCountUnpinnedSyncedOldestUpToShouldCountTheEvictionsAFolderWouldSufferW
 	}
 	if capped {
 		t.Error("capped = true, want false")
+	}
+}
+
+// A file the offloader will never touch is not an eviction, and a count that
+// includes it promises the owner a deletion that cannot happen. The predicate
+// is how the caller applies the one rule that protects a file permanently --
+// a persistent glob -- without internal/catalog having to know what a glob is.
+func TestCountEvictionsUpToShouldSkipTheFilesTheOffloaderWillNeverEvictWhenAPredicateProtectsThem(t *testing.T) {
+	cat := setupTestCatalog(t)
+	base := time.Now().UTC().Add(-100 * time.Hour)
+
+	// Oldest first, so the protected files are the ones the count reaches for.
+	addFile(t, cat, "Photos", "Starred/a.jpg", 100, base)
+	addFile(t, cat, "Photos", "Starred/b.jpg", 100, base.Add(time.Minute))
+	addFile(t, cat, "Photos", "loose1.jpg", 100, base.Add(2*time.Minute))
+	addFile(t, cat, "Photos", "loose2.jpg", 100, base.Add(3*time.Minute))
+	addFile(t, cat, "Photos", "loose3.jpg", 100, base.Add(4*time.Minute))
+
+	protected := func(relPath string) bool { return strings.HasPrefix(relPath, "Starred/") }
+
+	count, capped, err := cat.CountEvictionsUpTo("Photos", 250, protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Errorf("count = %d, want 3: the two Starred files free nothing, so the "+
+			"250-byte overage takes all three loose files", count)
+	}
+	if capped {
+		t.Error("capped = true, want false")
+	}
+}
+
+// The honest answer to "how many files will coldstore take off my devices" is
+// sometimes none, and a folder whose every candidate is protected has to say
+// so rather than naming a file it cannot move.
+func TestCountEvictionsUpToShouldCountNothingWhenEveryCandidateIsProtected(t *testing.T) {
+	cat := setupTestCatalog(t)
+	base := time.Now().UTC().Add(-100 * time.Hour)
+
+	addFile(t, cat, "Photos", "Starred/only.jpg", 400, base)
+
+	count, _, err := cat.CountEvictionsUpTo("Photos", 250,
+		func(relPath string) bool { return strings.HasPrefix(relPath, "Starred/") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0: the only candidate can never be evicted", count)
 	}
 }
 
@@ -622,5 +672,39 @@ func TestHumanSIShouldMatchTheUnitsTheOwnerWroteInTheirConfig(t *testing.T) {
 		if got := HumanSI(tc.bytes); got != tc.want {
 			t.Errorf("HumanSI(%d) = %q, want %q", tc.bytes, got, tc.want)
 		}
+	}
+}
+
+// A pinned file is never an offload candidate, so it can never be an eviction
+// either. The sibling test above happens to survive the SQL filter being
+// removed -- every file in it is the same size, so dropping the pinned one
+// into the count still reaches the overage after three files -- which means it
+// proves nothing about the clause. Here the pinned file is large enough to
+// cover the whole overage by itself, so including it changes the answer from
+// three evictions to one, and the owner is told a restore will cost them a
+// file that the offloader would never have taken.
+func TestCountEvictionsUpToShouldIgnoreAPinnedFileWhenItAloneWouldCoverTheOverage(t *testing.T) {
+	cat := setupTestCatalog(t)
+	base := time.Now().UTC().Add(-100 * time.Hour)
+
+	// Oldest, and big enough to satisfy the overage on its own, so a count
+	// that fails to skip it stops after this single row.
+	huge := addFile(t, cat, "Photos", "huge-pinned.mp4", 300, base.Add(-time.Hour))
+	if err := cat.SetPinned(huge.ID, true, PinSourceUser, base.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		addFile(t, cat, "Photos", "f"+itoa(i)+".jpg", 100, base.Add(time.Duration(i)*time.Minute))
+	}
+
+	count, capped, err := cat.CountEvictionsUpTo("Photos", 250, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Errorf("count = %d, want 3: the pinned 300-byte file is not evictable, so the overage is covered by three unpinned 100-byte files", count)
+	}
+	if capped {
+		t.Error("capped = true, want false")
 	}
 }

@@ -18,6 +18,21 @@ import (
 // whether by the quota tick, a manual archive or a job.
 const minFreeSpacePercent = 5.0
 
+// sourceChangedDedupeMinutes is how long one refused-because-the-source-moved
+// report suppresses the next one for the same folder.
+//
+// The quota tick's pre-check re-stats the candidate but only compares its
+// MTIME, so a row whose catalogued SIZE disagrees with the disk is picked as a
+// candidate on every single tick and refused here every single time: one
+// events row per tick, forever, until the next full walk rewrites the row.
+// That is the cold_storage_low flood in a different costume.
+//
+// Suppression keys on (event_type, folder) and not on path, so this is
+// deliberately coarse. One report per folder per hour is what a human reading
+// the Activity list needs; the per-file detail is in the row that did get
+// written, and the condition is by construction still true an hour later.
+const sourceChangedDedupeMinutes = 60
+
 var (
 	// ErrFileStateChanged means the row was not in the status the move
 	// required, either when it was re-read or when the compare-and-swap ran.
@@ -66,6 +81,13 @@ type Mover struct {
 	spaceCheck func(string) (float64, error)
 	moveOut    func(src, dst string) error
 	moveIn     func(src, dst, archiveRoot string) error
+
+	// adoptRow is catalog.AdoptDeviceCopy behind a seam. It exists so a test
+	// can make the compare-and-swap LOSE -- the row leaving 'archived' while a
+	// conflict is being resolved -- which is otherwise unreachable from
+	// outside, because everything else that could move that row is queued
+	// behind the mutex this method already holds.
+	adoptRow func(id, sizeBytes int64, mtime, atime time.Time) (bool, error)
 }
 
 func NewMover(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Mover {
@@ -80,6 +102,7 @@ func NewMover(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Mo
 		spaceCheck: AvailableSpacePercent,
 		moveOut:    offloader.MoveOut,
 		moveIn:     restorer.MoveIn,
+		adoptRow:   cat.AdoptDeviceCopy,
 	}
 }
 
@@ -464,11 +487,32 @@ func (m *Mover) ResolveConflict(id int64, keep string) (*catalog.FileRecord, err
 		return m.cat.GetFileByID(id)
 	}
 
-	// keep == device. Set the cold copy aside first and only then unlink it,
-	// so a failure between the two leaves bytes rather than losing them.
+	// keep == device. The cold copy is set aside FIRST and unlinked only after
+	// the row has stopped pointing at it, so a failure in between leaves bytes
+	// rather than losing them.
+	//
+	// A bare unlink here is not merely untidy, it is unrecoverable. If the
+	// adopt below fails -- a database error, or 0 rows because the row left
+	// 'archived' while this ran -- the row still says archived and still names
+	// the archive path, and the bytes at that path are already gone: a file
+	// that can never be restored, that the scanner re-reports as the same
+	// conflict on every single walk, and that no endpoint can repair. Renaming
+	// makes that window undoable, and it is what the paragraph above always
+	// claimed the code did.
+	aside := ""
 	if _, err := os.Lstat(coldPath); err == nil {
-		if err := os.Remove(coldPath); err != nil {
-			return nil, fmt.Errorf("removing the cold copy: %w", err)
+		aside = asidePath(coldPath)
+		if err := os.Rename(coldPath, aside); err != nil {
+			return nil, fmt.Errorf("setting the cold copy aside: %w", err)
+		}
+	}
+	putColdBack := func() {
+		if aside == "" {
+			return
+		}
+		if err := os.Rename(aside, coldPath); err != nil {
+			m.logger.Error("cannot put the cold copy back after an abandoned resolution",
+				"aside", aside, "cold", coldPath, "error", err)
 		}
 	}
 
@@ -476,13 +520,31 @@ func (m *Mover) ResolveConflict(id int64, keep string) (*catalog.FileRecord, err
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		atime = time.Unix(st.Atim.Sec, st.Atim.Nsec)
 	}
-	ok, err := m.cat.AdoptDeviceCopy(id, info.Size(), info.ModTime(), atime)
+	adopted, err := m.adoptRow(id, info.Size(), info.ModTime(), atime)
 	if err != nil {
+		putColdBack()
 		return nil, fmt.Errorf("adopting the device copy: %w", err)
 	}
-	if !ok {
+	if !adopted {
+		putColdBack()
 		return nil, fmt.Errorf("%w: file %d left 'archived' while it was being resolved",
 			ErrFileStateChanged, id)
+	}
+
+	// The row is synced and no longer references the archive path, so now --
+	// and only now -- the copy the owner chose to discard goes. Failing here
+	// costs one stray file in cold storage, never a broken row.
+	//
+	// Nothing reports that stray yet. Design section 5.11's stray-archive sweep
+	// is NOT implemented: the scanner skips the suffix, no tick walks cold
+	// storage looking for unreferenced files, and the Warn below is the only
+	// trace the owner ever gets. Do not write a comment here promising a sweep
+	// until one exists.
+	if aside != "" {
+		if err := os.Remove(aside); err != nil && !os.IsNotExist(err) {
+			m.logger.Warn("cannot delete the cold copy after resolving in the device's favour",
+				"path", aside, "error", err)
+		}
 	}
 	m.cat.LogEvent("conflict", rec.FolderLabel, rec.RelativePath,
 		"resolved in favour of the device copy; the cold-storage copy was deleted")
@@ -523,10 +585,15 @@ func (m *Mover) sourceUnchanged(src string, rec *catalog.FileRecord) error {
 		return fmt.Errorf("%w: cannot stat %s: %v", ErrFileStateChanged, src, err)
 	}
 	if info.Size() != rec.SizeBytes || info.ModTime().Unix() > rec.FileMtime.Unix() {
-		m.cat.LogEvent("source_changed", rec.FolderLabel, rec.RelativePath,
+		// Deduped, unlike the mid-move report in archiveLocked: that one fires
+		// once per move that actually started, while this one fires once per
+		// tick for as long as the disagreement lasts. See
+		// sourceChangedDedupeMinutes.
+		m.cat.LogEventDeduped("source_changed", rec.FolderLabel, rec.RelativePath,
 			fmt.Sprintf("on disk %d bytes at %s, catalogued %d bytes at %s",
 				info.Size(), info.ModTime().UTC().Format(time.RFC3339),
-				rec.SizeBytes, rec.FileMtime.UTC().Format(time.RFC3339)))
+				rec.SizeBytes, rec.FileMtime.UTC().Format(time.RFC3339)),
+			sourceChangedDedupeMinutes)
 		return fmt.Errorf("%w: %s", ErrSourceChanged, src)
 	}
 	return nil

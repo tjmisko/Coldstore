@@ -1,3 +1,28 @@
+# The live-integration stack: TWO real Syncthing devices sharing one folder, with
+# coldstore managing the copy on device A.
+#
+# This topology is the point. Coldstore's central claim -- that archiving a file frees
+# space on the owner's OTHER devices, because Syncthing propagates the deletion -- is
+# unobservable with a single Syncthing instance. The previous version of this file ran
+# one Syncthing container that was never told about any folder; it proved that a
+# container can start.
+#
+#   syncthing-a  --- shares folder "livesync" --- syncthing-b
+#        |                                             |
+#   device-a-sync volume                       device-b-sync volume
+#        |
+#   coldstore-test (/data/sync)  ->  cold-storage volume (/data/cold)
+#
+# Device A's folder and coldstore's managed folder are THE SAME VOLUME. Device B is a
+# stand-in for the owner's phone: nothing but Syncthing ever touches it.
+#
+# Pairing (device IDs, the shared folder, discovery settings) is done at run time by
+# tests/e2e/live_main_test.go over Syncthing's REST API. It cannot be baked into the
+# image because a device ID is generated from a keypair the container creates on first
+# start.
+#
+# Nothing here is a deployment template. See coldstore.toml.example for that.
+
 services:
   coldstore-test:
     build:
@@ -5,45 +30,90 @@ services:
       dockerfile: docker/Dockerfile.test
     command: ["--config", "/app/coldstore.toml"]
     volumes:
-      - shared-sync:/data/sync
+      # THE SAME volume syncthing-a mounts at /var/syncthing/sync. This is what makes
+      # coldstore's archive a Syncthing-visible local deletion.
+      - device-a-sync:/data/sync
       - cold-storage:/data/cold
     # Host port is overridable: the deployment host itself already runs a coldstore on
-    # 8090, so `COLDSTORE_TEST_PORT=18090 make test-e2e-live` works there too.
+    # 8090, so the default here is deliberately NOT 8090.
     ports:
-      - "${COLDSTORE_TEST_PORT:-8090}:8090"
+      - "${COLDSTORE_TEST_PORT:-18090}:8090"
     # Without a healthcheck, `docker compose up --wait` returns as soon as the
     # container is *running*, which is true for a container that is about to exit 1.
     # This makes --wait block until the API actually answers, so a broken image fails
     # the target instead of silently passing it.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8090/api/v1/status"]
+      # Credentials match docker/coldstore.test.toml. The daemon refuses a
+      # non-loopback bind without them, so an unauthenticated probe here would
+      # only ever see a container that exited 1.
+      test: ["CMD", "curl", "-fsS", "-u", "coldstore-test:coldstore-test",
+             "http://localhost:8090/api/v1/status"]
       interval: 3s
       timeout: 3s
       retries: 20
       start_period: 5s
     depends_on:
-      syncthing:
+      syncthing-a:
         condition: service_healthy
 
-  syncthing:
+  # Device A -- the microserver. Its folder is the one coldstore manages.
+  syncthing-a:
     image: syncthing/syncthing:latest
+    hostname: syncthing-a
+    environment:
+      # coldstore runs as root in its container and writes into the SAME volume.
+      # Leaving Syncthing on its default uid 1000 gives two writers with different
+      # ownership over one tree, and a named volume starts out root-owned, so
+      # Syncthing could not create .stfolder at all.
+      PUID: "0"
+      PGID: "0"
+      # A fixed API key so the harness can drive the REST API without first
+      # scraping config.xml out of the container.
+      STGUIAPIKEY: "${SYNCTHING_API_KEY:-coldstore-live-test-key}"
+      # The stock "Default Folder" at ~/Sync is noise that shows up in every
+      # /rest/config/folders response the harness reads.
+      STNODEFAULTFOLDER: "1"
+      STNOUPGRADE: "1"
     volumes:
-      - shared-sync:/var/syncthing/sync
-    # Deliberately no published host ports. Only coldstore-test talks to syncthing, and
-    # it does so over the compose network. Publishing 8384/22000 made the stack fail to
-    # start on any machine already running Syncthing -- i.e. the deployment host.
-    expose:
-      - "8384"
+      - device-a-sync:/var/syncthing/sync
+    # The GUI/REST port is published so the test harness can pair the devices and
+    # query the index. Syncthing's transport port (22000) is deliberately NOT
+    # published: the two devices reach each other over the compose network, and
+    # publishing 22000 collides with the Syncthing the developer is already running.
+    ports:
+      - "${SYNCTHING_A_PORT:-18384}:8384"
     # /rest/system/ping requires an API key and answers 403 to an unauthenticated
-    # probe, so the old healthcheck could never pass and coldstore-test -- which
-    # depends on service_healthy -- was never started at all.
+    # probe, so a healthcheck on that path can never pass -- and coldstore-test,
+    # which depends on service_healthy, would never be started at all.
     # /rest/noauth/health is the endpoint Syncthing exposes for exactly this.
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8384/rest/noauth/health"]
-      interval: 5s
+      interval: 3s
       timeout: 3s
-      retries: 20
+      retries: 30
+
+  # Device B -- the stand-in for the owner's phone. coldstore has no access to it and
+  # no knowledge of it; everything that happens here happens because Syncthing did it.
+  syncthing-b:
+    image: syncthing/syncthing:latest
+    hostname: syncthing-b
+    environment:
+      PUID: "0"
+      PGID: "0"
+      STGUIAPIKEY: "${SYNCTHING_API_KEY:-coldstore-live-test-key}"
+      STNODEFAULTFOLDER: "1"
+      STNOUPGRADE: "1"
+    volumes:
+      - device-b-sync:/var/syncthing/sync
+    ports:
+      - "${SYNCTHING_B_PORT:-18385}:8384"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8384/rest/noauth/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
 
 volumes:
-  shared-sync:
+  device-a-sync:
+  device-b-sync:
   cold-storage:
