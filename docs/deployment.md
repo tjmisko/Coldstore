@@ -1305,13 +1305,21 @@ A checksummed filesystem only heals what it reads. Schedule a scrub, or
 corruption sits undetected until the day you need the file.
 
 ```bash
-# btrfs -- Debian ships the timer with btrfs-progs; enable it per filesystem
-sudo systemctl enable --now btrfs-scrub@srv-coldstore.timer
+# btrfs on Debian: btrfs-progs ships NO timer (the btrfs-scrub@.timer you may
+# have seen is Fedora/openSUSE). Use the btrfsmaintenance package, which drives
+# its schedule from /etc/default/btrfsmaintenance:
+sudo apt install -y btrfsmaintenance
+sudoedit /etc/default/btrfsmaintenance      # BTRFS_SCRUB_MOUNTPOINTS="/srv/coldstore"
+sudo systemctl enable --now btrfs-scrub.timer
 sudo btrfs scrub status /srv/coldstore
 
-# zfs -- Debian's zfsutils-linux ships a monthly scrub timer
+# zfs -- Debian's zfsutils-linux does ship a monthly scrub timer
 sudo systemctl enable --now zfs-scrub-monthly@tank.timer
 ```
+
+If you would rather not add a package, a one-line timer of your own is fine --
+what matters is that a scrub runs on a schedule, not which unit starts it. A
+checksummed filesystem only heals what it reads.
 
 On a RAID1 btrfs a scrub repairs from the good copy automatically. On a
 single-device one it can only report; `btrfs device stats /srv/coldstore` is
