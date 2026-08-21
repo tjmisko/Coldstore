@@ -1,8 +1,8 @@
 # Interface Refresh -- Tasklist
 
 Post-deployment feedback from the first real install on the microserver. Source: owner's
-notes, 2026-08-21. Each item below is either **decided**, **needs a decision** (goes to the
-interview), or **needs research** (agent reports land in this doc as they resolve).
+notes, 2026-08-21, refined by an interview the same day. Decisions are recorded at the end
+of this document; one question (domain or no domain) is still open and blocks section B.
 
 Status legend: `[ ]` not started `[~]` in progress `[x]` done `[?]` blocked on a decision
 
@@ -13,11 +13,11 @@ Status legend: `[ ]` not started `[~]` in progress `[x]` done `[?]` blocked on a
 The page still ships Vite's scaffold identity: `web/index.html` has `<title>web</title>` and
 `<link rel="icon" href="/vite.svg">`. Every tab in the owner's browser says "web".
 
-- [ ] A1. Real `<title>` -- static, plus per-view suffix (folder name / "Gallery" / "Config").
-- [ ] A2. Real favicon. SVG mark, dark/light aware, embedded (no CDN).
-- [ ] A3. `apple-touch-icon` + `manifest.webmanifest` so an iOS home-screen bookmark looks right.
-- [ ] A4. `<meta name="theme-color">` and viewport-fit for mobile.
-- [ ] A5. Verify the embedded build serves all of the above from `internal/api/dist/`.
+- [x] A1. Real `<title>` -- static, plus per-view suffix (folder name / "Gallery" / "Config").
+- [x] A2. Real favicon. SVG mark, dark/light aware, embedded (no CDN).
+- [x] A3. `apple-touch-icon` + `manifest.webmanifest` so an iOS home-screen bookmark looks right.
+- [x] A4. `<meta name="theme-color">` and viewport-fit for mobile.
+- [x] A5. Verify the embedded build serves all of the above from `internal/api/dist/`.
 
 ## B. Access -- stop tunnelling over SSH
 
@@ -40,8 +40,9 @@ apps, and it answers LAN **and** remote in one mechanism. Every alternative is w
 | mkcert / private CA | yes | no | only where installed | **painful, forever** | needs TLS support |
 | Cloudflare Tunnel | via internet | yes | yes | none | **needs a domain** |
 
-- [?] B1. Adopt Tailscale + `serve` as primary. Needs the owner's yes -- it is the one
-      decision that changes what every device has to run.
+- [?] B1. Adopt Tailscale + `serve` as primary. **Still open** -- the owner wants guest
+      access, which Tailscale cannot serve without the guest installing a VPN. See
+      "Still open" at the end of this document.
 - [ ] B2. Also do the LAN bind, as the path that works when a phone's VPN toggle is off.
       This is already **step 11 of `docs/deploy-checklist.md`** (`listen_addr =
       "192.168.1.50:8090"`); the daemon refuses to start on a non-loopback bind without
@@ -56,7 +57,7 @@ apps, and it answers LAN **and** remote in one mechanism. Every alternative is w
       `IPAddressAllow` list that **omits Tailscale's CGNAT range `100.64.0.0/10`**. Binding
       `listen_addr` to the Tailscale IP would be silently unreachable. Pointing `serve` at
       loopback avoids it entirely -- `tailscaled` is a separate cgroup.
-- [?] B6. Token auth: **probably do not build it.** Basic auth
+- [?] B6. Token auth: **not now, but mandatory if the domain path wins.** Basic auth
       (`internal/api/server.go:80-103`) is already constant-time on both fields and already
       solves the hard part -- `<img src>`, `window.open` downloads and Range requests carry
       no custom header, and the browser reattaches the realm credential to them for free.
@@ -111,7 +112,7 @@ Restyling must not rename or drop them.
 - [ ] C3. Restyle the tile: badges, pin toggle, archived/pinned states, hover/focus rings.
 - [ ] C4. Restyle the file browser table, filter bar, selection bar, status bar, config panel.
 - [ ] C5. Empty states, loading states, error states.
-- [ ] C6. Light mode? (needs a decision)
+- [x] C6. Light mode: **no**. Dark only, decided in the interview.
 
 ## D. Keyboard -- vim-flavoured navigation
 
@@ -325,30 +326,51 @@ Not in the owner's notes -- found by screenshotting the running UI at 1440x900 a
       Needs a `<video>` branch and a decode-capability check, and it lands with H4-H6 since
       that is the same "what can this browser actually render" decision.
 
-## Open questions for the interview
+## Decisions (owner interview, 2026-08-21)
 
-Research settled more than expected. What is left is genuinely the owner's call.
+1. **Access -- still open.** The owner had not met Tailscale, and asked back: *"Is it possible
+   to setup full web routing with a domain name? Might that be the way to go?"* They also
+   want **guests** to be able to reach it ("other people's devices -- a guest showing photos,
+   a family member"), which is the one requirement Tailscale genuinely cannot serve: a guest
+   would have to install a VPN and be invited to the tailnet. That pushes toward a real
+   domain, which changes B6 from optional to required. Not resolved; see "Still open" below.
+2. **Auth: keep basic auth for now**, with the note *"we may revisit this if we do full web"* --
+   i.e. B6/B7 becomes mandatory if the domain path wins.
+3. **Dark only.** No light mode. Design for dark properly.
+4. **Aesthetic: restrained and utilitarian** -- `htop`/`lazygit`/Prometheus register, dense
+   and high-information, colour only where it means something. But explicitly: *"The existing
+   theme isn't actually that bad -- the right mix of photo forward and utilitarian."* So this
+   is a refinement, not a rebuild.
+5. **Specific dislikes**: the saturated primary-colour buttons (blue Download / green Restore
+   / orange Archive on every row) -- *"This!"*; wants a settled typeface across systems though
+   `system-ui` "isn't bad"; density slightly cramped; **text a bit small to read**, wanting a
+   balance of readability against tool density.
+6. **Keyboard: full operator-pending grammar.** *"That's how I use the rest of my tools, and
+   would really appreciate to be able to do this well."* And: *"I want to use this without
+   touching my mouse at all, ever."*
+7. **Command palette: everything** -- navigation, selection actions, config changes, and vim
+   meta commands.
+8. **Fuzzy finder scope**: filenames, paths, folder, extension and status. Not full text
+   inside documents.
+9. **Archived preview: stream from cold storage**, no state change. *"Fine if somewhat slow,
+   should be fairly rare, but want the option to do it."*
+10. **poppler-utils approved.** *"Yes, please, don't reinvent the wheel here."*
+11. **Ship full readers**, lazily and in the background; a bigger binary is fine.
+12. **New major feature: tagging.** Photo tags, descriptions, multiselect tagging, a
+    keyboard-driven culling flow like a professional photo vault, folder renaming, and
+    capture-date + location metadata preserved from iPhone. Being designed and split into
+    GitHub issues in its own worktree; see `docs/tagging-design.md`.
 
-1. **Access.** Adopt Tailscale + `serve` as the primary path? It costs installing an app on
-   each phone and laptop, and gives a real padlock plus off-network access for nothing else.
-   The alternative is LAN-bind-only, which means no remote access and a permanent
-   "Not secure" chip.
-2. **Auth.** Keep basic auth (recommended once TLS is in front of it), or build the login
-   screen + logout button? The honest framing: it buys cosmetics and brute-force lockout,
-   not security. Is the iOS native credential dialog actually annoying enough?
-3. **Light mode.** Build it, or commit to dark-only? This roughly doubles the token work in
-   C1 and every restyle after it, so it wants deciding before the sweep, not after.
-4. **Aesthetic direction.** Reference points the owner actually likes. Right now the app is
-   raw Tailwind defaults, which read as unstyled rather than as a choice.
-5. **Vim fidelity.** Single-key bindings and a leader, or a real operator-pending grammar
-   (`d3j`, counts, `v` visual mode with motions)? The second is a much larger build and
-   changes the architecture of the keymap layer.
-6. **Fuzzy finder scope.** Filenames only (matches what the backend can do today), or paths
-   and metadata too (needs a catalog change)?
-7. **Preview of archived files.** Is "restore to preview" acceptable, or should a cold file
-   stream out of cold storage for preview without changing its state?
-8. **The apt dependency.** May the deploy runbook grow `poppler-utils` for PDF rendering, or
-   must the binary stay standalone? This is the single biggest constraint on H, and it is a
-   deployment-philosophy question, not a technical one.
-9. **Priority.** What ships first? A is done; BUG-1 and BUG-3 are real defects sitting
-   underneath the feature list.
+## Still open
+
+Only one thing, and it blocks section B: **domain or no domain.**
+
+- Tailscale covers the owner's own phone and laptops, on and off the LAN, free, with a real
+  certificate and no code change. It cannot serve a guest without that guest installing a VPN.
+- A purchased domain (~$15/yr) plus Cloudflare Tunnel + Cloudflare Access, or a reverse proxy
+  on a forwarded port, serves guests -- at the cost of putting a control plane whose archive
+  button propagates deletions through Syncthing to every device the owner owns on the public
+  internet. That raises the stakes on B6/B7 from cosmetic to load-bearing, and Cloudflare's
+  free-tier terms are a poor fit for serving full-resolution photo and video.
+- These are not exclusive. Tailscale now costs nothing to adopt and forecloses nothing.
+
