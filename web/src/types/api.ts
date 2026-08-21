@@ -12,7 +12,7 @@ export type PinSource = "user" | "restore";
 /** Sort keys GET /api/v1/files understands. "pinned_at" is ascending -- oldest
  *  pin first -- because the auto-pins an owner has forgotten are the ones the
  *  wedge banner sends them to triage. */
-export type FileSort = "mtime" | "size" | "name" | "pinned_at";
+export type FileSort = "mtime" | "size" | "name" | "pinned_at" | "captured";
 
 export type JobAction = "restore" | "archive" | "scan";
 export type JobState = "pending" | "running" | "done" | "failed";

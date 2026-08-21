@@ -1,11 +1,13 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
+import { captureDayGroups, formatCaptureDay, resolveCaptureDayJump } from "../lib/capture";
 import { formatCount, formatSize } from "../lib/format";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
 import { useGridKeymap } from "../hooks/useGridKeymap";
 import { galleryColumns, useViewport } from "../hooks/useViewport";
-import type { FileRecord } from "../types/api";
+import type { FileRecord, FileSort } from "../types/api";
+import { CaptureMeta } from "./CaptureMeta";
 import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { FilterBar } from "./FilterBar";
@@ -28,14 +30,22 @@ export function Gallery({
   onFolderChanged,
   onShowInFiles = () => {},
 }: GalleryProps) {
-  const workspace = useFileWorkspace({ folder, filterKey, sort: "mtime", onFolderChanged });
+  const [sort, setSort] = useState<FileSort>("mtime");
+  const workspace = useFileWorkspace({ folder, filterKey, sort, onFolderChanged });
   const { files: list, selection, actions, preset, filters } = workspace;
+  const effectiveSort = preset.sort ?? sort;
   const { files, loading, error, hasMore, loadMore, refetchIds } = list;
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
   const observer = useRef<IntersectionObserver | null>(null);
+  const pendingDayJump = useRef<{
+    fromID: number;
+    direction: -1 | 1;
+    count: number;
+    loadedLength: number;
+  } | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -93,8 +103,49 @@ export function Gallery({
     onOpen: setLightboxIndex,
     onContextMenu: (index) => openMenu(index, null),
     onEditDescription: setDescriptionIndex,
+    resolveCaptureDay: effectiveSort === "captured"
+      ? (index, direction, count) => {
+          const jump = resolveCaptureDayJump(files, index, direction, count);
+          if (!jump.complete && hasMore) {
+            pendingDayJump.current = {
+              fromID: files[index].id,
+              direction,
+              count,
+              loadedLength: files.length,
+            };
+            loadMore();
+            return index;
+          }
+          return jump.index;
+        }
+      : undefined,
     active: lightboxIndex === null && menu === null && descriptionIndex === null,
   });
+  const moveCursorTo = cursor.moveTo;
+
+  useEffect(() => {
+    const pending = pendingDayJump.current;
+    if (!pending || loading) return;
+    // A failed page leaves hasMore true but adds no rows. Stop here rather
+    // than retrying forever; useFiles already exposes the request error.
+    if (files.length <= pending.loadedLength) {
+      pendingDayJump.current = null;
+      return;
+    }
+    const from = files.findIndex((file) => file.id === pending.fromID);
+    if (from < 0) {
+      pendingDayJump.current = null;
+      return;
+    }
+    const jump = resolveCaptureDayJump(files, from, pending.direction, pending.count);
+    if (!jump.complete && hasMore) {
+      pending.loadedLength = files.length;
+      loadMore();
+      return;
+    }
+    pendingDayJump.current = null;
+    moveCursorTo(jump.index);
+  }, [files, hasMore, loadMore, loading, moveCursorTo]);
 
   if (!folder) {
     return (
@@ -112,39 +163,76 @@ export function Gallery({
       <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{folder}</h2>
       <FilterBar active={filterKey} onChange={onFilterChange} />
 
+      <label className="mb-4 flex w-fit items-center gap-2 text-meta text-ink-muted">
+        Sort
+        <select
+          aria-label="Sort gallery"
+          value={effectiveSort}
+          disabled={preset.sort !== undefined}
+          onChange={(event) => setSort(event.target.value as FileSort)}
+          className="rounded-md border border-line-strong bg-raised px-2 py-1 text-ink outline-none focus:border-cursor focus:ring-2 focus:ring-cursor/40"
+        >
+          <option value="mtime">Modified time</option>
+          <option value="captured">Capture time</option>
+          <option value="name">Name</option>
+          <option value="size">Size</option>
+        </select>
+      </label>
+
       {error && (
         <p className="mb-3 text-meta text-alarm" role="alert">
           {error}
         </p>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 select-none">
-        {files.map((file, index) => (
-          <Tile
-            key={file.id}
-            file={file}
-            selected={selection.isSelected(file.id)}
-            anySelected={selection.count > 0}
-            cursor={index === cursor.index}
-            conflictMode={preset.key === "conflicts"}
-            onOpen={() => {
-              cursor.setIndex(index);
-              setLightboxIndex(index);
-            }}
-            onToggle={() => {
-              cursor.setIndex(index);
-              selection.toggle(file.id);
-            }}
-            onToggleRange={() => selection.toggleRange(file.id)}
-            onPin={(pinned) => void actions.setPinned(file, pinned)}
-            onResolve={(keep) => void actions.resolve(file, keep)}
-            onMenu={(at) => {
-              cursor.setIndex(index);
-              openMenu(index, at);
-            }}
-          />
-        ))}
-      </div>
+      {(effectiveSort === "captured"
+        ? captureDayGroups(files)
+        : [{ day: "", start: 0, files }]
+      ).map((group) => (
+        <section key={`${group.day}:${group.start}`} data-capture-day={effectiveSort === "captured" ? group.day : undefined}>
+          {effectiveSort === "captured" && (
+            <h3 className="mb-2 mt-5 text-meta font-medium text-ink-muted">
+              {formatCaptureDay(group.day)}
+            </h3>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 select-none">
+            {group.files.map((file, offset) => {
+              const index = group.start + offset;
+              return (
+                <div key={file.id} className="min-w-0">
+                  <Tile
+                    file={file}
+                    selected={selection.isSelected(file.id)}
+                    anySelected={selection.count > 0}
+                    cursor={index === cursor.index}
+                    conflictMode={preset.key === "conflicts"}
+                    onOpen={() => {
+                      cursor.setIndex(index);
+                      setLightboxIndex(index);
+                    }}
+                    onToggle={() => {
+                      cursor.setIndex(index);
+                      selection.toggle(file.id);
+                    }}
+                    onToggleRange={() => selection.toggleRange(file.id)}
+                    onPin={(pinned) => void actions.setPinned(file, pinned)}
+                    onResolve={(keep) => void actions.resolve(file, keep)}
+                    onMenu={(at) => {
+                      cursor.setIndex(index);
+                      openMenu(index, at);
+                    }}
+                  />
+                  {effectiveSort === "captured" && (
+                    <div className="mt-1 truncate">
+                      <CaptureMeta file={file} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
 
       <div ref={sentinelRef} className="h-8" />
 

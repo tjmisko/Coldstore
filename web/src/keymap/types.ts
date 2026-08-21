@@ -46,6 +46,8 @@ export type ActionId =
   | "close"
   | "info"
   | "edit-description"
+  | "previous-capture-day"
+  | "next-capture-day"
   | "rescan"
   | "resolve-device"
   | "resolve-archive";

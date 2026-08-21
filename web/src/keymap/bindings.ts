@@ -40,6 +40,8 @@ const SPECS: BindingSpec[] = [
   { id: "motion.pageUp.key", keys: "<PageUp>", command: { kind: "motion", motion: "page-up" }, scopes: NAVIGABLE, title: "A screen up", group: GROUP_MOTION, alias: true },
   { id: "motion.first.home", keys: "<Home>", command: { kind: "motion", motion: "first" }, scopes: NAVIGABLE, title: "First file", group: GROUP_MOTION, alias: true },
   { id: "motion.last.end", keys: "<End>", command: { kind: "motion", motion: "last" }, scopes: NAVIGABLE, title: "Last file", group: GROUP_MOTION, alias: true },
+  { id: "motion.captureDayPrevious", keys: "{", command: { kind: "action", action: "previous-capture-day" }, scopes: ["gallery"], title: "Previous capture day", group: GROUP_MOTION },
+  { id: "motion.captureDayNext", keys: "}", command: { kind: "action", action: "next-capture-day" }, scopes: ["gallery"], title: "Next capture day", group: GROUP_MOTION },
 
   // -- operators ----------------------------------------------------------
   { id: "op.archive", keys: "d", command: { kind: "operator", operator: "archive" }, scopes: NAVIGABLE, title: "Archive (dd, d3j, dG) - removes it from every synced device", group: GROUP_FILES },

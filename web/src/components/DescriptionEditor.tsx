@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileActions } from "../hooks/useFileWorkspace";
 import { useKeymapLayer } from "../hooks/useKeymapLayer";
+import { isValidManualCapture } from "../lib/capture";
 import { useToast } from "../lib/toast";
 import type { FileRecord } from "../types/api";
 import { Overlay } from "./Overlay";
+import { CaptureMeta } from "./CaptureMeta";
 
 interface DescriptionEditorProps {
   files: FileRecord[];
@@ -28,9 +30,12 @@ export function DescriptionEditor({
   const [index, setIndex] = useState(initialIndex);
   const file = files[index];
   const [draft, setDraft] = useState(file?.description ?? "");
+  const [captureDraft, setCaptureDraft] = useState(file?.captured_local ?? "");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "unsaved">("saved");
   const saved = useRef(file?.description ?? "");
+  const savedCapture = useRef(file?.captured_local ?? "");
   const currentDraft = useRef(draft);
+  const currentCapture = useRef(captureDraft);
   const saveQueue = useRef<Promise<boolean>>(Promise.resolve(true));
   const pending = useRef<{ key: string; promise: Promise<boolean> } | null>(null);
   const discard = useRef(false);
@@ -49,9 +54,8 @@ export function DescriptionEditor({
     if (node) node.setSelectionRange(node.value.length, node.value.length);
   }, [index]);
 
-  const commit = useCallback(async (): Promise<boolean> => {
+  const commitDescription = useCallback(async (): Promise<boolean> => {
     if (!file || draft === saved.current) {
-      setSaveState("saved");
       return true;
     }
     const key = `${file.id}\u0000${draft}`;
@@ -62,7 +66,11 @@ export function DescriptionEditor({
       setSaveState("saving");
       const ok = await actions.setDescription(file, text);
       if (ok) saved.current = text;
-      setSaveState(ok && currentDraft.current === text ? "saved" : "unsaved");
+      setSaveState(
+        ok && currentDraft.current === text && currentCapture.current === savedCapture.current
+          ? "saved"
+          : "unsaved",
+      );
       return ok;
     });
     saveQueue.current = promise;
@@ -73,11 +81,44 @@ export function DescriptionEditor({
     return promise;
   }, [actions, draft, file]);
 
+  const commitCapture = useCallback(async (): Promise<boolean> => {
+    if (!file || captureDraft === savedCapture.current) return true;
+    if (!isValidManualCapture(captureDraft)) {
+      setSaveState("unsaved");
+      toast.show(
+        "error",
+        "Capture date must be a real local date in YYYY-MM-DD HH:MM:SS or YYYY-MM-DD HH:MM:SS.sss form",
+      );
+      return false;
+    }
+    setSaveState("saving");
+    const text = captureDraft;
+    const ok = await actions.setCaptureDate(file, text);
+    if (ok) savedCapture.current = text;
+    setSaveState(
+      ok && currentCapture.current === text && currentDraft.current === saved.current
+        ? "saved"
+        : "unsaved",
+    );
+    return ok;
+  }, [actions, captureDraft, file, toast]);
+
+  const commit = useCallback(async (): Promise<boolean> => {
+    if (!(await commitDescription())) return false;
+    if (!(await commitCapture())) return false;
+    setSaveState(
+      currentDraft.current === saved.current && currentCapture.current === savedCapture.current
+        ? "saved"
+        : "unsaved",
+    );
+    return true;
+  }, [commitCapture, commitDescription]);
+
   useEffect(() => {
     if (!file || draft === saved.current) return;
-    const timer = window.setTimeout(() => void commit(), idleSaveDelay);
+    const timer = window.setTimeout(() => void commitDescription(), idleSaveDelay);
     return () => window.clearTimeout(timer);
-  }, [commit, draft, file]);
+  }, [commitDescription, draft, file]);
 
   const closeAndSave = useCallback(async () => {
     if (await commit()) onClose();
@@ -89,9 +130,13 @@ export function DescriptionEditor({
       const next = Math.max(0, Math.min(index + delta, files.length - 1));
       if (next === index) return;
       const nextDescription = files[next]?.description ?? "";
+      const nextCapture = files[next]?.captured_local ?? "";
       saved.current = nextDescription;
+      savedCapture.current = nextCapture;
       currentDraft.current = nextDescription;
+      currentCapture.current = nextCapture;
       setDraft(nextDescription);
+      setCaptureDraft(nextCapture);
       setSaveState("saved");
       setIndex(next);
       onIndexChange(next);
@@ -137,7 +182,7 @@ export function DescriptionEditor({
             }
           }}
           onBlur={() => {
-            if (!discard.current) void commit();
+            if (!discard.current) void commitDescription();
           }}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
@@ -162,6 +207,39 @@ export function DescriptionEditor({
           className="w-full resize-y rounded-lg border border-line-strong bg-ground px-3 py-2 text-base text-ink outline-none placeholder:text-ink-faint focus:border-cursor focus:ring-2 focus:ring-cursor/40"
           placeholder="Add a description…"
         />
+
+        <div className="mt-4 border-t border-line pt-4">
+          <label className="block text-meta font-medium text-ink-muted" htmlFor={`capture-${file.id}`}>
+            Capture date
+          </label>
+          <input
+            id={`capture-${file.id}`}
+            aria-label={`Capture date for ${file.filename}`}
+            value={captureDraft}
+            onChange={(event) => {
+              currentCapture.current = event.target.value;
+              setCaptureDraft(event.target.value);
+              setSaveState(event.target.value === savedCapture.current && draft === saved.current ? "saved" : "unsaved");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                void closeAndSave();
+              }
+            }}
+            aria-invalid={!isValidManualCapture(captureDraft)}
+            placeholder="YYYY-MM-DD HH:MM:SS"
+            className="mt-1 w-full rounded-lg border border-line-strong bg-ground px-3 py-2 font-mono text-base text-ink outline-none placeholder:text-ink-faint focus:border-cursor focus:ring-2 focus:ring-cursor/40"
+          />
+          {!isValidManualCapture(captureDraft) && (
+            <p role="alert" className="mt-1 text-meta text-alarm">
+              Enter a real local date as YYYY-MM-DD HH:MM:SS, with optional .sss.
+            </p>
+          )}
+          <div className="mt-2">
+            <CaptureMeta file={file} />
+          </div>
+        </div>
 
         <footer className="mt-3 flex flex-wrap items-center justify-between gap-3 text-meta text-ink-faint">
           <span>{[...draft].length} / {descriptionLimit}</span>

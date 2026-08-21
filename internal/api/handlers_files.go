@@ -34,11 +34,22 @@ const maxPageLimit = 500
 func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalog.FileQuery, bool) {
 	v := r.URL.Query()
 	q := catalog.FileQuery{
-		Folder:    v.Get("folder"),
-		Status:    catalog.FileStatus(v.Get("status")),
-		Extension: v.Get("ext"),
-		Search:    v.Get("q"),
-		PinSource: v.Get("pin_source"),
+		Folder:       v.Get("folder"),
+		Status:       catalog.FileStatus(v.Get("status")),
+		Extension:    v.Get("ext"),
+		Search:       v.Get("q"),
+		PinSource:    v.Get("pin_source"),
+		CapturedFrom: v.Get("captured_from"),
+		CapturedTo:   v.Get("captured_to"),
+	}
+	for name, value := range map[string]string{
+		"captured_from": q.CapturedFrom,
+		"captured_to":   q.CapturedTo,
+	} {
+		if value != "" && !validCaptureDay(value) {
+			writeError(w, http.StatusBadRequest, name+" must be a real date in YYYY-MM-DD form")
+			return q, false
+		}
 	}
 
 	switch v.Get("pinned") {
@@ -60,6 +71,15 @@ func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalo
 		q.Conflicted = true
 	default:
 		writeError(w, http.StatusBadRequest, `conflict must be "1" or "0"`)
+		return q, false
+	}
+
+	switch v.Get("undated") {
+	case "", "0":
+	case "1":
+		q.Undated = true
+	default:
+		writeError(w, http.StatusBadRequest, `undated must be "1" or "0"`)
 		return q, false
 	}
 

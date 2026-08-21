@@ -15,6 +15,7 @@ import (
 const maxDescriptionCharacters = 2000
 
 var manualCapturePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d{3})?$`)
+var captureDayPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
 type updateFileRequest struct {
 	Description   *string  `json:"description"`
@@ -76,5 +77,13 @@ func validManualCapture(value string) bool {
 		return false
 	}
 	_, err := time.Parse("2006-01-02 15:04:05.999", value)
+	return err == nil
+}
+
+func validCaptureDay(value string) bool {
+	if !captureDayPattern.MatchString(value) {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", value)
 	return err == nil
 }

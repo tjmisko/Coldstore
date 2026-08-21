@@ -14,6 +14,7 @@ function fileActions(): FileActions {
     resolve: vi.fn(async () => {}),
     download: vi.fn(),
     setDescription: vi.fn(async () => true),
+    setCaptureDate: vi.fn(async () => true),
   };
 }
 
@@ -91,5 +92,30 @@ describe("DescriptionEditor", () => {
       await Promise.resolve();
     });
     expect(actions.setDescription).toHaveBeenCalledWith(files[0], "idle caption");
+  });
+
+  it("should save a valid manual capture date through the existing file PATCH action", async () => {
+    const { actions, files, onClose } = renderEditor();
+    const input = screen.getByRole("textbox", { name: "Capture date for one.jpg" });
+    fireEvent.change(input, { target: { value: "2024-02-29 03:04:05.006" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await act(async () => {});
+    expect(actions.setCaptureDate).toHaveBeenCalledWith(files[0], "2024-02-29 03:04:05.006");
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("should keep an impossible manual capture date local and explain the format", async () => {
+    const { actions, onClose, toasts } = renderEditor();
+    const input = screen.getByRole("textbox", { name: "Capture date for one.jpg" });
+    fireEvent.change(input, { target: { value: "2024-02-30 03:04:05" } });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a real local date");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await act(async () => {});
+
+    expect(actions.setCaptureDate).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(toasts.messages().join(" ")).toContain("Capture date must be a real local date");
   });
 });

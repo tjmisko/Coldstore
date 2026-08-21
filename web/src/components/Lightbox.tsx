@@ -14,6 +14,7 @@ import { PinToggle } from "./PinToggle";
 import { Portal } from "./Portal";
 import { PreviewSurface } from "./PreviewSurface";
 import { DescriptionEditor } from "./DescriptionEditor";
+import { CaptureMeta } from "./CaptureMeta";
 
 interface LightboxProps {
   files: FileRecord[];
@@ -308,6 +309,9 @@ export function Lightbox({
               </div>
               <div>
                 <span className="text-ink-faint">First seen:</span> {formatDateTime(file.first_seen)}
+              </div>
+              <div className="col-span-2">
+                <span className="text-ink-faint">Captured:</span> <CaptureMeta file={file} />
               </div>
               {file.archived_at && (
                 <div>

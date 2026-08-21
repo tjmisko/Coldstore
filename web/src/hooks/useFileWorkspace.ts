@@ -5,7 +5,7 @@ import { useFiles, type UseFiles } from "./useFiles";
 import { useSelection, type Selection } from "./useSelection";
 import type { FileRecord, FileSort } from "../types/api";
 
-/** The six filters of design section 7.4.
+/** The file-review filters, including the capture-date queue from tagging design 3.2.
  *
  *  The two pin filters are not a nicety. A restore pins silently and
  *  permanently and nothing ever releases that pin, so a folder's long-run
@@ -20,6 +20,7 @@ export type FilterKey =
   | "archived"
   | "pinned-user"
   | "pinned-auto"
+  | "undated"
   | "conflicts";
 
 export interface FilterPreset {
@@ -48,6 +49,12 @@ export const FILTER_PRESETS: FilterPreset[] = [
     sort: "pinned_at",
   },
   {
+    key: "undated",
+    label: "No capture date",
+    hint: "Files whose metadata was scanned but did not contain a capture date.",
+    filters: { undated: true },
+  },
+  {
     key: "conflicts",
     label: "Conflicts",
     hint: "A file came back at the path of a record coldstore had archived. Choose which copy to keep.",
@@ -66,6 +73,7 @@ export interface FileActions {
   resolve(file: FileRecord, keep: "device" | "archive"): Promise<void>;
   download(file: FileRecord): void;
   setDescription(file: FileRecord, description: string): Promise<boolean>;
+  setCaptureDate(file: FileRecord, capturedLocal: string): Promise<boolean>;
 }
 
 export interface FileWorkspace {
@@ -192,11 +200,27 @@ export function useFileWorkspace(options: Options): FileWorkspace {
     [patchFile, toast],
   );
 
+  const setCaptureDate = useCallback(
+    async (file: FileRecord, capturedLocal: string): Promise<boolean> => {
+      try {
+        const updated = await api.updateFile(file.id, { captured_local: capturedLocal });
+        patchFile(file.id, updated);
+        return true;
+      } catch (err) {
+        toast.show("error", `${file.filename}: ${errorMessage(err)}`);
+        return false;
+      }
+    },
+    [patchFile, toast],
+  );
+
   return {
     preset,
     files,
     selection,
-    actions: { setPinned, restore, archive, resolve, download, setDescription },
+    actions: {
+      setPinned, restore, archive, resolve, download, setDescription, setCaptureDate,
+    },
     filters: { folder, ...preset.filters },
   };
 }

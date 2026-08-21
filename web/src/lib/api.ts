@@ -91,6 +91,10 @@ export interface FileFilters {
   pinSource?: PinSource;
   /** Unresolved section 4.1b conflicts only. */
   conflict?: boolean;
+  capturedFrom?: string;
+  capturedTo?: string;
+  /** Metadata was scanned successfully but contained no capture date. */
+  undated?: boolean;
 }
 
 /** fileFilterParams is shared by GET /files and GET /files/ids, which is the
@@ -105,6 +109,9 @@ export function fileFilterParams(filters: FileFilters): URLSearchParams {
   if (filters.pinned !== undefined) params.set("pinned", filters.pinned ? "1" : "0");
   if (filters.pinSource) params.set("pin_source", filters.pinSource);
   if (filters.conflict) params.set("conflict", "1");
+  if (filters.capturedFrom) params.set("captured_from", filters.capturedFrom);
+  if (filters.capturedTo) params.set("captured_to", filters.capturedTo);
+  if (filters.undated) params.set("undated", "1");
   return params;
 }
 

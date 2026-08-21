@@ -23,6 +23,8 @@ interface Options {
   onOpen(index: number): void;
   onContextMenu(index: number): void;
   onEditDescription(index: number): void;
+  /** Resolve a capture-day jump against the ordering the gallery is showing. */
+  resolveCaptureDay?(index: number, direction: -1 | 1, count: number): number;
   /** False while the lightbox is open: the cursor stops following the grid. */
   active?: boolean;
   /** A file the finder asked to be revealed, and a token that changes on every
@@ -37,6 +39,8 @@ export interface GridCursor {
   /** Point the cursor at a row the owner clicked, so the keyboard carries on
    *  from where the mouse left off. */
   setIndex(index: number): void;
+  /** Move and focus as if a keyboard motion resolved to this index. */
+  moveTo(index: number): void;
 }
 
 /** useGridKeymap is the whole keyboard behaviour of a file list.
@@ -47,7 +51,8 @@ export interface GridCursor {
 export function useGridKeymap(options: Options): GridCursor {
   const {
     scope, files, columns, visibleRows, selection, actions, bulk,
-    conflictMode, onOpen, onContextMenu, onEditDescription, active = true, reveal = null,
+    conflictMode, onOpen, onContextMenu, onEditDescription, resolveCaptureDay,
+    active = true, reveal = null,
   } = options;
 
   const [index, setIndexState] = useState(0);
@@ -238,6 +243,13 @@ export function useGridKeymap(options: Options): GridCursor {
             case "edit-description":
               if (files[clamped]) onEditDescription(clamped);
               return true;
+            case "previous-capture-day":
+            case "next-capture-day": {
+              if (!resolveCaptureDay || !files[clamped]) return false;
+              const direction = command.action === "previous-capture-day" ? -1 : 1;
+              moveCursor(resolveCaptureDay(clamped, direction, command.count));
+              return true;
+            }
             case "resolve-device":
               return resolveConflict("device");
             case "resolve-archive":
@@ -255,13 +267,13 @@ export function useGridKeymap(options: Options): GridCursor {
     },
     [
       files, clamped, geometry, moveCursor, applyVisual, targetIDs, bulk,
-      selection, onOpen, onContextMenu, onEditDescription, resolveConflict,
+      selection, onOpen, onContextMenu, onEditDescription, resolveCaptureDay, resolveConflict,
     ],
   );
 
   useKeymapLayer(scope, handle, active);
 
-  return { index: clamped, file: files[clamped], setIndex };
+  return { index: clamped, file: files[clamped], setIndex, moveTo: moveCursor };
 }
 
 /** The operator ids a layer outside the grid needs, exported so the palette and

@@ -211,12 +211,15 @@ func (c *Catalog) GetFileByID(id int64) (*FileRecord, error) {
 }
 
 type FileQuery struct {
-	Folder    string
-	Status    FileStatus
-	Extension string
-	Search    string
-	Pinned    *bool
-	PinSource string
+	Folder       string
+	Status       FileStatus
+	Extension    string
+	Search       string
+	Pinned       *bool
+	PinSource    string
+	CapturedFrom string
+	CapturedTo   string
+	Undated      bool
 	// Conflicted selects rows with an UNRESOLVED section 4.1b conflict: a
 	// 'conflict' event newer than the last 'conflict_resolved' event for the
 	// same (folder, path). It is the only filter backed by the events table,
@@ -268,6 +271,19 @@ func (q FileQuery) filter() (string, []any) {
 	if q.PinSource != "" {
 		clause.WriteString(" AND pin_source = ?")
 		args = append(args, q.PinSource)
+	}
+	if q.CapturedFrom != "" {
+		clause.WriteString(" AND captured_local <> '' AND captured_local >= ?")
+		args = append(args, q.CapturedFrom)
+	}
+	if q.CapturedTo != "" {
+		clause.WriteString(" AND captured_local <> '' AND captured_local <= ?")
+		args = append(args, q.CapturedTo+" 23:59:59.999")
+	}
+	if q.Undated {
+		// An empty capture value is not enough: until the extractor has looked,
+		// empty means unknown rather than "looked and found no date".
+		clause.WriteString(" AND captured_local = '' AND meta_scanned_at IS NOT NULL")
 	}
 	if q.Conflicted {
 		clause.WriteString(conflictedClause)
@@ -323,6 +339,8 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	// and drops the other. Ties are the norm here, not the exception: a camera
 	// roll copied off a card shares one mtime across hundreds of files.
 	switch {
+	case q.SortBy == "captured":
+		query += " ORDER BY CASE WHEN captured_local = '' THEN 1 ELSE 0 END, captured_local DESC, id ASC"
 	case q.SortBy == "size":
 		query += " ORDER BY size_bytes DESC, id ASC"
 	case q.SortBy == "name":

@@ -68,6 +68,22 @@ describe("counts", () => {
     const { state } = run("1234567");
     expect(state.count).toBe("12345");
   });
+
+  it("should carry counts into capture-day navigation without changing digit motions", () => {
+    expect(run("3}").commands).toEqual([
+      { kind: "action", action: "next-capture-day", count: 3 },
+    ]);
+    expect(run("3j").commands).toEqual([
+      { kind: "motion", motion: "down", count: 3, extend: false },
+    ]);
+  });
+
+  it("should keep capture-day navigation in gallery scope", () => {
+    expect(run("}", { chain: ["browser", "global"] }).commands).toEqual([]);
+    expect(run("}", { chain: ["gallery", "global"] }).commands).toEqual([
+      { kind: "action", action: "next-capture-day", count: 0 },
+    ]);
+  });
 });
 
 describe("operators", () => {

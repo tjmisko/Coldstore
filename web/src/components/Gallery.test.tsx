@@ -194,4 +194,82 @@ describe("Gallery", () => {
       expect(stub!.calls.find((call) => call.method === "PATCH")?.body).toEqual({ description: "j" }),
     );
   });
+
+  it("should group capture-sorted files by day and preserve raw date headings", async () => {
+    renderGallery([
+      aFile({ id: 1, filename: "one.jpg", captured_local: "2024-03-02 10:00:00", captured_offset_minutes: null }),
+      aFile({ id: 2, filename: "two.jpg", captured_local: "2024-03-02 09:00:00" }),
+      aFile({ id: 3, filename: "three.jpg", captured_local: "2024-03-01 23:00:00" }),
+      aFile({ id: 4, filename: "four.jpg", captured_local: "", meta_scanned_at: 100 }),
+    ]);
+    await screen.findByLabelText("one.jpg");
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Sort gallery" }), "captured");
+
+    expect(await screen.findByRole("heading", { name: "March 2, 2024" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "March 1, 2024" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "No capture date" })).toBeInTheDocument();
+    expect(document.querySelector('[data-capture-day="2024-03-02"]')).not.toBeNull();
+    expect(document.querySelector('[data-capture-date="2024-03-02 10:00:00"]')).not.toBeNull();
+    expect(screen.getAllByText("Timezone not recorded").length).toBeGreaterThan(0);
+    expect(stub!.urls().some((url) => url.includes("sort=captured"))).toBe(true);
+  });
+
+  it("should navigate capture days with braces and counted jumps", async () => {
+    renderGallery([
+      aFile({ id: 1, filename: "one.jpg", captured_local: "2024-03-02 10:00:00" }),
+      aFile({ id: 2, filename: "two.jpg", captured_local: "2024-03-02 09:00:00" }),
+      aFile({ id: 3, filename: "three.jpg", captured_local: "2024-03-01 23:00:00" }),
+      aFile({ id: 4, filename: "four.jpg", captured_local: "", meta_scanned_at: 100 }),
+    ]);
+    await screen.findByLabelText("one.jpg");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Sort gallery" }), "captured");
+    await screen.findByRole("heading", { name: "March 2, 2024" });
+
+    fireEvent.keyDown(window, { key: "}", shiftKey: true });
+    await waitFor(() => expect(tile(3).dataset.cursor).toBe("true"));
+
+    fireEvent.keyDown(window, { key: "{", shiftKey: true });
+    await waitFor(() => expect(tile(1).dataset.cursor).toBe("true"));
+
+    fireEvent.keyDown(window, { key: "2" });
+    fireEvent.keyDown(window, { key: "}", shiftKey: true });
+    await waitFor(() => expect(tile(4).dataset.cursor).toBe("true"));
+  });
+
+  it("should finish a capture-day jump after paging past a day boundary", async () => {
+    const firstPage = Array.from({ length: 60 }, (_, index) =>
+      aFile({
+        id: index + 1,
+        filename: `same-day-${index + 1}.jpg`,
+        captured_local: `2024-03-02 10:00:${String(59 - index).padStart(2, "0")}`,
+      }),
+    );
+    const nextPage = [
+      aFile({ id: 61, filename: "older-day.jpg", captured_local: "2024-03-01 23:00:00" }),
+    ];
+    stub = stubFetch([
+      { url: /\/api\/v1\/files\?.*offset=0/, body: firstPage },
+      { url: /\/api\/v1\/files\?.*offset=60/, body: nextPage },
+    ]);
+    renderWithToasts(
+      <KeymapProvider>
+        <Gallery
+          folder="CameraRoll"
+          filterKey="all"
+          onFilterChange={() => {}}
+          onFolderChanged={() => {}}
+        />
+      </KeymapProvider>,
+    );
+    await screen.findByLabelText("same-day-1.jpg");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Sort gallery" }), "captured");
+    await screen.findByRole("heading", { name: "March 2, 2024" });
+
+    fireEvent.keyDown(window, { key: "}", shiftKey: true });
+
+    await screen.findByLabelText("older-day.jpg");
+    await waitFor(() => expect(tile(61).dataset.cursor).toBe("true"));
+    expect(stub.urls().some((url) => url.includes("offset=60"))).toBe(true);
+  });
 });

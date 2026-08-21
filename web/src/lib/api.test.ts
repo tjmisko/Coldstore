@@ -71,6 +71,21 @@ describe("file query building", () => {
     expect(params.get("status")).toBe("archived");
   });
 
+  it("should share capture bounds and undated with listing and id selection", () => {
+    const filters = {
+      folder: "CameraRoll",
+      capturedFrom: "2024-01-02",
+      capturedTo: "2024-03-04",
+      undated: true,
+    };
+    const params = fileFilterParams(filters);
+    expect(params.get("captured_from")).toBe("2024-01-02");
+    expect(params.get("captured_to")).toBe("2024-03-04");
+    expect(params.get("undated")).toBe("1");
+    expect(filesUrl(filters, { offset: 0, limit: 60, sort: "captured" }))
+      .toContain("sort=captured");
+  });
+
   it("should distinguish pinned=0 from no pin filter at all", () => {
     expect(fileFilterParams({ pinned: false }).get("pinned")).toBe("0");
     expect(fileFilterParams({}).has("pinned")).toBe(false);
@@ -95,5 +110,15 @@ describe("file metadata", () => {
     expect(stub.calls).toEqual([
       { url: "/api/v1/files/7", method: "PATCH", body: { description: "A caption" } },
     ]);
+  });
+
+  it("should send a manual capture date through the file PATCH endpoint", async () => {
+    stub = stubFetch([{ method: "PATCH", url: "/api/v1/files/7", body: {} }]);
+    await api.updateFile(7, { captured_local: "2024-02-29 03:04:05.006" });
+    expect(stub.calls[0]).toEqual({
+      url: "/api/v1/files/7",
+      method: "PATCH",
+      body: { captured_local: "2024-02-29 03:04:05.006" },
+    });
   });
 });

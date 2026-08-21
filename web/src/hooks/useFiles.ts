@@ -41,12 +41,19 @@ export interface UseFiles {
 export function useFiles(options: UseFilesOptions): UseFiles {
   const {
     folder, status, extension, search, pinned, pinSource, conflict,
+    capturedFrom, capturedTo, undated,
     sort, limit = 60,
   } = options;
 
   const filters = useMemo<FileFilters>(
-    () => ({ folder, status, extension, search, pinned, pinSource, conflict }),
-    [folder, status, extension, search, pinned, pinSource, conflict],
+    () => ({
+      folder, status, extension, search, pinned, pinSource, conflict,
+      capturedFrom, capturedTo, undated,
+    }),
+    [
+      folder, status, extension, search, pinned, pinSource, conflict,
+      capturedFrom, capturedTo, undated,
+    ],
   );
   const query = useMemo(
     () => JSON.stringify([filters, sort, limit]),
