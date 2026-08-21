@@ -1,5 +1,6 @@
 import { screen } from "@testing-library/react";
 import { render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
 import { aStatus } from "./test/fixtures";
@@ -51,5 +52,34 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "CameraRoll", level: 2 })).toBeInTheDocument();
+  });
+
+  it("should name the tab after the selected folder instead of Vite's scaffold title", async () => {
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+
+    render(<App />);
+
+    // The shipped build said "web" in every tab, because index.html still
+    // carried the `npm create vite` default.
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+    expect(document.title).toBe("CameraRoll — Coldstore");
+  });
+
+  it("should name the tab Settings when the config view is showing", async () => {
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Settings/ }));
+
+    expect(document.title).toBe("Settings — Coldstore");
   });
 });

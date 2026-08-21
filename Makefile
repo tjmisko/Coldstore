@@ -1,4 +1,4 @@
-.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend
+.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend icons
 
 BINARY := coldstore
 BUILD_DIR := ./cmd/coldstore
@@ -48,6 +48,15 @@ frontend: deps
 
 build: frontend
 	go build -o $(BINARY) $(BUILD_DIR)
+
+# Regenerates the raster app icons from the SVG sources in web/icons/. The PNGs
+# are committed, so this is a manual step after editing the mark -- ImageMagick
+# is NOT a build dependency and no other target depends on this one.
+icons:
+	magick -background none web/icons/app-icon.svg -resize 180x180 png:web/public/apple-touch-icon.png
+	magick -background none web/icons/app-icon.svg -resize 192x192 png:web/public/icon-192.png
+	magick -background none web/icons/app-icon.svg -resize 512x512 png:web/public/icon-512.png
+	magick -background none web/icons/app-icon-maskable.svg -resize 512x512 png:web/public/icon-maskable-512.png
 
 # The Go binary alone, with whatever is currently in internal/api/dist. This is
 # what docker/Dockerfile.test copies; the live suite asserts nothing about the

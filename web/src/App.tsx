@@ -6,6 +6,7 @@ import { Gallery } from "./components/Gallery";
 import { StatusBar } from "./components/StatusBar";
 import { ToastProvider } from "./components/ToastProvider";
 import { useStatus } from "./hooks/useConfig";
+import { useDocumentTitle } from "./hooks/useDocumentTitle";
 import type { FilterKey } from "./hooks/useFileWorkspace";
 
 type View = "gallery" | "files" | "config";
@@ -41,6 +42,8 @@ function Shell() {
     setSelectedFolder(folders[0].label);
     setView(isImageFolder(folders[0].label) ? "gallery" : "files");
   }
+
+  useDocumentTitle(view === "config" ? "Settings" : selectedFolder);
 
   const selectFolder = useCallback((label: string, filter: FilterKey = "all") => {
     setSelectedFolder(label);

@@ -3,12 +3,24 @@ package api
 import (
 	"embed"
 	"io/fs"
+	"mime"
 	"net/http"
 	"strings"
 )
 
 //go:embed all:dist
 var distFS embed.FS
+
+// http.FileServer types a response from mime.TypeByExtension, whose Unix table
+// is seeded from /etc/mime.types -- a file the daemon's host may not have at
+// all, and which on Debian does not list .webmanifest. Without this the
+// manifest is sniffed as text/plain and the browser declines to install the
+// app, so the iOS home-screen icon silently stops working.
+func init() {
+	if err := mime.AddExtensionType(".webmanifest", "application/manifest+json"); err != nil {
+		panic("registering the webmanifest mime type: " + err.Error())
+	}
+}
 
 func staticHandler() http.Handler {
 	sub, err := fs.Sub(distFS, "dist")
