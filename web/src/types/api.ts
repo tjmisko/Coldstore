@@ -46,6 +46,12 @@ export interface FileRecord {
   thumb_attempts: number;
   thumb_last_attempt?: number;
   thumb_error?: string;
+  /** What the file's leading bytes say it is, as opposed to `mime_type`, which
+   *  is only what its extension claims. Absent on a row the scanner has not
+   *  sniffed yet. It is the ONLY thing that can classify a file with no
+   *  extension -- a bookmark export called "reading" has an empty `extension`
+   *  and an empty `mime_type`. */
+  detected_type?: string;
 }
 
 export interface FolderConfig {

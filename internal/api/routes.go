@@ -6,6 +6,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/files", s.handleListFiles)
 	s.mux.HandleFunc("GET /api/v1/files/ids", s.handleListFileIDs)
 	s.mux.HandleFunc("GET /api/v1/files/{id}/download", s.handleDownloadFile)
+	s.mux.HandleFunc("GET /api/v1/files/{id}/preview", s.handlePreviewFile)
 	s.mux.HandleFunc("POST /api/v1/files/{id}/restore", s.handleRestoreFile)
 	s.mux.HandleFunc("POST /api/v1/files/{id}/archive", s.handleArchiveFile)
 	s.mux.HandleFunc("POST /api/v1/files/{id}/pin", s.handlePinFile)
