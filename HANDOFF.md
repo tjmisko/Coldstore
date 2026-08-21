@@ -9,7 +9,7 @@ asked for parallel agent work. Spec: `docs/interface-refresh.md` (tasklist + dec
 |---|---|
 | `feat/interface-refresh` | **merge of `feat/keymap` IN PROGRESS, UNCOMMITTED** — see below |
 | `feat/keymap` | done, verified (= `worktree-agent-accbd99e410721eda`) |
-| `feat/tagging-design` | done, docs only (= `worktree-agent-a5c6d024a429c00fc`, `2455afa`) |
+| `feat/tagging-design` | done, docs only (= `worktree-agent-a5c6d024a429c00fc`, `9bcbb3f`) |
 | `feat/documents` | **done, green**, 12 commits, branched from `feat/interface-refresh`@`5cab271` |
 
 Worktrees: `.worktrees/feat/interface-refresh`, `.claude/worktrees/agent-*`.
@@ -77,11 +77,17 @@ Playwright needs an isolated root — both agents share `/tmp/coldstore-e2e`:
 
 ## Metadata research outcome (affects issues #1, #6)
 
-- **GPS `0,0` blocker RETRACTED** — did not reproduce on a real iPhone 12 Pro HEIC; only on
-  synthetic minimal maker notes. #1 should unblock.
-- **Apple maker note 0x0011 unreadable from pure Go — confirmed on real data.** Pattern:
-  embedded (≤4 byte) values parse, **all offset-based values fail** (ContentIdentifier is a
-  string → always broken). So Live Photo pairing must use `exiftool -stay_open` for the still
+- **GPS `0,0` blocker WITHDRAWN, #1 unblocked, library choice settled.** Real iPhone 12 Pro
+  HEIC (iOS 16.7.1) reads correctly through `evanoberholster/imagemeta` — GPS,
+  `DateTimeOriginal`, `OffsetTimeOriginal`, `SubSecTimeOriginal` all match exiftool. §8 no
+  longer gates step 2. Retraction is *recorded, not deleted*: the synthetic bisect was
+  internally valid and mechanistically explained and still didn't generalise, because a real
+  44-entry maker note doesn't trigger what 3-entry fixtures do. The fixture matters as much
+  as the verb.
+- **Apple maker note 0x0011 unreadable from pure Go — confirmed on real data, and it is a
+  whole class, not a flaky field.** Embedded (≤4 byte) values parse; **every offset-based one
+  fails**. A UUID is a string → `ContentIdentifier` is always offset-based → always broken.
+  Structural, so it will not quietly get fixed. So Live Photo pairing must use `exiftool -stay_open` for the still
   half; MOV half is free from ffprobe. **Invoke exiftool as a SUBPROCESS, never import
   `barasher/go-exiftool` — it is GPL-3.0** and would make the binary derivative. Precedent:
   `internal/thumbnail/thumbnail.go:162` shells out to ffmpeg.
@@ -90,6 +96,13 @@ Playwright needs an isolated root — both agents share `/tmp/coldstore-e2e`:
   unaffected (returns unsigned GPS — apply the ref sign yourself).
 - ffprobe `creationdate` offset has no colon → use `"2006-01-02T15:04:05-0700"`, not RFC3339.
 - ffprobe surfaces **zero** EXIF from stills. Separate path required.
+- New edge case: the reader tries the Apple maker note only when IFD0 `Make == "Apple"`, and
+  returns **nothing at all** — not even Make/Model — for a file that lost IFD0 but kept its
+  maker note. A file with metadata presenting as one without. The `bep/imagemeta` re-probe
+  catches this too: one mechanism now covers three failure modes (empty EXIF from
+  `iloc`-first, `0,0` GPS, and lost-IFD0).
+- Only unmeasured claim left in the tagging design is the **FTS5 performance argument in #9**;
+  that issue's acceptance criteria already require measuring it.
 
 ## Pre-existing bugs found (not in the owner's notes)
 
