@@ -137,13 +137,13 @@ reach `api.github.com` from this environment.
 This follows metadata issues #1–#3 and schema issue #2 below, but remains P0 because it is a
 real half-archive data bug.
 
-- [ ] Pair by matching content identifier, not filename authority.
-- [ ] Use `ffprobe` for MOV and resident ExifTool subprocess for candidate stills.
-- [ ] Treat basename only as an explicitly degraded source when ExifTool is unavailable.
-- [ ] Expand pair groups at every archive, restore and rename entry point and in quota byte
-      accounting.
-- [ ] Add the mover-level `pair_split` warning backstop.
-- [ ] Test UUID collisions, edited `IMG_E...` variants, AAE membership, exact-one-member
+- [x] Pair by matching content identifier, not filename authority.
+- [x] Use `ffprobe` for MOV and resident ExifTool subprocess for candidate stills.
+- [x] Treat basename only as an explicitly degraded source when ExifTool is unavailable.
+- [x] Expand pair groups at every existing archive and restore entry point and in quota byte
+      accounting; the future rename entry point remains an explicit #14 obligation.
+- [x] Add the mover-level `pair_split` warning backstop.
+- [x] Test UUID collisions, edited `IMG_E...` variants, AAE membership, exact-one-member
       budgets, bulk job totals, restore expansion and 20,000-ID chunking.
 
 ## P1 — permanent browser access without a VPN client
@@ -207,7 +207,7 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
       `display_name`.
 - [x] #3 — background metadata extraction pass with its own queue, attempt budget and
       owner-edit preservation.
-- [ ] #6 — atomic Live Photo pairing and movement (P0 specification above).
+- [x] #6 — atomic Live Photo pairing and movement (P0 specification above).
 - [x] #7 — normalized tag catalog primitives and CRUD API.
 - [x] #4 — capture-date sorting/filtering/grouping with honest unknown-offset display.
 - [x] #5 — location display/proximity filtering and location tagging without geocoding.
@@ -215,7 +215,7 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
 - [ ] #9 — extend search to path/description/tags and add tag/untagged filters. Benchmark
       `LIKE` on representative N40L-scale data before accepting the no-FTS5 claim.
 - [ ] #10 — mouse-first tagging UI, typeahead prompt and tag manager.
-- [ ] #12 — one bulk tagging endpoint, 500-ID statement chunks and real undo.
+- [x] #12 — one bulk tagging endpoint, 500-ID statement chunks and real undo.
 - [ ] #14 — migration 8, durable directory/file rename job and cosmetic display names.
 - [ ] #11 — tag operators, quick slots and dedicated Tag mode on the existing grammar.
 - [ ] File a separate XMP export issue; tracker #15 currently names it without an issue.
