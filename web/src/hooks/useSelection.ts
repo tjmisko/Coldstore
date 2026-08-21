@@ -9,6 +9,10 @@ export interface Selection {
    *  anchor's state. With no anchor it is an ordinary toggle. */
   toggleRange(id: number): void;
   selectMany(ids: number[]): void;
+  /** Replace the whole set. Visual mode needs it: every motion redraws the
+   *  highlighted span, and a span that could only ever grow would leave the
+   *  files behind the cursor selected when the owner reversed direction. */
+  selectExactly(ids: number[]): void;
   clear(): void;
   count: number;
   ids: number[];
@@ -74,6 +78,10 @@ export function useSelection(orderedIds: number[]): Selection {
     });
   }, []);
 
+  const selectExactly = useCallback((ids: number[]) => {
+    setSelected(new Set(ids));
+  }, []);
+
   const clear = useCallback(() => {
     anchor.current = null;
     setSelected(new Set());
@@ -82,5 +90,15 @@ export function useSelection(orderedIds: number[]): Selection {
   const isSelected = useCallback((id: number) => selected.has(id), [selected]);
   const ids = useMemo(() => [...selected], [selected]);
 
-  return { selected, isSelected, toggle, toggleRange, selectMany, clear, count: selected.size, ids };
+  return {
+    selected,
+    isSelected,
+    toggle,
+    toggleRange,
+    selectMany,
+    selectExactly,
+    clear,
+    count: selected.size,
+    ids,
+  };
 }

@@ -2,9 +2,30 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Selection } from "../hooks/useSelection";
+import type { FileRecord } from "../types/api";
 import { aFile, aJob } from "../test/fixtures";
 import { renderWithToasts, stubFetch } from "../test/harness";
+import { useBulkActions } from "../hooks/useBulkActions";
+import type { FileFilters } from "../lib/api";
 import { SelectionBar } from "./SelectionBar";
+
+/** The bulk state moved into useBulkActions so the keyboard could reuse it, so
+ *  the bar is now rendered from an instance its owner holds. Every assertion
+ *  below is unchanged: this is the same component driven the same way. */
+function Bar({
+  selection,
+  filters,
+  files,
+  onFinished,
+}: {
+  selection: Selection;
+  filters: FileFilters;
+  files: FileRecord[];
+  onFinished(ids: number[]): void | Promise<void>;
+}) {
+  const bulk = useBulkActions({ selection, filters, onFinished });
+  return <SelectionBar selection={selection} files={files} bulk={bulk} />;
+}
 
 let stub: ReturnType<typeof stubFetch> | null = null;
 
@@ -21,6 +42,7 @@ function selectionOf(ids: number[], overrides: Partial<Selection> = {}): Selecti
     toggle: vi.fn(),
     toggleRange: vi.fn(),
     selectMany: vi.fn(),
+    selectExactly: vi.fn(),
     clear: vi.fn(),
     count: set.size,
     ids,
@@ -34,7 +56,7 @@ describe("SelectionBar", () => {
   it("should report how many files are selected", () => {
     stub = stubFetch([]);
     renderWithToasts(
-      <SelectionBar selection={selectionOf([1, 2, 3])} filters={{ folder: "CameraRoll" }} files={FILES} onFinished={() => {}} />,
+      <Bar selection={selectionOf([1, 2, 3])} filters={{ folder: "CameraRoll" }} files={FILES} onFinished={() => {}} />,
     );
 
     expect(screen.getByText("3 selected")).toBeInTheDocument();
@@ -43,7 +65,7 @@ describe("SelectionBar", () => {
   it("should render nothing at all when nothing is selected", () => {
     stub = stubFetch([]);
     const { container } = renderWithToasts(
-      <SelectionBar selection={selectionOf([])} filters={{}} files={[]} onFinished={() => {}} />,
+      <Bar selection={selectionOf([])} filters={{}} files={[]} onFinished={() => {}} />,
     );
 
     expect(container).toBeEmptyDOMElement();
@@ -57,7 +79,7 @@ describe("SelectionBar", () => {
     const ids = Array.from({ length: 400 }, (_, i) => i + 1);
 
     const { toasts } = renderWithToasts(
-      <SelectionBar selection={selectionOf(ids)} filters={{}} files={FILES} onFinished={onFinished} />,
+      <Bar selection={selectionOf(ids)} filters={{}} files={FILES} onFinished={onFinished} />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Pin" }));
@@ -80,7 +102,7 @@ describe("SelectionBar", () => {
     ]);
 
     const { toasts } = renderWithToasts(
-      <SelectionBar selection={selectionOf([1, 2])} filters={{}} files={FILES} onFinished={() => {}} />,
+      <Bar selection={selectionOf([1, 2])} filters={{}} files={FILES} onFinished={() => {}} />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Pin" }));
@@ -106,7 +128,7 @@ describe("SelectionBar", () => {
     ]);
 
     renderWithToasts(
-      <SelectionBar selection={selectionOf([1, 2])} filters={{}} files={FILES} onFinished={() => {}} />,
+      <Bar selection={selectionOf([1, 2])} filters={{}} files={FILES} onFinished={() => {}} />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
@@ -137,7 +159,7 @@ describe("SelectionBar", () => {
     ]);
 
     renderWithToasts(
-      <SelectionBar selection={selectionOf([1])} filters={{}} files={FILES} onFinished={() => {}} />,
+      <Bar selection={selectionOf([1])} filters={{}} files={FILES} onFinished={() => {}} />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
@@ -158,7 +180,7 @@ describe("SelectionBar", () => {
     ]);
 
     renderWithToasts(
-      <SelectionBar selection={selectionOf([1, 2])} filters={{}} files={FILES} onFinished={() => {}} />,
+      <Bar selection={selectionOf([1, 2])} filters={{}} files={FILES} onFinished={() => {}} />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
@@ -195,7 +217,7 @@ describe("SelectionBar", () => {
     const onFinished = vi.fn();
 
     renderWithToasts(
-      <SelectionBar selection={selectionOf([1, 2, 3])} filters={{}} files={FILES} onFinished={onFinished} />,
+      <Bar selection={selectionOf([1, 2, 3])} filters={{}} files={FILES} onFinished={onFinished} />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
@@ -231,7 +253,7 @@ describe("SelectionBar", () => {
     const selectMany = vi.fn();
 
     renderWithToasts(
-      <SelectionBar
+      <Bar
         selection={selectionOf([1], { selectMany })}
         filters={{ folder: "CameraRoll", status: "archived" }}
         files={FILES}
