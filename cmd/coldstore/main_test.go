@@ -1,0 +1,65 @@
+package main
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+
+	"github.com/tjmisko/coldstore/internal/config"
+)
+
+func preflightCfg() *config.Config {
+	return &config.Config{
+		Storage: config.StorageConfig{ColdStoragePath: "/srv/coldstore"},
+		Server:  config.ServerConfig{ListenAddr: "192.168.1.10:8090", Username: "coldstore", Password: "x"},
+		Folders: []config.FolderConfig{
+			{Label: "CameraRoll", Path: "/home/owner/CameraRoll", Budget: "20GB", BudgetBytes: 20_000_000_000},
+			{Label: "Books", Path: "/home/owner/Books", Budget: "5GB", BudgetBytes: 5_000_000_000},
+		},
+	}
+}
+
+// --check runs outside the unit's sandbox, so it cannot see ProtectSystem=strict
+// and will print "preflight OK" for a config that exits 1 the moment systemd
+// starts it with a folder missing from ReadWritePaths=. The least it can do is
+// hand the owner the line they need instead of staying silent about it.
+func TestShouldPrintTheReadWritePathsLineWhenPreflightReports(t *testing.T) {
+	var buf bytes.Buffer
+	reportPreflight(&buf, preflightCfg(), "/etc/coldstore/coldstore.toml", nil)
+	got := buf.String()
+
+	want := "ReadWritePaths=/srv/coldstore /home/owner/CameraRoll /home/owner/Books"
+	if !strings.Contains(got, want) {
+		t.Errorf("preflight output does not contain %q:\n%s", want, got)
+	}
+}
+
+func TestShouldSayPreflightCannotVerifyTheSandboxWhenPreflightReports(t *testing.T) {
+	var buf bytes.Buffer
+	reportPreflight(&buf, preflightCfg(), "/etc/coldstore/coldstore.toml", nil)
+	got := buf.String()
+
+	if !strings.Contains(got, "OUTSIDE the unit's sandbox") {
+		t.Errorf("preflight claims coverage it does not have:\n%s", got)
+	}
+	// The old docs called a missing ReadWritePaths entry a runtime failure hours
+	// later. It is a hard startup failure, and the report must not re-teach the
+	// wrong model.
+	if !strings.Contains(got, "exit 1 at startup") {
+		t.Errorf("preflight does not say a missing entry is fatal at startup:\n%s", got)
+	}
+}
+
+func TestShouldListEveryWarningWhenPreflightReportsWarnings(t *testing.T) {
+	var buf bytes.Buffer
+	reportPreflight(&buf, preflightCfg(), "/etc/coldstore/coldstore.toml",
+		[]string{"folder \"Books\" path \"/home/owner/Books\" does not exist yet"})
+	got := buf.String()
+
+	if !strings.Contains(got, "preflight OK with 1 warning(s)") {
+		t.Errorf("warning count missing:\n%s", got)
+	}
+	if !strings.Contains(got, "does not exist yet") {
+		t.Errorf("the warning text itself is missing:\n%s", got)
+	}
+}

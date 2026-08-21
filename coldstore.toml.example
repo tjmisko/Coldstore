@@ -1,29 +1,150 @@
+# coldstore configuration -- copy to /etc/coldstore/coldstore.toml and edit.
+#
+#     install -d  -m 750 -o root -g SERVICEUSER /etc/coldstore
+#     install -m 640 -o root -g SERVICEUSER coldstore.toml.example /etc/coldstore/coldstore.toml
+#
+# SERVICEUSER is the unit's User=. The daemon reads this file AS that account,
+# so it needs traverse on the directory and read on the file: root:root 750, or
+# a mode-600 file, makes the daemon exit 1 with "permission denied" at startup.
+#
+# The answer to that error is NOT chmod 644. This file names every directory
+# coldstore may delete from, and if you put a password in [server] it holds that
+# too. Root plus the service user, nobody else. See docs/deployment.md.
+#
+# Validate a config without starting the daemon:
+#
+#     coldstore --config /etc/coldstore/coldstore.toml --check
+
 [storage]
+# Must already exist, be a directory, and be writable by the user in the systemd
+# unit. coldstore deliberately does NOT create it: on a pool that has not mounted
+# yet, creating it would silently write the whole archive to the root filesystem.
 cold_storage_path = "/srv/coldstore"
 
 [daemon]
+# WARNING: 0 means "use the default", not 0. Go cannot tell an explicit `0` from an
+# absent key, so every int below falls back to its built-in default when set to 0.
+# In particular `grace_period_minutes = 0` does NOT disable the grace period -- it
+# becomes 30. Use 1 for the shortest grace period expressible here.
+# See docs/deployment.md, "Zero means default, not zero".
 scan_interval_minutes = 15
 catalog_sync_interval_minutes = 30
 thumbnail_workers = 2
 grace_period_minutes = 30
 
 [server]
-listen_addr = "0.0.0.0:8090"
+# ---------------------------------------------------------------------------
+# READ THIS BEFORE CHANGING listen_addr.
+#
+# The web UI is a CONTROL PLANE, not a viewer. Anyone who can reach it can pin,
+# archive, restore and bulk-move your files -- and a coldstore archive is a
+# Syncthing deletion, so it removes the file from your phone and every other
+# device too. Treat this port exactly as seriously as Syncthing's own GUI port.
+#
+# The shipped default is loopback. That is a deliberate choice over shipping a
+# placeholder LAN address:
+#
+#   * A placeholder like 192.168.1.10 fails to bind on almost every real network
+#     ("cannot assign requested address"). The fastest fix a hurried owner reaches
+#     for is 0.0.0.0, which is the outcome this file exists to prevent.
+#   * Loopback works verbatim on any machine, and it is genuinely usable -- an SSH
+#     tunnel reaches it with zero network exposure:
+#         ssh -N -L 8090:127.0.0.1:8090 you@this-host
+#     then open http://127.0.0.1:8090 on your laptop.
+#
+# To reach the UI from a phone or laptop on your LAN, do BOTH of these:
+#
+#   1. Set listen_addr to this machine's LAN address and port. Use the actual
+#      interface address, e.g. "192.168.1.10:8090" -- NOT "0.0.0.0:8090", which
+#      also listens on any VPN, container bridge or tethered interface the box
+#      may grow later.
+#   2. Set a username and password (see below).
+#
+# coldstore REFUSES TO START if listen_addr is anything other than loopback and
+# either credential is empty. There is no flag to skip that check. The two safe
+# shapes are cheap, and an unauthenticated delete button on a home LAN is not a
+# tradeoff anyone makes on purpose.
+# ---------------------------------------------------------------------------
+listen_addr = "127.0.0.1:8090"
 
+# HTTP Basic Auth. REQUIRED for any non-loopback listen_addr; optional (and off)
+# on loopback. Both keys must be set or neither -- half a credential disables auth
+# silently, so coldstore refuses that too.
+#
+# Basic auth is cleartext. That is an accepted tradeoff for a LAN-only daemon:
+# there is no TLS, no reverse proxy and no session layer here by design. Do not
+# port-forward this to the internet.
+#
+# PREFER THE ENVIRONMENT over the keys below, so your password is not in the file
+# you are most likely to paste into a bug report or a chat window:
+#
+#     install -m 600 /dev/null /etc/coldstore/coldstore.env
+#     printf 'COLDSTORE_USERNAME=%s\n' coldstore     >> /etc/coldstore/coldstore.env
+#     printf 'COLDSTORE_PASSWORD=%s\n' "$(head -c 24 /dev/urandom | base64)" \
+#                                                    >> /etc/coldstore/coldstore.env
+#
+# The shipped unit already has EnvironmentFile=-/etc/coldstore/coldstore.env.
+# COLDSTORE_USERNAME and COLDSTORE_PASSWORD override anything set here.
+#
+# username = "coldstore"
+# password = "put-a-long-random-password-here"
+
+# RESERVED -- neither key is read by any code today. There is no Syncthing API
+# client in coldstore; it integrates with Syncthing purely through the filesystem.
+# Setting these does nothing; omitting them breaks nothing.
 [syncthing]
 api_url = "http://127.0.0.1:8384"
 api_key = ""
+
+# A [[folders]] block DECLARES a folder. Its label and path are infrastructure:
+# adding a folder means editing this file and restarting the daemon, and the
+# label is the key everything else hangs off, so it must be unique and the path
+# must be absolute.
+#
+# EVERY MANAGED FOLDER MUST BE "Send & Receive" IN SYNCTHING. coldstore frees
+# space by deleting files from this folder and letting Syncthing propagate the
+# deletion. On a Receive Only folder nothing propagates, the budget does nothing,
+# and clicking "Revert Local Changes" in Syncthing starts a full-library
+# archive/restore flap.
+#
+# The path must contain Syncthing's `.stfolder` marker. A folder that is missing,
+# or present without that marker, is treated as "not mounted yet": coldstore logs
+# a warning, skips it, and picks it up when it appears. That is what lets the
+# daemon survive being started before its mount.
+#
+# `budget` and [daemon] grace_period_minutes are SEED VALUES ONLY. They are
+# written to the catalog the FIRST time a folder is seen and never again;
+# from then on the budget and the grace period are edited in the web UI and
+# take effect on the next enforcement tick with no restart. Changing `budget`
+# here after the first run has NO effect. Removing a [[folders]] block does not
+# delete anything: the folder is flagged as no longer declared, stops being
+# scanned and enforced, and keeps its budget, its pins and its files.
+#
+# Every path below must also appear in the unit's ReadWritePaths=, or the systemd
+# sandbox makes it read-only to this process and the daemon exits 1 AT STARTUP
+# with EROFS. `coldstore --check` prints the exact ReadWritePaths= line to use
+# (it cannot verify the one in your unit -- it does not run inside the sandbox).
+
+# `persistent` marks files coldstore must never archive. A pattern ending in "/"
+# or "/*" protects the WHOLE SUBTREE beneath it; a pattern containing "/" is
+# otherwise matched against the full relative path; a pattern without one is
+# also matched against bare filenames, so "*.raw" protects every raw file in the
+# folder. See docs/deployment.md, "Persistent glob semantics".
+#
+# These are seed values too: they are copied into the catalog the first time the
+# folder is seen, and edited in the web UI thereafter, which also reports how
+# many files each pattern currently protects.
 
 [[folders]]
 label = "CameraRoll"
 syncthing_id = "xxxxx-xxxxx"
 path = "/home/tjmisko/CameraRoll"
 budget = "20GB"
-persistent = ["Albums/Starred/*"]
+persistent = ["Albums/Starred/"]
 
 [[folders]]
 label = "Books"
 syncthing_id = "yyyyy-yyyyy"
 path = "/home/tjmisko/Books"
 budget = "20GB"
-persistent = ["Favorites/*"]
+persistent = ["Favorites/"]

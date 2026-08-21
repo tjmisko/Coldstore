@@ -1,0 +1,209 @@
+package config
+
+import (
+	"strings"
+	"testing"
+)
+
+// validCfg is the smallest configuration that passes Validate. Each test mutates
+// exactly the field it is about, so a failure names one cause.
+func validCfg() *Config {
+	return &Config{
+		Storage: StorageConfig{ColdStoragePath: "/srv/coldstore"},
+		Server:  ServerConfig{ListenAddr: DefaultListenAddr},
+		Folders: []FolderConfig{{
+			Label:       "CameraRoll",
+			Path:        "/home/owner/CameraRoll",
+			Budget:      "20GB",
+			BudgetBytes: 20_000_000_000,
+		}},
+	}
+}
+
+func TestShouldRefuseToStartWhenBoundOffLoopbackWithoutCredentials(t *testing.T) {
+	addrs := []string{
+		"0.0.0.0:8090",
+		":8090",
+		"192.168.1.10:8090",
+		"[::]:8090",
+		"10.0.0.5:8090",
+		"coldstore.lan:8090",
+	}
+
+	for _, addr := range addrs {
+		t.Run(addr, func(t *testing.T) {
+			err := ValidateServerBinding(&ServerConfig{ListenAddr: addr})
+			if err == nil {
+				t.Fatalf("ValidateServerBinding(%q) with no credentials returned nil, want refusal", addr)
+			}
+			// The message has to tell the owner what to change, not just that
+			// something is wrong.
+			for _, want := range []string{addr, "listen_addr", EnvPassword, DefaultListenAddr} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("refusal message does not mention %q:\n%v", want, err)
+				}
+			}
+		})
+	}
+}
+
+func TestShouldStartWhenBoundOffLoopbackWithCredentials(t *testing.T) {
+	s := &ServerConfig{ListenAddr: "192.168.1.10:8090", Username: "owner", Password: "hunter2hunter2"}
+	if err := ValidateServerBinding(s); err != nil {
+		t.Fatalf("ValidateServerBinding with credentials = %v, want nil", err)
+	}
+}
+
+func TestShouldStartWhenBoundToLoopbackWithoutCredentials(t *testing.T) {
+	addrs := []string{"127.0.0.1:8090", "localhost:8090", "[::1]:8090", "127.0.0.53:8090"}
+	for _, addr := range addrs {
+		t.Run(addr, func(t *testing.T) {
+			if err := ValidateServerBinding(&ServerConfig{ListenAddr: addr}); err != nil {
+				t.Fatalf("ValidateServerBinding(%q) = %v, want nil", addr, err)
+			}
+		})
+	}
+}
+
+func TestShouldRefuseToStartWhenOnlyOneCredentialIsSet(t *testing.T) {
+	cases := map[string]ServerConfig{
+		"username without password": {ListenAddr: DefaultListenAddr, Username: "owner"},
+		"password without username": {ListenAddr: DefaultListenAddr, Password: "secret"},
+	}
+
+	for name, s := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateServerBinding(&s)
+			if err == nil {
+				t.Fatal("half a credential was accepted; basic auth would be silently disabled")
+			}
+			if !strings.Contains(err.Error(), "silently disabled") {
+				t.Errorf("message does not explain the consequence: %v", err)
+			}
+		})
+	}
+}
+
+func TestShouldRefuseToStartWhenListenAddrIsNotHostPort(t *testing.T) {
+	cases := []string{"8090", "192.168.1.10", "192.168.1.10:notaport", ""}
+	for _, addr := range cases {
+		t.Run(addr, func(t *testing.T) {
+			if err := ValidateServerBinding(&ServerConfig{ListenAddr: addr}); err == nil {
+				t.Fatalf("ValidateServerBinding(%q) = nil, want a parse error", addr)
+			}
+		})
+	}
+}
+
+func TestIsLoopbackListenAddrShouldFailClosedWhenAddressCannotBeJudged(t *testing.T) {
+	// A hostname could resolve anywhere, and resolving it would make startup
+	// depend on DNS. It must not be treated as loopback.
+	loopback, err := IsLoopbackListenAddr("some-host:8090")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if loopback {
+		t.Error("a hostname was judged loopback; the D5 refusal would not fire")
+	}
+}
+
+func TestShouldRejectConfigWhenNoFoldersAreDeclared(t *testing.T) {
+	cfg := validCfg()
+	cfg.Folders = nil
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a config with no folders was accepted; the daemon would manage nothing")
+	}
+	if !strings.Contains(err.Error(), "[[folders]]") {
+		t.Errorf("message does not name the missing section: %v", err)
+	}
+}
+
+func TestShouldRejectConfigWhenColdStoragePathIsRelative(t *testing.T) {
+	cfg := validCfg()
+	cfg.Storage.ColdStoragePath = "coldstore"
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a relative cold_storage_path was accepted")
+	}
+}
+
+func TestShouldRejectConfigWhenTwoFoldersShareAPath(t *testing.T) {
+	cfg := validCfg()
+	cfg.Folders = append(cfg.Folders, FolderConfig{
+		Label: "Duplicate", Path: "/home/owner/CameraRoll/", Budget: "1GB", BudgetBytes: 1e9,
+	})
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("two folders over one directory were accepted")
+	}
+	if !strings.Contains(err.Error(), "Duplicate") || !strings.Contains(err.Error(), "CameraRoll") {
+		t.Errorf("message does not name both folders: %v", err)
+	}
+}
+
+func TestShouldRejectConfigWhenFolderHasNoLabel(t *testing.T) {
+	cfg := validCfg()
+	cfg.Folders[0].Label = "   "
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a folder with a blank label was accepted")
+	}
+}
+
+func TestShouldRejectConfigWhenBudgetIsNotPositive(t *testing.T) {
+	cfg := validCfg()
+	cfg.Folders[0].Budget = "0B"
+	cfg.Folders[0].BudgetBytes = 0
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a zero budget was accepted; the first tick would offload the whole folder")
+	}
+	if !strings.Contains(err.Error(), "CameraRoll") {
+		t.Errorf("message does not name the folder: %v", err)
+	}
+}
+
+func TestShouldRejectConfigWhenFolderAndColdStorageOverlap(t *testing.T) {
+	cases := map[string]func(*Config){
+		"folder inside cold storage": func(c *Config) {
+			c.Storage.ColdStoragePath = "/srv/coldstore"
+			c.Folders[0].Path = "/srv/coldstore/CameraRoll"
+		},
+		"cold storage inside folder": func(c *Config) {
+			c.Storage.ColdStoragePath = "/home/owner/CameraRoll/cold"
+			c.Folders[0].Path = "/home/owner/CameraRoll"
+		},
+		"folder is cold storage": func(c *Config) {
+			c.Storage.ColdStoragePath = "/home/owner/CameraRoll"
+			c.Folders[0].Path = "/home/owner/CameraRoll"
+		},
+	}
+
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := validCfg()
+			mutate(cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("an overlapping archive and folder were accepted")
+			}
+			if !strings.Contains(err.Error(), "archive its own archive") {
+				t.Errorf("message does not explain the loop: %v", err)
+			}
+		})
+	}
+}
+
+func TestShouldAcceptSiblingPathsThatSharePrefixWhenNeitherContainsTheOther(t *testing.T) {
+	cfg := validCfg()
+	cfg.Storage.ColdStoragePath = "/srv/cold"
+	cfg.Folders[0].Path = "/srv/coldstuff"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("sibling paths with a shared string prefix were rejected: %v", err)
+	}
+}

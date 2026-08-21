@@ -11,12 +11,16 @@ import (
 	"github.com/tjmisko/coldstore/internal/config"
 )
 
+// testLogger keeps test output quiet unless something actually goes wrong.
+func testLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
 func setupTestEnv(t *testing.T) (syncDir, coldDir string, cfg *config.Config, cat *catalog.Catalog) {
 	t.Helper()
 
-	syncDir = filepath.Join(t.TempDir(), "sync")
+	syncDir = newSyncthingFolder(t, filepath.Join(t.TempDir(), "sync"))
 	coldDir = filepath.Join(t.TempDir(), "cold")
-	os.MkdirAll(syncDir, 0755)
 	os.MkdirAll(filepath.Join(coldDir, "archive"), 0755)
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -57,12 +61,15 @@ func TestOffloadAndRestore(t *testing.T) {
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
 	}
-	cat.UpsertFile(record)
+	cat.UpsertFile(record, time.Now().UnixNano())
 	file, _ := cat.GetFile("TestFolder", "2024/01/photo.jpg")
 
+	declarePolicy(t, cfg, cat)
+	mover := NewMover(cfg, cat, logger)
+	mover.SetSpaceCheck(plentyOfSpace)
+
 	// Offload
-	offloader := NewOffloader(cfg, cat, logger)
-	if err := offloader.Offload(file, syncDir); err != nil {
+	if _, err := mover.ArchiveByID(file.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -88,8 +95,7 @@ func TestOffloadAndRestore(t *testing.T) {
 	}
 
 	// Restore
-	restorer := NewRestorer(cfg, cat, logger)
-	if err := restorer.Restore(file); err != nil {
+	if _, err := mover.RestoreByID(file.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -123,7 +129,7 @@ func TestCrossDeviceMove(t *testing.T) {
 	os.WriteFile(src, content, 0644)
 
 	// crossDeviceMove should work even on same device (it's a copy+delete)
-	if err := crossDeviceMove(src, dst); err != nil {
+	if err := crossDeviceMove(src, dst, testLogger()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,10 +178,12 @@ func TestQuotaEnforcementOrdering(t *testing.T) {
 			FileMtime:    f.mtime,
 			Status:       catalog.StatusSynced,
 		}
-		cat.UpsertFile(record)
+		cat.UpsertFile(record, time.Now().UnixNano())
 	}
 
-	d := New(cfg, cat, logger)
+	declarePolicy(t, cfg, cat)
+
+	d := newTestDaemon(t, cfg, cat, logger)
 	d.EnforceQuotas()
 
 	// oldest.txt and middle.txt should be offloaded (9000 - 3000 = 6000, still > 5000, so offload another: 6000 - 3000 = 3000 <= 5000)
@@ -216,9 +224,11 @@ func TestGracePeriodSkipsRecentFiles(t *testing.T) {
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
 	}
-	cat.UpsertFile(record)
+	cat.UpsertFile(record, time.Now().UnixNano())
 
-	d := New(cfg, cat, logger)
+	declarePolicy(t, cfg, cat)
+
+	d := newTestDaemon(t, cfg, cat, logger)
 	d.EnforceQuotas()
 
 	// File should NOT be offloaded (within grace period)
@@ -254,9 +264,11 @@ func TestPersistentPathsSkipped(t *testing.T) {
 		FileMtime:    oldTime,
 		Status:       catalog.StatusSynced,
 	}
-	cat.UpsertFile(record)
+	cat.UpsertFile(record, time.Now().UnixNano())
 
-	d := New(cfg, cat, logger)
+	declarePolicy(t, cfg, cat)
+
+	d := newTestDaemon(t, cfg, cat, logger)
 	d.EnforceQuotas()
 
 	// File should NOT be offloaded (persistent path)
@@ -266,7 +278,7 @@ func TestPersistentPathsSkipped(t *testing.T) {
 	}
 }
 
-func TestRestoreNonArchivedFails(t *testing.T) {
+func TestRestoreShouldChangeNothingWhenTheFileIsAlreadySynced(t *testing.T) {
 	_, _, cfg, cat := setupTestEnv(t)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
@@ -279,12 +291,20 @@ func TestRestoreNonArchivedFails(t *testing.T) {
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
 	}
-	cat.UpsertFile(record)
+	cat.UpsertFile(record, time.Now().UnixNano())
 	file, _ := cat.GetFile("TestFolder", "test.txt")
 
-	restorer := NewRestorer(cfg, cat, logger)
-	err := restorer.Restore(file)
-	if err == nil {
-		t.Error("restoring a synced file should fail")
+	declarePolicy(t, cfg, cat)
+
+	mover := NewMover(cfg, cat, logger)
+	got, err := mover.RestoreByID(file.ID)
+	if err != nil {
+		t.Fatalf("restoring an already-synced file is a no-op success (invariant 12): %v", err)
+	}
+	if got.Status != catalog.StatusSynced {
+		t.Errorf("status = %q, want synced", got.Status)
+	}
+	if got.Pinned {
+		t.Error("a no-op restore must not pin: nothing was restored")
 	}
 }

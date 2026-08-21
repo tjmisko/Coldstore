@@ -24,10 +24,10 @@ func TestThumbnailJPEG(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "photo.jpg", Filename: "photo.jpg",
 		Extension: ".jpg", SizeBytes: info.Size(), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	gen := thumbnail.NewGenerator(env.coldDir, env.cat, env.logger)
-	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"})
+	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"}, 200)
 	if len(files) == 0 {
 		t.Fatal("expected files needing thumbnails")
 	}
@@ -59,10 +59,10 @@ func TestThumbnailPNG(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "icon.png", Filename: "icon.png",
 		Extension: ".png", SizeBytes: info.Size(), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	gen := thumbnail.NewGenerator(env.coldDir, env.cat, env.logger)
-	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"})
+	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"}, 200)
 	sourcePathFn := func(f *catalog.FileRecord) string {
 		return filepath.Join(env.syncDir, f.RelativePath)
 	}
@@ -94,10 +94,10 @@ func TestThumbnailVideo(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "clip.mp4", Filename: "clip.mp4",
 		Extension: ".mp4", SizeBytes: int64(len(fixture)), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	gen := thumbnail.NewGenerator(env.coldDir, env.cat, env.logger)
-	files, _ := env.cat.FilesNeedingThumbnails([]string{".mp4", ".mov"})
+	files, _ := env.cat.FilesNeedingThumbnails([]string{".mp4", ".mov"}, 200)
 	if len(files) == 0 {
 		t.Fatal("expected video file needing thumbnail")
 	}
@@ -127,12 +127,12 @@ func TestThumbnailArchivedFile(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "archived.jpg", Filename: "archived.jpg",
 		Extension: ".jpg", SizeBytes: info.Size(), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "archived.jpg")
 	env.cat.UpdateFileStatus(file.ID, catalog.StatusArchived)
 
 	gen := thumbnail.NewGenerator(env.coldDir, env.cat, env.logger)
-	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"})
+	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"}, 200)
 
 	sourcePathFn := func(f *catalog.FileRecord) string {
 		if f.Status == catalog.StatusArchived {
@@ -159,7 +159,7 @@ func TestThumbnailIdempotent(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "idem.jpg", Filename: "idem.jpg",
 		Extension: ".jpg", SizeBytes: info.Size(), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	gen := thumbnail.NewGenerator(env.coldDir, env.cat, env.logger)
 	sourcePathFn := func(f *catalog.FileRecord) string {
@@ -167,14 +167,14 @@ func TestThumbnailIdempotent(t *testing.T) {
 	}
 
 	// Generate once
-	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"})
+	files, _ := env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"}, 200)
 	gen.ProcessQueue(files, sourcePathFn, 1)
 
 	file, _ := env.cat.GetFile("TestFolder", "idem.jpg")
 	firstThumb := file.ThumbnailPath
 
 	// Second run: should find no files needing thumbnails
-	files, _ = env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"})
+	files, _ = env.cat.FilesNeedingThumbnails([]string{".jpg", ".jpeg", ".png"}, 200)
 	if len(files) != 0 {
 		t.Errorf("expected 0 files needing thumbnails on second run, got %d", len(files))
 	}

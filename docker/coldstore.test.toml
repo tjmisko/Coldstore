@@ -1,0 +1,64 @@
+# Config baked into docker/Dockerfile.test at /app/coldstore.toml.
+#
+# This is the configuration the live-integration stack (docker/compose.test.yml) runs
+# the daemon with. It is NOT a deployment template -- see coldstore.toml.example for
+# that.
+#
+# NOTE: every int below is set explicitly and non-zero on purpose. A `0` here would be
+# silently replaced by the built-in default in config.setDefaults(), which makes "scan
+# as fast as possible" impossible to express. See docs/deployment.md, "Zero means
+# default".
+
+[storage]
+# Mounted from the `cold-storage` compose volume. catalog.db, archive/ and thumbnails/
+# all live under this path.
+cold_storage_path = "/data/cold"
+
+[daemon]
+# One minute is the floor the config format allows, and the live suite waits on both
+# of these tickers: scan_interval drives quota enforcement, catalog_sync drives the
+# rescan and the thumbnail pass.
+scan_interval_minutes = 1
+catalog_sync_interval_minutes = 1
+thumbnail_workers = 1
+# Deliberately long. Automatic enforcement must not fire while a test is in the middle
+# of an explicit archive/restore sequence; the one test that IS about automatic
+# enforcement lowers the grace period through the API, which is the D1 claim it exists
+# to prove.
+grace_period_minutes = 60
+
+[server]
+# 0.0.0.0 is correct INSIDE a container -- the port is only reachable through the
+# compose port mapping, and binding the container's eth0 address is not knowable
+# ahead of time. Because it is not loopback, coldstore requires credentials
+# (config.ValidateServerBinding); without them the container exits 1 before it
+# binds, and `docker compose up --wait` fails on the healthcheck.
+#
+# These credentials are public on purpose: this file is a test fixture, and the
+# stack publishes nothing but the mapped port on the developer's own machine. The
+# compose healthcheck and the live e2e tests both send them.
+listen_addr = "0.0.0.0:8090"
+username = "coldstore-test"
+password = "coldstore-test"
+
+[syncthing]
+# Reserved. Neither key is read by any code today -- there is no Syncthing API client
+# in the daemon. The live test harness talks to Syncthing itself, from the host, over
+# the published GUI ports; it does not go through the daemon.
+api_url = "http://syncthing-a:8384"
+api_key = ""
+
+[[folders]]
+label = "TestSync"
+# The folder id the harness creates on both Syncthing devices.
+syncthing_id = "livesync"
+# The `device-a-sync` compose volume, which syncthing-a also mounts at
+# /var/syncthing/sync. Coldstore and Syncthing are two writers to one tree, which is
+# exactly the production arrangement.
+path = "/data/sync"
+# Deliberately far above anything the suite writes. Automatic offloading is not the
+# default behaviour under test -- explicit archive/restore is -- and a small budget
+# here would evict files out from under every other test. The enforcement test sets
+# its own budget through the API.
+budget = "10GB"
+persistent = ["keep/*"]

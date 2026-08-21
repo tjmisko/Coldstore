@@ -106,7 +106,7 @@ func TestGenerateJPEGThumbnail(t *testing.T) {
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
 	}
-	cat.UpsertFile(record)
+	cat.UpsertFile(record, time.Now().UnixNano())
 	file, _ := cat.GetFile("Photos", "2024/photo.jpg")
 
 	if err := gen.Generate(file, srcPath); err != nil {
@@ -162,7 +162,7 @@ func TestGeneratePNGThumbnail(t *testing.T) {
 		FileMtime:    time.Now().UTC(),
 		Status:       catalog.StatusSynced,
 	}
-	cat.UpsertFile(record)
+	cat.UpsertFile(record, time.Now().UnixNano())
 	file, _ := cat.GetFile("Docs", "diagram.png")
 
 	if err := gen.Generate(file, srcPath); err != nil {
@@ -201,7 +201,7 @@ func TestProcessQueue(t *testing.T) {
 			FileMtime:    time.Now().UTC(),
 			Status:       catalog.StatusSynced,
 		}
-		cat.UpsertFile(record)
+		cat.UpsertFile(record, time.Now().UnixNano())
 		got, _ := cat.GetFile("Test", f.rel)
 		records = append(records, *got)
 	}

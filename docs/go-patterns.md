@@ -181,48 +181,72 @@ alive.
 
 ---
 
-## 6. `io.TeeReader` + `io.MultiWriter` for Single-Pass Hashing
+## 6. Temp sibling, verify from disk, then rename
 
-**What:** When moving a file across devices, we need to copy bytes *and* compute
-SHA-256 checksums of both source and destination to verify integrity.
-`io.TeeReader` forks the read stream so every byte read also feeds the source
-hasher.  `io.MultiWriter` sends the output to both the destination file and
-the destination hasher.  One pass, no re-reads.
+**What:** A cross-device move never writes to the destination path. It writes to
+`dst + ".coldstore-tmp"`, fsyncs it, **re-reads it from disk** to hash what the
+filesystem actually kept, restores mode/mtime/atime, and only then renames the
+temp over the destination -- an atomic operation, since the temp is a sibling.
+The source is removed last, after re-stat'ing it to confirm it is still the same
+inode.
 
-**Why:** Re-reading a multi-gigabyte video file just to hash it would double the
-I/O time.  This approach does copy + dual-hash in a single sequential pass.
+**Why:** three separate data-loss paths close at once.
 
-**Where:** `internal/daemon/offloader.go:108-137`
+1. **Nothing partial is ever visible at the destination.** These are Syncthing
+   folders: a truncated file at the destination path is replicated to every
+   device the owner has. A kill at any instant can only leave a `.coldstore-tmp`
+   file, which no catalog row references and which startup recovery deletes.
+2. **The verification means something.** The old code hashed the outgoing stream
+   twice -- once through an `io.TeeReader` on the read side and once through an
+   `io.MultiWriter` on the write side -- and compared the two. They came from the
+   same bytes in memory, so they could not differ by construction: it verified
+   nothing about what landed on disk. Re-reading the temp file costs one extra
+   sequential pass and is the only version of this check that can fail.
+3. **A file cannot be truncated by a move.** The temp is opened `O_EXCL` and an
+   occupied destination is `ErrDestinationExists`, never an overwrite.
+
+**Where:** `internal/daemon/move.go`
 
 ```go
-srcHash := sha256.New()
-dstHash := sha256.New()
+tmp := dst + tmpSuffix
+os.Remove(tmp)                                                    // a previous kill
+tmpFile, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 
-// Copy while computing source hash
-tee := io.TeeReader(srcFile, srcHash)
-written, err := io.Copy(io.MultiWriter(dstFile, dstHash), tee)
-// ...
+streamHash := sha256.New()
+written, err := copyAndVerify(srcFile, destWriter(tmpFile), streamHash)
+syncFile(tmpFile); tmpFile.Close(); syncDirPath(filepath.Dir(tmp))
 
-// Verify hash
-srcSum := srcHash.Sum(nil)
-dstSum := dstHash.Sum(nil)
-if string(srcSum) != string(dstSum) {
-	os.Remove(dst)
-	return fmt.Errorf("hash mismatch after copy")
+diskSum, diskSize, err := hashFile(tmp)                           // read it BACK
+if diskSize != before.size || string(diskSum) != string(streamHash.Sum(nil)) {
+	os.Remove(tmp)
+	return errors.New("the copy on disk differs from the bytes that were sent")
 }
+
+os.Chmod(tmp, before.mode.Perm())
+os.Chtimes(tmp, before.atime, before.mtime)                       // keep the date
+os.Rename(tmp, dst)                                               // commit
+// --- only now may the source be touched ---
 ```
 
-The data flow looks like this:
+The ordering is the specification, and the states it makes reachable are the
+whole point:
 
 ```
-srcFile --> TeeReader --> MultiWriter --> dstFile
-               |                |
-               v                v
-            srcHash          dstHash
+  dst absent, tmp partial   -> killed during the copy; retry from the source
+  dst absent, tmp complete  -> killed before the commit; retry from the source
+  dst complete              -> committed and verified; the source may go
 ```
 
-After the copy completes, `srcSum == dstSum` proves end-to-end integrity: the
-bytes that left the source are exactly the bytes that landed on disk.
+`destWriter`, `syncFile` and `syncDirPath` are package-level function variables
+purely so tests can fault-inject: a writer that acknowledges bytes it does not
+store, an fsync that fails, a process that panics mid-copy.
+
+**Restoring mtime and atime is not cosmetic.** Without `os.Chtimes`, a bulk
+restore re-dates every file to today; Syncthing propagates the new mtime to
+every device and the next scan writes it over `files.file_mtime`, destroying the
+only remaining record of when the photo was taken. `OffloadCandidates` orders by
+`MAX(file_mtime, file_atime)`, so re-dated files also become permanently the
+newest thing in the folder and are never offloaded again.
 
 ---
 
@@ -254,35 +278,49 @@ Without the busy timeout, a single contended write would fail instantly.
 
 ---
 
-## 8. Mark-and-Sweep Scanning
+## 8. Generation-Stamped Missing Detection
 
-**What:** Before walking a folder, the scanner marks every `synced` file in that
-folder as `missing`.  Then during the walk, `UpsertFile` sets re-found files
-back to `synced`.  After the walk, anything still marked `missing` is genuinely
-gone.
+**What:** Every walk takes a generation (`time.Now().UnixNano()`) and stamps it
+onto `files.last_seen` as it upserts each file it finds.  After a walk that
+completed cleanly, one statement marks as `missing` every `synced` row in that
+folder whose `last_seen` predates the generation.
 
-**Why:** This avoids maintaining a separate "files we've seen this scan" set
-in memory.  The database *is* the tracking structure.  It also handles renames
-and deletes cleanly -- if a file moved, the old path stays `missing` and the
-new path gets upserted as `synced`.
+**Why:** The previous shape was mark-then-restore -- flip every `synced` row in
+the folder to `missing` up front and let the walk put them back.  For the whole
+duration of the walk (minutes on a 50,000-file camera roll) every mover CAS of
+the form `WHERE status='synced'` failed and `FolderSizes` returned zero, so a
+bulk archive reported hundreds of spurious failures and the budget bar
+collapsed to empty.  A generation stamp makes missing detection a single atomic
+statement at the end, and a walk that errored simply never runs it.
 
-**Where:** `internal/daemon/scanner.go:78` (the mark step), `internal/catalog/catalog.go:176-179` (the SQL), and `internal/catalog/catalog.go:39-48` (the sweep/upsert)
+**Where:** `internal/daemon/scanner.go` (the walk), `catalog.UpsertFile` (the
+stamp), `catalog.MarkFilesMissingBeforeGeneration` (the sweep).
 
 ```go
-// Mark: set all synced -> missing
-if err := s.cat.MarkMissingSyncedFiles(folder.Label); err != nil {
-	return err
-}
+generation := time.Now().UnixNano()
 
-// Sweep: walk the folder, upsert re-found files back to synced
-err = filepath.WalkDir(folder.Path, func(path string, d os.DirEntry, err error) error {
+err = filepath.WalkDir(folder.SyncthingPath, func(path string, d os.DirEntry, err error) error {
 	// ...
-	if err := s.cat.UpsertFile(record); err != nil {
+	conflict, err := s.cat.UpsertFile(record, generation)
+	if err != nil {
 		s.logger.Warn("upsert failed", "path", relPath, "error", err)
+		incomplete++
 	}
 	// ...
 })
+if err != nil {
+	return err // no sweep after a failed walk
+}
+if incomplete == 0 {
+	s.cat.MarkFilesMissingBeforeGeneration(folder.FolderLabel, generation)
+}
 ```
+
+**The corollary that bites:** any transition that puts a file back on the
+device outside a walk -- `MarkRestored`, the archiving->synced revert,
+adopting a device copy -- must stamp `last_seen` in the same statement, or a
+walk that is already running sweeps the row to `missing` while the file sits on
+disk.  That is what `catalog.ClaimFileOnDevice` exists for.
 
 ---
 

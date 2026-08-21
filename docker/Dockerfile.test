@@ -3,6 +3,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -10,4 +11,21 @@ WORKDIR /app
 COPY coldstore /usr/local/bin/coldstore
 COPY tests/fixtures /app/fixtures
 
+# The container is started with `--config /app/coldstore.toml`; without this COPY the
+# daemon exits 1 on "failed to load config" before it ever binds a port.
+COPY docker/coldstore.test.toml /app/coldstore.toml
+
+# cold_storage_path and the managed folder path from coldstore.test.toml. Compose
+# mounts volumes over both, but create them so the image also runs standalone.
+RUN mkdir -p /data/cold /data/sync
+
+# NOTE: this image deliberately does NOT create /data/sync/.stfolder.
+#
+# It used to, because the old single-Syncthing stack never configured a folder and
+# coldstore would otherwise treat /data/sync as an unmounted volume and move nothing.
+# In the two-device stack, syncthing-a is configured with a real folder at that path
+# and creates the marker itself -- which is what happens in production, and which the
+# live harness waits for and asserts. Recreating it here would paper over a pairing
+# failure and turn design section 3.6 back into an untested claim.
 ENTRYPOINT ["coldstore"]
+CMD ["--config", "/app/coldstore.toml"]

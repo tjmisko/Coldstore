@@ -25,7 +25,7 @@ func TestAPIFilesPagination(t *testing.T) {
 			FolderLabel: "TestFolder", RelativePath: name, Filename: name,
 			Extension: ".txt", SizeBytes: 100, FileMtime: now.Add(-time.Duration(i) * time.Hour),
 			Status: catalog.StatusSynced,
-		})
+		}, time.Now().UnixNano())
 	}
 
 	// First page
@@ -64,12 +64,12 @@ func TestAPIFilesSortByMtime(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "old.txt", Filename: "old.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: now.Add(-24 * time.Hour),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "new.txt", Filename: "new.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: now,
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	req := httptest.NewRequest("GET", "/api/v1/files?sort=mtime", nil)
 	w := httptest.NewRecorder()
@@ -93,11 +93,11 @@ func TestAPIFilesSortBySize(t *testing.T) {
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "small.txt", Filename: "small.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: now, Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "big.txt", Filename: "big.txt",
 		Extension: ".txt", SizeBytes: 10000, FileMtime: now, Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	req := httptest.NewRequest("GET", "/api/v1/files?sort=size", nil)
 	w := httptest.NewRecorder()
@@ -121,11 +121,11 @@ func TestAPIFilesSortByName(t *testing.T) {
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "zebra.txt", Filename: "zebra.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: now, Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "apple.txt", Filename: "apple.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: now, Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 
 	req := httptest.NewRequest("GET", "/api/v1/files?sort=name", nil)
 	w := httptest.NewRecorder()
@@ -153,7 +153,7 @@ func TestAPIDownloadArchivedFile(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "cold.txt", Filename: "cold.txt",
 		Extension: ".txt", SizeBytes: int64(len(content)), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "cold.txt")
 	env.cat.UpdateFileStatus(file.ID, catalog.StatusArchived)
 
@@ -179,7 +179,7 @@ func TestAPIDownloadSyncedFile(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "local.txt", Filename: "local.txt",
 		Extension: ".txt", SizeBytes: int64(len(content)), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "local.txt")
 
 	req := httptest.NewRequest("GET", "/api/v1/files/"+strconv.FormatInt(file.ID, 10)+"/download", nil)
@@ -210,7 +210,7 @@ func TestAPIDownload409Restoring(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "restoring.txt", Filename: "restoring.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "restoring.txt")
 	env.cat.UpdateFileStatus(file.ID, catalog.StatusRestoring)
 

@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,7 +27,7 @@ func TestAPIRestoreRoundTrip(t *testing.T) {
 		FolderLabel: "TestFolder", RelativePath: "archived.txt", Filename: "archived.txt",
 		Extension: ".txt", SizeBytes: int64(len(content)), FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "archived.txt")
 	env.cat.UpdateFileStatus(file.ID, catalog.StatusArchived)
 
@@ -60,21 +61,49 @@ func TestAPIRestore404(t *testing.T) {
 	}
 }
 
-func TestAPIRestoreWrongStatus(t *testing.T) {
+// The old contract answered this with a 500 and a raw Go error string. A file
+// that is already where the owner asked for it is not a server failure: it is
+// the outcome they wanted (invariant 12, design section 6.6).
+func TestAPIRestoreShouldReturnTheRecordWhenTheFileIsAlreadySynced(t *testing.T) {
 	env := newTestEnv(t)
 
 	env.cat.UpsertFile(&catalog.FileRecord{
 		FolderLabel: "TestFolder", RelativePath: "synced.txt", Filename: "synced.txt",
 		Extension: ".txt", SizeBytes: 100, FileMtime: time.Now().UTC(),
 		Status: catalog.StatusSynced,
-	})
+	}, time.Now().UnixNano())
 	file, _ := env.cat.GetFile("TestFolder", "synced.txt")
 
 	req := httptest.NewRequest("POST", "/api/v1/files/"+strconv.FormatInt(file.ID, 10)+"/restore", nil)
 	w := httptest.NewRecorder()
 	env.server.Handler().ServeHTTP(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want 500 (cannot restore non-archived file)", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	var got catalog.FileRecord
+	json.NewDecoder(w.Body).Decode(&got)
+	if got.Status != catalog.StatusSynced {
+		t.Errorf("status = %q, want synced", got.Status)
+	}
+}
+
+func TestAPIRestoreShouldReturn409WhenTheFileIsMidMove(t *testing.T) {
+	env := newTestEnv(t)
+
+	env.cat.UpsertFile(&catalog.FileRecord{
+		FolderLabel: "TestFolder", RelativePath: "moving.txt", Filename: "moving.txt",
+		Extension: ".txt", SizeBytes: 100, FileMtime: time.Now().UTC(),
+		Status: catalog.StatusSynced,
+	}, time.Now().UnixNano())
+	file, _ := env.cat.GetFile("TestFolder", "moving.txt")
+	env.cat.UpdateFileStatus(file.ID, catalog.StatusArchiving)
+
+	req := httptest.NewRequest("POST", "/api/v1/files/"+strconv.FormatInt(file.ID, 10)+"/restore", nil)
+	w := httptest.NewRecorder()
+	env.server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409 (a transient state is the caller's problem, not a 500)", w.Code)
 	}
 }
