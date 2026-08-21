@@ -150,19 +150,22 @@ real half-archive data bug.
 
 ### 11. Select and threat-model the ingress
 
-- [ ] Treat the current loopback SSH tunnel as the safe interim state.
+- [x] Treat the current loopback SSH tunnel as the safe interim state.
 - [ ] Select a domain-backed HTTPS path that works in a normal browser and supports guests
       without installing a VPN client.
-- [ ] Keep the coldstore listener private; do not expose the raw Basic Auth port directly to
+- [x] Keep the coldstore listener private; do not expose the raw Basic Auth port directly to
       the public internet.
-- [ ] Reconcile the existing contradictory Cloudflare Tunnel guidance before choosing a
+- [x] Reconcile the existing contradictory Cloudflare Tunnel guidance before choosing a
       provider or topology.
-- [ ] Document certificate renewal, DNS ownership, proxy trust boundaries, request-size/range
+- [x] Document certificate renewal, DNS ownership, proxy trust boundaries, request-size/range
       behavior for large media and an emergency disable procedure.
 
 ### 12. Build session authentication if public ingress wins
 
-- [ ] Add password-to-HMAC-session exchange with `HttpOnly`, `SameSite=Lax`, `Path=/` cookie.
+- [ ] Add owner password-to-HMAC-session exchange with `HttpOnly`, `SameSite=Lax`, `Path=/`
+      cookie, plus individually revocable and expiring read-only guest grants.
+- [ ] Enforce guest authorization on every API, thumbnail, preview and download route; proxy
+      method filtering and hidden frontend controls are defence in depth, not authorization.
 - [ ] Keep Basic Auth accepted for CLI/runbook compatibility.
 - [ ] Make `Secure` an explicit trusted configuration value; TLS terminates before Go, so
       `r.TLS` is not authoritative and arbitrary forwarded headers are not trusted.

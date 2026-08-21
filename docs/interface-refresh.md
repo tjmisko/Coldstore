@@ -19,65 +19,56 @@ The page still ships Vite's scaffold identity: `web/index.html` has `<title>web<
 - [x] A4. `<meta name="theme-color">` and viewport-fit for mobile.
 - [x] A5. Verify the embedded build serves all of the above from `internal/api/dist/`.
 
-## B. Access -- stop tunnelling over SSH
+## B. Access -- guest-capable HTTPS without exposing the control plane
 
-Today the UI is reached through an SSH tunnel. Wanted: LAN access without a tunnel, no
-purchased domain, and a story for remote access. Related: token-based access to the site.
+The current loopback SSH tunnel is the safe interim owner path. Tailscale Serve is also a
+good private owner/admin path, but it cannot satisfy the guest requirement without making
+every guest install a client and join the tailnet.
 
-**Research conclusion: the answer is Tailscale, and it needs no code.** `tailscale serve
---bg --https=443 localhost:8090` publishes the loopback-bound daemon at
-`https://microserver.<tailnet>.ts.net` with a **genuinely browser-trusted Let's Encrypt
-certificate**, because Tailscale owns `ts.net` and does the DNS-01 challenge for you. No
-domain purchase, free tier is 6 users / unlimited devices, first-class iOS and Android
-apps, and it answers LAN **and** remote in one mechanism. Every alternative is worse here:
+The smallest credible public candidate is a purchased-domain, DNS-only hostname terminating
+at Caddy, with only ports 80/443 forwarded to Caddy and Caddy proxying to
+`127.0.0.1:8090`. Caddy automates certificate issuance/renewal, preserves streaming by
+default, and the Go file handlers retain their Range behavior. This candidate is contingent
+on a reachable public address (no blocking CGNAT), permitted inbound ports, deliberate
+IPv6 firewalling and an owner-selected domain/DNS/DDNS arrangement. See
+[Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https) and
+[reverse-proxy streaming behavior](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
 
-| Option | LAN | Remote | Trusted cert | Per-device setup | Repo change |
-|---|---|---|---|---|---|
-| **Tailscale + serve** | yes (VPN on) | **yes** | **yes** | install app, sign in | **none** |
-| LAN bind + basic auth + avahi | **yes** | no | no | none | none |
-| DuckDNS + Caddy DNS-01 | yes | no | yes | none | adds Caddy |
-| WireGuard by hand | yes | needs port-forward | no | key per device | none |
-| mkcert / private CA | yes | no | only where installed | **painful, forever** | needs TLS support |
-| Cloudflare Tunnel | via internet | yes | yes | none | **needs a domain** |
+Direct Caddy is **not safe with today's application auth**. Basic Auth grants the whole
+mutating mux. The public hostname must be a read-only guest surface backed by individually
+revocable, expiring grants; owner/admin operations remain private. Authorization must be
+enforced in Go on API, thumbnail, preview and download routes, not by hiding buttons or by
+Caddy method filters alone.
 
-- [?] B1. Adopt Tailscale + `serve` as primary. **Still open** -- the owner wants guest
-      access, which Tailscale cannot serve without the guest installing a VPN. See
-      "Still open" at the end of this document.
-- [ ] B2. Also do the LAN bind, as the path that works when a phone's VPN toggle is off.
-      This is already **step 11 of `docs/deploy-checklist.md`** (`listen_addr =
-      "192.168.1.50:8090"`); the daemon refuses to start on a non-loopback bind without
-      credentials (`internal/config/config.go:254-297`), which is correct and stays.
-- [ ] B3. Install avahi so it is `microserver.local:8090` rather than an IP. Caveat: Android
-      only resolves `.local` on 12+, needs Chrome's Local network permission, and Private
-      DNS breaks it. The IP always works as fallback.
-- [ ] B4. **Do not use Funnel, and do not use Cloudflare Tunnel.** Both put a control plane
-      whose delete button propagates through Syncthing to every device the owner has, on the
-      public internet behind one password.
-- [ ] B5. Note for whoever does B1: `coldstore.service:215` sets `IPAddressDeny=any` with an
-      `IPAddressAllow` list that **omits Tailscale's CGNAT range `100.64.0.0/10`**. Binding
-      `listen_addr` to the Tailscale IP would be silently unreachable. Pointing `serve` at
-      loopback avoids it entirely -- `tailscaled` is a separate cgroup.
-- [?] B6. Token auth: **not now, but mandatory if the domain path wins.** Basic auth
-      (`internal/api/server.go:80-103`) is already constant-time on both fields and already
-      solves the hard part -- `<img src>`, `window.open` downloads and Range requests carry
-      no custom header, and the browser reattaches the realm credential to them for free.
-      Its three real weaknesses are cleartext (**fixed by Tailscale's TLS**), no logout and
-      an ugly native dialog on iOS (cosmetic), and no brute-force lockout (real once the
-      port is LAN-reachable). Build only if the iOS dialog is the actual complaint; the
-      design is in B7.
-- [ ] B7. If B6 is a yes: stateless HMAC session cookie, no user table.
-      `POST /api/v1/session` against the existing password, `HttpOnly; SameSite=Lax; Path=/`
-      so thumbnails and downloads keep working **with zero frontend change**. CSRF covered
-      by Lax + a custom header on non-GET (the server sends no `Access-Control-*` at all, so
-      the preflight fails and a cross-origin POST never lands). Keep basic auth accepted in
-      the same middleware so `curl -u` and the runbook checks stay valid. Gotcha: behind
-      `tailscale serve` **`r.TLS` is nil** -- TLS is terminated at the proxy -- so the
-      `Secure` flag must be an explicit `[server] cookie_secure` key, not sniffed from
-      `X-Forwarded-Proto`, which this codebase has deliberately never trusted.
-- [ ] B8. Update `docs/deployment.md` (the posture table at `:141` says sessions are
-      deliberately absent) and the deploy checklist with whichever story wins. Also
-      `docs/deployment.md:1377` reads the "starting without authentication" WARN as "fine
-      for an SSH tunnel" -- still benign under `serve`, but for a different reason.
+Cloudflare Tunnel is not inherently an unsafe transport: it keeps the origin private, and
+Access can authenticate ordinary-browser guests. The earlier categorical rejection confused
+transport with missing application authorization. It is still not the preferred media path:
+Cloudflare's self-serve guidance says sites serving video or disproportionate large files
+outside its media products may be redirected or restricted, while public Tunnel traffic
+still traverses Cloudflare's proxy/CDN. See the official
+[Tunnel architecture](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)
+and [media-delivery policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/).
+
+- [x] B1. Keep loopback + SSH (or private Tailscale Serve) as the owner/admin path until the
+      complete public guest gate is ready.
+- [?] B2. Confirm public IPv4/IPv6 reachability, inbound 80/443, CGNAT status and acceptable
+      exposure of the home IP. The owner must provide or authorize this observation.
+- [?] B3. Select the domain, DNS provider, dynamic-DNS responsibility and guest scope:
+      whole library, selected folders/albums or explicit items.
+- [x] B4. Reconcile Cloudflare guidance: Tunnel protects the origin but does not provide
+      coldstore authorization, and its self-serve media policy is a poor fit for this corpus.
+- [x] B5. Keep the Go listener on loopback. Trust forwarded headers only from a loopback
+      peer; never infer cookie security from arbitrary request headers.
+- [ ] B6. Add owner password-to-session exchange plus individually revocable, expiring,
+      read-only guest grants. Decide invite links versus approved-email identity, grant
+      lifetime, download permission and full-resolution-video permission.
+- [ ] B7. Add explicit secure-cookie/origin configuration, CSRF protection, rate limiting,
+      logout/revocation and authorization tests for every file-serving route.
+- [x] B8. Define emergency disable in three layers: remove the router 80/443 forward, stop
+      the dedicated Caddy site, and set an application kill switch that refuses/revokes
+      public grants. DNS deletion is secondary because caches persist.
+- [ ] B9. After the owner decisions, update the host-specific checklist, deploy Caddy and
+      verify multi-gigabyte `HEAD`, Range, resume and concurrent-download behavior end to end.
 
 ## C. Design refresh
 

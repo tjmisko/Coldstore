@@ -136,7 +136,8 @@ propagate that deletion to every device you own. An unauthenticated
 `POST /api/v1/jobs {"action":"archive"}` is a remote delete button for your phone's
 camera roll.
 
-The settled posture is deliberately small:
+The currently shipped posture is deliberately small and remains authoritative until a
+separate public guest surface is implemented:
 
 | | |
 |---|---|
@@ -147,6 +148,45 @@ The settled posture is deliberately small:
 
 A home LAN daemon does not need an identity system. It does need to be impossible
 to leave open by accident, which is what the rest of this section is about.
+
+### Candidate public guest ingress — not yet selected or deployed
+
+For ordinary-browser guests, the preferred candidate is a DNS-only public hostname at
+Caddy, forwarding only TCP 80/443 to Caddy while coldstore remains on
+`127.0.0.1:8090`. Caddy obtains and renews public certificates automatically when DNS and
+inbound reachability are correct; its reverse proxy streams responses without full buffering,
+so the existing Go `ServeContent`/`ServeFile` Range behavior remains useful.
+
+This is a decision gate, not a deployment instruction. The owner must first confirm a
+reachable public address/CGNAT status, inbound-port policy, domain and DNS/DDNS ownership,
+guest scope and whether exposing the home IP is acceptable. Publish an AAAA record only
+with intentional IPv6 routing/firewalling. If a DNS provider also offers proxy/CDN service,
+keep this hostname DNS-only so private full-resolution media is not carried by that
+intermediary.
+
+The public hostname must be **read-only**. Today's Basic Auth grants every authenticated
+client archive, restore, budget and bulk-job authority, so it must never be the public guest
+gate. Add app-enforced, individually revocable and expiring guest grants across every API,
+thumbnail, preview and download route; keep owner/admin access private over SSH or Tailscale.
+Caddy method denial is useful defence in depth but is not authorization.
+
+Trust proxy headers only when the direct peer is loopback. Use explicit canonical-origin and
+secure-cookie configuration, plus CSRF defense, rate limiting, logout/revocation and private
+media cache controls. Verify multi-gigabyte `HEAD`, byte Range, interrupted resume and
+concurrent downloads through the proxy before rollout.
+
+Emergency disable has three independent controls: remove the router/firewall 80/443 forward,
+stop the dedicated Caddy site, and disable/revoke public guest access in coldstore. DNS
+deletion is slower because records are cached. Preserve the private owner path throughout.
+
+Cloudflare Tunnel is an origin-private alternative, not an authorization layer. Cloudflare
+Access can authenticate browser guests, but the application must still enforce read-only
+scope. Cloudflare's current self-serve media policy warns that video or disproportionate
+large-file delivery outside its media products may be restricted, so it is not the preferred
+path for this archive. References: [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https),
+[Caddy reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy),
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/),
+and [Cloudflare media policy](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/).
 
 ### The startup refusal
 
