@@ -214,7 +214,7 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
 - [x] #8 — descriptions API/editor with keymap-safe text entry.
 - [x] #9 — extend search to path/description/tags and add tag/untagged filters. Benchmark
       `LIKE` on representative N40L-scale data before accepting the no-FTS5 claim.
-- [ ] #10 — mouse-first tagging UI, typeahead prompt and tag manager.
+- [x] #10 — mouse-first tagging UI, typeahead prompt and tag manager.
 - [x] #12 — one bulk tagging endpoint, 500-ID statement chunks and real undo.
 - [ ] #14 — migration 8, durable directory/file rename job and cosmetic display names.
 - [ ] #11 — tag operators, quick slots and dedicated Tag mode on the existing grammar.
