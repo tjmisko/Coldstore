@@ -48,9 +48,15 @@ var videoExts = map[string]bool{
 	".mp4": true, ".mov": true, ".avi": true, ".mkv": true, ".webm": true,
 }
 
-// docExts need an external renderer that is not ffmpeg.
-var docExts = map[string]bool{
+// pdfExts need poppler.
+var pdfExts = map[string]bool{
 	".pdf": true,
+}
+
+// epubExts are handled entirely in Go: an EPUB is a zip with an XML manifest
+// in it, and archive/zip plus encoding/xml read both.
+var epubExts = map[string]bool{
+	".epub": true,
 }
 
 // extCategories is the ONE place a new thumbnailable category is registered.
@@ -59,7 +65,7 @@ var docExts = map[string]bool{
 // daemon used to keep a second hand-written copy of this list, and adding a
 // format to one and not the other made the generator support a type the queue
 // never selected -- silently, because nothing tied the two together.
-var extCategories = []map[string]bool{imageExts, heifExts, videoExts, docExts}
+var extCategories = []map[string]bool{imageExts, heifExts, videoExts, pdfExts, epubExts}
 
 // detectedTypes maps a content-sniffed type onto the same categories.
 //
@@ -90,12 +96,17 @@ var detectedVideoTypes = map[string]bool{
 	filetype.TypeAVI:       true,
 }
 
-var detectedDocTypes = map[string]bool{
+var detectedPDFTypes = map[string]bool{
 	filetype.TypePDF: true,
 }
 
+var detectedEPUBTypes = map[string]bool{
+	filetype.TypeEPUB: true,
+}
+
 var typeCategories = []map[string]bool{
-	detectedImageTypes, detectedHEIFTypes, detectedVideoTypes, detectedDocTypes,
+	detectedImageTypes, detectedHEIFTypes, detectedVideoTypes,
+	detectedPDFTypes, detectedEPUBTypes,
 }
 
 // CanThumbnailType reports whether a content-sniffed type is one the generator
@@ -225,8 +236,10 @@ func (g *Generator) GenerateContext(ctx context.Context, file *catalog.FileRecor
 		err = g.generateHEIF(ctx, sourcePath, outPath)
 	case videoExts[ext], detectedVideoTypes[detected]:
 		err = g.generateVideo(ctx, sourcePath, outPath)
-	case docExts[ext], detectedDocTypes[detected]:
+	case pdfExts[ext], detectedPDFTypes[detected]:
 		err = g.generatePDF(ctx, sourcePath, outPath)
+	case epubExts[ext], detectedEPUBTypes[detected]:
+		err = g.generateEPUB(sourcePath, outPath)
 	default:
 		return fmt.Errorf("unsupported extension: %s", ext)
 	}
