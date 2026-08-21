@@ -19,6 +19,22 @@
 # Must already exist, be a directory, and be writable by the user in the systemd
 # unit. coldstore deliberately does NOT create it: on a pool that has not mounted
 # yet, creating it would silently write the whole archive to the root filesystem.
+#
+# THAT PROTECTION IS NOT A MOUNT CHECK. mount(8) requires the mountpoint
+# directory to exist, so an fstab volume (btrfs, ext4, xfs, a legacy ZFS
+# dataset) that failed to mount leaves an empty writable directory here on the
+# ROOT filesystem, and every check coldstore makes passes. The archive then goes
+# to root while Syncthing propagates each deletion to every device you own.
+#
+# The guard is RequiresMountsFor= in the systemd unit. `coldstore --check`
+# reports the mount state on its "cold storage" line so you can see which case
+# you are in. Only a ZFS dataset with a native mountpoint= is self-protecting,
+# because zfs mount creates the directory itself.
+#
+# This is also the tier that needs redundancy: once a file is offloaded, the
+# copy under this path is the ONLY copy that still exists anywhere. The
+# Syncthing folders are replicated to every device; this is replicated to
+# nothing. See docs/deployment.md, "Cold storage filesystem".
 cold_storage_path = "/srv/coldstore"
 
 [daemon]
@@ -29,6 +45,11 @@ cold_storage_path = "/srv/coldstore"
 # See docs/deployment.md, "Zero means default, not zero".
 scan_interval_minutes = 15
 catalog_sync_interval_minutes = 30
+# Concurrent thumbnail decoders. The Go image path decodes a whole frame into
+# memory -- a 48 MP JPEG is ~190 MB of RGBA while being resized -- so on a small
+# box with little or no swap, use 1. See docs/deployment.md, "What actually gets
+# a thumbnail": the allowlist is jpg/png/webp, heic/heif, and common video. PDFs
+# and epubs get nothing, silently.
 thumbnail_workers = 2
 grace_period_minutes = 30
 
