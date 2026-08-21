@@ -523,10 +523,17 @@ both types — and must preserve the leading zero, per 1.4.
 > mode this document spends section 1.1 warning about: no error, just an empty field that
 > reads as "this photo had no GPS".
 >
-> **The library choice is therefore not settled.** Adoption requires a **real iPhone HEIC**
-> fixture, not a synthetic one, and `0,0` from any reader must be treated as suspicious in
-> its own right — it is both a plausible bug signature and a real coordinate in the Gulf of
-> Guinea.
+> **The library choice is therefore not settled**, and `0,0` from any reader must be treated
+> as suspicious in its own right — it is both a plausible bug signature and a real coordinate
+> in the Gulf of Guinea.
+>
+> **Try the cheap path before sourcing a fixture.** Check whether `bep/imagemeta` returns
+> correct GPS for the same file. It has no Apple maker-note support at all, so it may simply
+> not take the code path that regresses. If it is clean the blocker closes for free: widen the
+> cross-check trigger from "empty result" to "empty result **or** `0,0` from a file carrying
+> an Apple maker note", and one mechanism that was going in anyway covers both of the primary
+> reader's known defects. Only if it is *not* clean does adoption require a **real iPhone
+> HEIC** fixture rather than a synthetic one.
 
 **ffprobe reads no EXIF from stills at all.** Verified against JPEG and HEIC files carrying
 full EXIF and GPS: it returns nothing for JPEG, and for HEIC it opens the container with the
@@ -1292,9 +1299,30 @@ Dark only, no chrome: a large preview, a metadata and tag panel on the right, a 
 | `x` | Toggle selection of the current file — the layer's existing binding |
 | `<Esc>` | Leave, returning to the same file in the gallery |
 
-`i` is a **scope-local binding that shadows the lightbox's `i`**. That is deliberate and
-cheap: `i` for insert is the most idiomatic key in vim, and the lightbox's `i` opens an info
-panel that Tag mode renders permanently anyway, so nothing is lost.
+**`i` shadows the lightbox's `i`, deliberately. This was raised, reviewed and settled —
+do not "fix" it.**
+
+Two reasons, in order of weight:
+
+1. **`i` enters insert mode, and the description editor *is* insert mode.** This is the most
+   vim-correct binding in the whole design. Moving it would trade a correct idiom for a
+   technicality.
+2. **A scope-local override is exactly what scopes are for when the underlying binding is
+   *meaningless* in that scope.** The lightbox's `i` toggles an info panel; Tag mode renders
+   that panel permanently, so there is nothing left for it to toggle. Shadowing a binding
+   whose behaviour is already satisfied costs the user nothing — no capability is lost, and
+   no muscle memory is contradicted, because pressing `i` in Tag mode still produces the
+   thing `i` was reaching for.
+
+It is also a good illustration of why the **non-exclusive** scope choice for `tagging` is the
+right one. An exclusive scope would have had to re-declare every motion it wanted to keep;
+a non-exclusive one lets `j`, `k`, `gg` and `G` fall through untouched and overrides exactly
+the one key whose meaning has changed. The override is small because the scope is porous.
+
+The general rule this is an instance of, worth stating because the next shadow will not be
+this clear-cut: **shadow only when the shadowed behaviour is already delivered by the scope
+doing the shadowing.** A scope-local override that removes a capability is a collision
+wearing a scope's clothes, and belongs in the spent-key table of 5.1 instead.
 
 **Carry-forward** is the largest speed win in a real culling run — it is what Photo Mechanic's
 stationery pad and Lightroom's sync-metadata are for. With `,` on, the tags applied to the
@@ -1805,7 +1833,14 @@ primary it was hedging. `gt` and `gT` are next / previous view in the keyboard l
 the keys the fallback existed to avoid claiming — turned out to be unbound and semantically
 free, because that layer implements no till-motions.
 
-**16. Allowing the coldstore folder label to be renamed.**
+**16. Moving Tag mode's `i` to avoid shadowing the lightbox's `i`.**
+Rejected — 5.6. `i` enters insert mode and the description editor is insert mode, so this is
+the most vim-correct binding in the design; the lightbox's `i` toggles an info panel that Tag
+mode renders permanently, leaving it nothing to toggle. Shadowing a binding whose behaviour
+the shadowing scope already delivers removes no capability. Recorded here because a reader
+scanning for collisions will find this one and try to be helpful.
+
+**17. Allowing the coldstore folder label to be renamed.**
 Rejected — section 6.4. It is a join key in five tables and a path component in two on-disk
 trees, and it is TOML-owned, so any UI rename is undone at the next restart in the worst
 possible way. `display_name` gives the owner what they actually wanted with none of it.
