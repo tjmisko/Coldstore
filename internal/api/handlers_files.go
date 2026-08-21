@@ -54,6 +54,15 @@ func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalo
 		return q, false
 	}
 
+	switch v.Get("conflict") {
+	case "", "0":
+	case "1":
+		q.Conflicted = true
+	default:
+		writeError(w, http.StatusBadRequest, `conflict must be "1" or "0"`)
+		return q, false
+	}
+
 	if raw := v.Get("ids"); raw != "" {
 		ids, err := parseIDList(raw)
 		if err != nil {

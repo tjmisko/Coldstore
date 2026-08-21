@@ -224,3 +224,115 @@ func TestFileIDsShouldApplyThePinnedFilterWhenAskedForPinsOnly(t *testing.T) {
 		t.Errorf("ids = %v, want just %d", resp.IDs, ids[2])
 	}
 }
+
+// The Conflicts tab is the only filter with no column behind it: it reads the
+// events table, so the thing that must be proven is that a resolution takes a
+// row OUT of it. A conflict that cannot be cleared is worse than no tab at
+// all -- the owner resolves it, the badge stays, and they resolve it again.
+func TestFilesShouldListOnlyUnresolvedConflictsOnTheConflictFilter(t *testing.T) {
+	env := newTestEnv(t)
+	stale := reoccupyArchivedPath(t, env, "resolved.jpg", "brought back")
+	live := reoccupyArchivedPath(t, env, "outstanding.jpg", "brought back")
+
+	both := listFiles(t, env, "?status=archived&conflict=1&limit=500")
+	if len(both) != 2 {
+		t.Fatalf("conflict=1 returned %d records before any resolution, want 2", len(both))
+	}
+
+	// keep=archive leaves the row archived, so ONLY the event log can tell the
+	// two apart afterwards. keep=device would have moved the row to synced and
+	// the status filter would have hidden it either way.
+	if w := resolve(t, env, stale.ID, "archive"); w.Code != http.StatusOK {
+		t.Fatalf("resolve status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	after := listFiles(t, env, "?status=archived&conflict=1&limit=500")
+	if len(after) != 1 || after[0].ID != live.ID {
+		t.Errorf("conflict=1 returned %v, want only the unresolved %d", after, live.ID)
+	}
+
+	w := do(t, env, "GET", "/api/v1/files/ids?status=archived&conflict=1", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("/files/ids status = %d", w.Code)
+	}
+	var resp fileIDsJSON
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Total != 1 || len(resp.IDs) != 1 || resp.IDs[0] != live.ID {
+		t.Errorf("/files/ids conflict=1 = %+v, want just %d", resp, live.ID)
+	}
+
+	if bad := do(t, env, "GET", "/api/v1/files?conflict=yes", nil); bad.Code != http.StatusBadRequest {
+		t.Errorf("conflict=yes status = %d, want 400", bad.Code)
+	}
+}
+
+// The wedge banner's remedy sends the owner to their oldest auto-pins, which
+// is only a remedy if "oldest" is really what they get: the pins they have
+// forgotten are at the far end of a list nobody scrolls.
+func TestFilesShouldOrderOldestPinFirstOnThePinnedAtSort(t *testing.T) {
+	env := newTestEnv(t)
+	ids := seedCatalogRows(t, env, 3)
+
+	// Explicit pin times, oldest last, so the seeding order cannot pass for a
+	// correct sort.
+	for i, id := range ids {
+		at := int64(1_700_000_000 + (len(ids)-i)*3600)
+		if err := env.cat.SetPinned(id, true, catalog.PinSourceRestore, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := listFiles(t, env, "?pinned=1&pin_source=restore&sort=pinned_at&limit=500")
+	if len(got) != 3 {
+		t.Fatalf("got %d records, want 3", len(got))
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i-1].PinnedAt == nil || got[i].PinnedAt == nil {
+			t.Fatalf("record %d has no pinned_at", i)
+		}
+		if *got[i-1].PinnedAt > *got[i].PinnedAt {
+			t.Errorf("pinned_at order broken at %d: %d before %d",
+				i, *got[i-1].PinnedAt, *got[i].PinnedAt)
+		}
+	}
+	if got[0].ID != ids[len(ids)-1] {
+		t.Errorf("first record = %d, want the oldest pin %d", got[0].ID, ids[len(ids)-1])
+	}
+}
+
+// Every page of an infinite scroll must be a slice of ONE total order. A
+// camera roll copied off a card shares one mtime across hundreds of files, so
+// a sort with no tiebreak repeats rows across pages and silently drops others.
+func TestFilesShouldPageWithoutRepeatingRowsWhenTheSortKeyTies(t *testing.T) {
+	env := newTestEnv(t)
+	sameTime := time.Now().UTC().Truncate(time.Second)
+	for i := 0; i < 10; i++ {
+		name := "tied" + padInt(i, 4) + ".jpg"
+		if _, err := env.cat.UpsertFile(&catalog.FileRecord{
+			FolderLabel: "TestFolder", RelativePath: name, Filename: name,
+			Extension: ".jpg", SizeBytes: 100, FileMtime: sameTime, FileAtime: sameTime,
+			Status: catalog.StatusSynced,
+		}, time.Now().UnixNano()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	seen := map[int64]bool{}
+	for offset := 0; offset < 10; offset += 5 {
+		page := listFiles(t, env, fmt.Sprintf("?limit=5&offset=%d", offset))
+		if len(page) != 5 {
+			t.Fatalf("page at offset %d returned %d records, want 5", offset, len(page))
+		}
+		for _, f := range page {
+			if seen[f.ID] {
+				t.Errorf("file %d appeared on two pages", f.ID)
+			}
+			seen[f.ID] = true
+		}
+	}
+	if len(seen) != 10 {
+		t.Errorf("saw %d distinct files across both pages, want 10", len(seen))
+	}
+}

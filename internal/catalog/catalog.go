@@ -187,10 +187,17 @@ type FileQuery struct {
 	Search    string
 	Pinned    *bool
 	PinSource string
-	IDs       []int64
-	SortBy    string
-	Offset    int
-	Limit     int
+	// Conflicted selects rows with an UNRESOLVED section 4.1b conflict: a
+	// 'conflict' event newer than the last 'conflict_resolved' event for the
+	// same (folder, path). It is the only filter backed by the events table,
+	// because a conflict has no column of its own -- an archived row whose
+	// path has reappeared is otherwise indistinguishable from any other
+	// archived row, and the UI cannot offer a resolution it cannot find.
+	Conflicted bool
+	IDs        []int64
+	SortBy     string
+	Offset     int
+	Limit      int
 }
 
 // filter builds the WHERE tail shared by ListFiles and ListFileIDs. When IDs
@@ -232,8 +239,32 @@ func (q FileQuery) filter() (string, []any) {
 		clause.WriteString(" AND pin_source = ?")
 		args = append(args, q.PinSource)
 	}
+	if q.Conflicted {
+		clause.WriteString(conflictedClause)
+	}
 	return clause.String(), args
 }
+
+// conflictedClause is the WHERE tail for FileQuery.Conflicted.
+//
+// The id comparison, not a timestamp comparison, is what makes a resolved
+// conflict disappear from the filter. events.timestamp has one-second
+// resolution, so a conflict reported and resolved inside the same second --
+// which is every test and most real resolutions, since the owner is usually
+// looking at the row when the scan reports it -- compares equal and would
+// leave the file in the Conflicts tab forever. Ids are monotonic per insert.
+//
+// Rows the owner resolved in the device's favour leave 'archived' as well, so
+// the UI pairs this with status=archived and is doubly covered.
+const conflictedClause = `
+	AND EXISTS (
+		SELECT 1 FROM events c
+		WHERE c.folder = files.folder_label AND c.path = files.relative_path
+		  AND c.event_type = 'conflict'
+		  AND c.id > COALESCE((
+			SELECT MAX(r.id) FROM events r
+			WHERE r.folder = files.folder_label AND r.path = files.relative_path
+			  AND r.event_type = 'conflict_resolved'), 0))`
 
 // ListFiles queries files with filtering, sorting, and pagination.
 func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
@@ -249,13 +280,23 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 		return c.queryFiles(query+" ORDER BY id ASC", args...)
 	}
 
+	// Every sort ends in `id ASC`. Without a total order, two rows that tie on
+	// the sort key can come back in either order from one page to the next,
+	// and an infinite scroll that pages by OFFSET then shows one of them twice
+	// and drops the other. Ties are the norm here, not the exception: a camera
+	// roll copied off a card shares one mtime across hundreds of files.
 	switch {
 	case q.SortBy == "size":
-		query += " ORDER BY size_bytes DESC"
+		query += " ORDER BY size_bytes DESC, id ASC"
 	case q.SortBy == "name":
-		query += " ORDER BY filename ASC"
+		query += " ORDER BY filename ASC, id ASC"
+	case q.SortBy == "pinned_at":
+		// Oldest pin first: the auto-pins the owner has most certainly
+		// forgotten about are the ones the wedge banner sends them to
+		// triage (design section 7.4).
+		query += " ORDER BY pinned_at ASC, id ASC"
 	default:
-		query += " ORDER BY file_mtime DESC"
+		query += " ORDER BY file_mtime DESC, id ASC"
 	}
 
 	limit := q.Limit
@@ -800,25 +841,6 @@ func (c *Catalog) ResetThumbnailFailures(folder string) (int64, error) {
 
 const folderConfigColumns = `id, folder_label, syncthing_id, syncthing_path, budget_bytes,
 	grace_minutes, enabled, present_in_toml, wedge_warned_at, last_enforced_at`
-
-// UpsertFolderConfig inserts or updates a folder configuration.
-//
-// Deprecated: it overwrites every column including the three the user edits, so
-// calling it from a startup reconciler would reset a UI-set budget to the TOML
-// value on every restart. Use ReconcileFolderFromTOML or UpdateFolderPolicy.
-func (c *Catalog) UpsertFolderConfig(fc *FolderConfigRecord) error {
-	_, err := c.db.Exec(`
-		INSERT INTO folder_configs (folder_label, syncthing_id, syncthing_path, budget_bytes, grace_minutes, enabled)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(folder_label) DO UPDATE SET
-			syncthing_id = excluded.syncthing_id,
-			syncthing_path = excluded.syncthing_path,
-			budget_bytes = excluded.budget_bytes,
-			grace_minutes = excluded.grace_minutes,
-			enabled = excluded.enabled
-	`, fc.FolderLabel, fc.SyncthingID, fc.SyncthingPath, fc.BudgetBytes, fc.GraceMinutes, fc.Enabled)
-	return err
-}
 
 // ReconcileFolderFromTOML upserts the infrastructure fields of a folder
 // declared in coldstore.toml. budget/grace/enabled are written ONLY when the

@@ -481,7 +481,11 @@ func (m *Mover) ResolveConflict(id int64, keep string) (*catalog.FileRecord, err
 		if err := os.Rename(devicePath, aside); err != nil {
 			return nil, fmt.Errorf("setting the device copy aside: %w", err)
 		}
-		m.cat.LogEvent("conflict", rec.FolderLabel, rec.RelativePath,
+		// conflict_resolved, not conflict: the Conflicts filter (FileQuery.
+		// Conflicted) reads this log to decide what is still outstanding, and
+		// a resolution logged under the same type as the collision would keep
+		// the row in the owner's Conflicts tab permanently.
+		m.cat.LogEvent("conflict_resolved", rec.FolderLabel, rec.RelativePath,
 			"resolved in favour of the archived copy; the device copy was kept as "+
 				filepath.Base(aside))
 		return m.cat.GetFileByID(id)
@@ -546,7 +550,7 @@ func (m *Mover) ResolveConflict(id int64, keep string) (*catalog.FileRecord, err
 				"path", aside, "error", err)
 		}
 	}
-	m.cat.LogEvent("conflict", rec.FolderLabel, rec.RelativePath,
+	m.cat.LogEvent("conflict_resolved", rec.FolderLabel, rec.RelativePath,
 		"resolved in favour of the device copy; the cold-storage copy was deleted")
 	return m.cat.GetFileByID(id)
 }
