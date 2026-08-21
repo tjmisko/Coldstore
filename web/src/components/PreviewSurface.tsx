@@ -32,7 +32,7 @@ export function PreviewSurface({ file, preview }: PreviewSurfaceProps) {
           {preview.degraded && (
             <figcaption
               data-preview-degraded
-              className="text-xs text-neutral-400 bg-neutral-900/80 rounded px-2 py-1"
+              className="rounded border border-line bg-surface/90 px-2 py-1 text-meta text-ink-muted"
             >
               Showing the thumbnail -- this browser cannot display the original
               format. Download it to see the full image.
@@ -78,7 +78,7 @@ function PreviewUnavailable({ filename, reason }: { filename: string; reason: st
       className="flex flex-col items-center gap-2 text-center px-6"
     >
       <svg
-        className="w-16 h-16 text-neutral-600"
+        className="w-16 h-16 text-ink-faint"
         fill="none"
         stroke="currentColor"
         viewBox="0 0 24 24"
@@ -91,8 +91,8 @@ function PreviewUnavailable({ filename, reason }: { filename: string; reason: st
           d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
         />
       </svg>
-      <p className="text-neutral-300 text-lg break-all">{filename}</p>
-      {reason && <p className="text-neutral-500 text-sm max-w-md">{reason}</p>}
+      <p className="text-ink text-base break-all">{filename}</p>
+      {reason && <p className="text-ink-faint text-base max-w-md">{reason}</p>}
     </div>
   );
 }

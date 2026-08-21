@@ -32,6 +32,9 @@ interface PdfReaderProps {
   filename: string;
 }
 
+const READER_BUTTON =
+  "px-3 py-1 rounded-md bg-raised text-ink ring-1 ring-line-strong hover:bg-raised-hover disabled:opacity-40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor";
+
 /** A pdf.js reader, rendered in the browser rather than on the daemon.
  *
  *  Rasterising a page server-side would put that work on a 1.5 GHz 2011 core
@@ -77,8 +80,8 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
   if (error) {
     return (
       <div data-pdf-error className="text-center px-6">
-        <p className="text-neutral-300">{filename}</p>
-        <p className="text-neutral-500 text-sm mt-2">{error}</p>
+        <p className="text-ink">{filename}</p>
+        <p className="text-alarm text-base mt-2">{error}</p>
       </div>
     );
   }
@@ -107,13 +110,13 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
       </div>
 
       {pageCount > 1 && (
-        <div className="flex items-center gap-3 text-sm text-neutral-300">
+        <div className="flex items-center gap-3 text-base text-ink-muted">
           <button
             type="button"
             data-pdf-prev
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
-            className="px-3 py-1 rounded-md bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 transition-colors"
+            className={READER_BUTTON}
           >
             Previous
           </button>
@@ -125,7 +128,7 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
             data-pdf-next
             onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
             disabled={page >= pageCount}
-            className="px-3 py-1 rounded-md bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 transition-colors"
+            className={READER_BUTTON}
           >
             Next
           </button>
@@ -136,5 +139,5 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
 }
 
 function ReaderMessage({ children }: { children: React.ReactNode }) {
-  return <p className="text-neutral-400 text-sm py-12">{children}</p>;
+  return <p className="text-ink-muted text-base py-12">{children}</p>;
 }

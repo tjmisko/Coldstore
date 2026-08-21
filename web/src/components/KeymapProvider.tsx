@@ -147,7 +147,7 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
         data-keymap-pending=""
         data-keymap-mode="normal"
         style={{ zIndex: Z.keymapStatus }}
-        className="fixed bottom-2 left-2 rounded px-2 py-0.5 font-mono text-xs bg-neutral-800/90 text-neutral-300 pointer-events-none"
+        className="fixed bottom-2 left-2 rounded border border-cursor/30 bg-cursor-dim/95 px-2 py-0.5 font-mono text-meta text-cursor pointer-events-none"
       />
     </KeymapContext>
   );

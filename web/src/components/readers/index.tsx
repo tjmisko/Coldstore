@@ -42,7 +42,7 @@ export function DocumentReader({ file, preview }: DocumentReaderProps) {
 
 function ReaderFallback({ filename }: { filename: string }) {
   return (
-    <p data-reader-loading className="text-neutral-400 text-sm py-12">
+    <p data-reader-loading className="text-ink-muted text-base py-12">
       Opening {filename}...
     </p>
   );

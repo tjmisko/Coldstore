@@ -123,7 +123,7 @@ export function CommandPalette({
 
   return (
     <Overlay label="Command palette" onClose={onClose} align="top" className="max-w-2xl" testAttribute="palette">
-      <div className="rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl overflow-hidden">
+      <div className="rounded-xl border border-line-strong bg-surface shadow-2xl overflow-hidden">
         <input
           ref={inputRef}
           autoFocus
@@ -138,11 +138,11 @@ export function CommandPalette({
             setError(null);
           }}
           onKeyDown={onKeyDown}
-          className="w-full bg-transparent px-4 py-3 font-mono text-sm outline-none border-b border-neutral-800"
+          className="w-full bg-transparent px-4 py-3 font-mono text-base text-ink caret-cursor outline-none border-b border-line"
         />
 
         {error && (
-          <p className="px-4 py-2 text-xs text-red-400" role="alert" data-palette-error>
+          <p className="px-4 py-2 text-meta text-alarm" role="alert" data-palette-error>
             {error}
           </p>
         )}
@@ -159,20 +159,20 @@ export function CommandPalette({
                   event.preventDefault();
                   take(index);
                 }}
-                className={`flex w-full items-baseline gap-3 px-4 py-1.5 text-left text-sm ${
-                  index === highlight ? "bg-neutral-800" : "hover:bg-neutral-800/60"
+                className={`flex w-full items-baseline gap-3 px-4 py-1.5 text-left text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-cursor ${
+                  index === highlight ? "bg-cursor-dim" : "hover:bg-raised-hover"
                 }`}
               >
-                <span className="font-mono text-xs text-neutral-200 w-32 shrink-0">
+                <span className="font-mono text-meta text-ink w-32 shrink-0">
                   {candidate.label}
                 </span>
-                <span className="text-xs text-neutral-500">{candidate.hint}</span>
+                <span className="text-meta text-ink-faint">{candidate.hint}</span>
               </button>
             </li>
           ))}
         </ul>
 
-        <p className="border-t border-neutral-800 px-4 py-2 text-xs text-neutral-500">
+        <p className="border-t border-line px-4 py-2 text-meta text-ink-faint">
           File commands act on the selection, or on the file under the cursor when nothing is
           selected. Tab completes, Enter runs, Escape closes.
         </p>

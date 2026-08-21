@@ -7,6 +7,9 @@ interface EpubReaderProps {
   filename: string;
 }
 
+const READER_BUTTON =
+  "px-3 py-1 rounded-md bg-raised text-ink ring-1 ring-line-strong hover:bg-raised-hover disabled:opacity-40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor";
+
 /** A book reader with no book-reading library in it.
  *
  *  The daemon already had to learn the EPUB container format to extract cover
@@ -46,15 +49,15 @@ export default function EpubReader({ fileId, filename }: EpubReaderProps) {
   if (error) {
     return (
       <div data-epub-error className="text-center px-6">
-        <p className="text-neutral-300">{filename}</p>
-        <p className="text-neutral-500 text-sm mt-2">{error}</p>
+        <p className="text-ink">{filename}</p>
+        <p className="text-alarm text-base mt-2">{error}</p>
       </div>
     );
   }
 
   if (!spine) {
     return (
-      <p data-epub-loading className="text-neutral-400 text-sm py-12">
+      <p data-epub-loading className="text-ink-muted text-base py-12">
         Opening {filename}...
       </p>
     );
@@ -63,8 +66,8 @@ export default function EpubReader({ fileId, filename }: EpubReaderProps) {
   if (spine.sections.length === 0) {
     return (
       <div data-epub-empty className="text-center px-6">
-        <p className="text-neutral-300">{spine.title || filename}</p>
-        <p className="text-neutral-500 text-sm mt-2">This book has no readable sections.</p>
+        <p className="text-ink">{spine.title || filename}</p>
+        <p className="text-ink-faint text-base mt-2">This book has no readable sections.</p>
       </div>
     );
   }
@@ -87,16 +90,16 @@ export default function EpubReader({ fileId, filename }: EpubReaderProps) {
         src={api.epubResourceUrl(fileId, current.path)}
         sandbox=""
         referrerPolicy="no-referrer"
-        className="w-full max-w-3xl h-[68vh] bg-neutral-100 rounded-md"
+        className="w-full max-w-3xl h-[68vh] bg-ink rounded-md"
       />
 
-      <div className="flex items-center gap-3 text-sm text-neutral-300">
+      <div className="flex items-center gap-3 text-base text-ink-muted">
         <button
           type="button"
           data-epub-prev
           onClick={() => setSection((n) => Math.max(0, n - 1))}
           disabled={section <= 0}
-          className="px-3 py-1 rounded-md bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 transition-colors"
+          className={READER_BUTTON}
         >
           Previous
         </button>
@@ -108,7 +111,7 @@ export default function EpubReader({ fileId, filename }: EpubReaderProps) {
           data-epub-next
           onClick={() => setSection((n) => Math.min(spine.sections.length - 1, n + 1))}
           disabled={section >= spine.sections.length - 1}
-          className="px-3 py-1 rounded-md bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 transition-colors"
+          className={READER_BUTTON}
         >
           Next
         </button>

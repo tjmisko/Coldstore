@@ -10,10 +10,10 @@ export function Cheatsheet({ onClose }: { onClose(): void }) {
 
   return (
     <Overlay label="Keyboard shortcuts" onClose={onClose} className="max-w-3xl" testAttribute="cheatsheet">
-      <div className="rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl max-h-[80vh] overflow-y-auto">
-        <div className="flex items-baseline justify-between border-b border-neutral-800 px-5 py-3">
+      <div className="rounded-xl border border-line-strong bg-surface shadow-2xl max-h-[80vh] overflow-y-auto">
+        <div className="flex items-baseline justify-between border-b border-line px-5 py-3">
           <h2 className="text-base font-semibold">Keyboard</h2>
-          <p className="text-xs text-neutral-500">
+          <p className="text-meta text-ink-faint">
             Counts and operators compose: <code>3j</code>, <code>d3j</code>, <code>ggVG</code>.
             Leader is <code>Space</code>.
           </p>
@@ -22,16 +22,16 @@ export function Cheatsheet({ onClose }: { onClose(): void }) {
         <div className="grid gap-x-8 gap-y-5 p-5 md:grid-cols-2">
           {groups.map((group) => (
             <section key={group.group} data-cheatsheet-group={group.group}>
-              <h3 className="mb-1.5 text-xs uppercase tracking-wide text-neutral-500">
+              <h3 className="mb-1.5 text-micro uppercase tracking-wider text-ink-faint">
                 {group.group}
               </h3>
               <dl className="space-y-1">
                 {group.bindings.map((binding) => (
-                  <div key={binding.id} className="flex gap-3 text-sm" data-cheatsheet-binding={binding.id}>
-                    <dt className="w-24 shrink-0 font-mono text-xs text-neutral-300 pt-0.5">
+                  <div key={binding.id} className="flex gap-3 text-base" data-cheatsheet-binding={binding.id}>
+                    <dt className="w-24 shrink-0 font-mono text-meta text-ink pt-0.5">
                       {binding.keys}
                     </dt>
-                    <dd className="flex-1 text-neutral-400">{binding.title}</dd>
+                    <dd className="flex-1 text-ink-muted">{binding.title}</dd>
                   </div>
                 ))}
               </dl>
@@ -39,7 +39,7 @@ export function Cheatsheet({ onClose }: { onClose(): void }) {
           ))}
         </div>
 
-        <div className="border-t border-neutral-800 px-5 py-3 text-xs text-neutral-500">
+        <div className="border-t border-line px-5 py-3 text-meta text-ink-faint">
           <code>:</code> opens the command palette, <code>F10</code> the fuzzy finder.
           Anything typed into a text field is left alone.
         </div>

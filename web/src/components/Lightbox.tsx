@@ -28,6 +28,25 @@ interface LightboxProps {
   bulk: BulkActions;
 }
 
+const ICON_BUTTON =
+  "rounded-md p-2 text-ink-muted hover:bg-raised-hover hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor";
+
+const ACTION_BUTTON =
+  "px-3 py-1.5 text-meta rounded-md bg-raised text-ink ring-1 ring-line-strong hover:bg-raised-hover disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor";
+
+function statusColor(status: FileRecord["status"]): string {
+  switch (status) {
+    case "archived":
+      return "text-cold";
+    case "missing":
+      return "text-alarm";
+    case "synced":
+      return "text-ink-muted";
+    default:
+      return "text-ink";
+  }
+}
+
 export function Lightbox({
   files,
   initialIndex,
@@ -160,7 +179,7 @@ export function Lightbox({
         tabIndex={-1}
         data-lightbox={file.id}
         style={{ zIndex: Z.lightbox }}
-        className="fixed inset-0 bg-black/95 flex items-center justify-center outline-none"
+        className="fixed inset-0 bg-ground/95 flex items-center justify-center outline-none"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
@@ -168,7 +187,7 @@ export function Lightbox({
         <button
           onClick={onClose}
           aria-label="Close"
-          className="absolute top-4 right-4 text-neutral-400 hover:text-white z-10 p-2"
+          className={`absolute top-4 right-4 z-10 ${ICON_BUTTON}`}
         >
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -180,7 +199,7 @@ export function Lightbox({
           <button
             onClick={goPrev}
             aria-label="Previous"
-            className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white p-2 z-10"
+            className={`absolute left-4 top-1/2 -translate-y-1/2 z-10 ${ICON_BUTTON}`}
           >
             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -191,7 +210,7 @@ export function Lightbox({
           <button
             onClick={goNext}
             aria-label="Next"
-            className="absolute right-4 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white p-2 z-10"
+            className={`absolute right-4 top-1/2 -translate-y-1/2 z-10 ${ICON_BUTTON}`}
           >
             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -208,17 +227,17 @@ export function Lightbox({
         </div>
 
         {/* Bottom bar */}
-        <div className="absolute bottom-0 left-0 right-0 bg-neutral-900/80 backdrop-blur-sm px-4 py-3">
+        <div className="absolute bottom-0 left-0 right-0 border-t border-line bg-surface/90 backdrop-blur-sm px-4 py-3">
           <div className="flex items-center justify-between max-w-4xl mx-auto">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{file.filename}</p>
-              <p className="text-xs text-neutral-400">
+              <p className="text-base font-medium truncate">{file.filename}</p>
+              <p className="text-meta text-ink-muted">
                 {formatSize(file.size_bytes)} &middot; {formatDateTime(file.file_mtime)} &middot;{" "}
-                <span className={file.status === "archived" ? "text-amber-400" : "text-green-400"}>
+                <span className={statusColor(file.status)}>
                   {file.status}
                 </span>
                 {file.pinned && (
-                  <span className="text-indigo-300">
+                  <span className="text-held">
                     {" "}
                     &middot; pinned{file.pin_source === "restore" ? " on restore" : " by you"}
                   </span>
@@ -233,13 +252,13 @@ export function Lightbox({
               />
               <button
                 onClick={() => setShowMeta(!showMeta)}
-                className="px-3 py-1.5 text-xs rounded-md bg-neutral-700 hover:bg-neutral-600 transition-colors"
+                className={ACTION_BUTTON}
               >
                 Info
               </button>
               <button
                 onClick={() => actions.download(file)}
-                className="px-3 py-1.5 text-xs rounded-md bg-blue-600 hover:bg-blue-500 transition-colors"
+                className={ACTION_BUTTON}
               >
                 Download
               </button>
@@ -247,7 +266,7 @@ export function Lightbox({
                 <button
                   onClick={() => void run(() => actions.restore(file))}
                   disabled={busy}
-                  className="px-3 py-1.5 text-xs rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                  className={ACTION_BUTTON}
                 >
                   {busy ? "Working..." : "Restore to Sync"}
                 </button>
@@ -256,7 +275,7 @@ export function Lightbox({
                 <button
                   onClick={() => void run(() => actions.archive(file))}
                   disabled={busy}
-                  className="px-3 py-1.5 text-xs rounded-md bg-amber-600 hover:bg-amber-500 disabled:opacity-50 transition-colors"
+                  className={ACTION_BUTTON}
                 >
                   {busy ? "Working..." : "Archive"}
                 </button>
@@ -266,27 +285,27 @@ export function Lightbox({
 
           {/* Metadata panel */}
           {showMeta && (
-            <div className="max-w-4xl mx-auto mt-3 pt-3 border-t border-neutral-700 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs text-neutral-400">
+            <div className="max-w-4xl mx-auto mt-3 pt-3 border-t border-line grid grid-cols-2 md:grid-cols-4 gap-2 text-meta text-ink-muted">
               <div>
-                <span className="text-neutral-500">Path:</span> {file.relative_path}
+                <span className="text-ink-faint">Path:</span> {file.relative_path}
               </div>
               <div>
-                <span className="text-neutral-500">Folder:</span> {file.folder_label}
+                <span className="text-ink-faint">Folder:</span> {file.folder_label}
               </div>
               <div>
-                <span className="text-neutral-500">Type:</span> {file.mime_type || file.extension}
+                <span className="text-ink-faint">Type:</span> {file.mime_type || file.extension}
               </div>
               <div>
-                <span className="text-neutral-500">First seen:</span> {formatDateTime(file.first_seen)}
+                <span className="text-ink-faint">First seen:</span> {formatDateTime(file.first_seen)}
               </div>
               {file.archived_at && (
                 <div>
-                  <span className="text-neutral-500">Archived:</span>{" "}
+                  <span className="text-ink-faint">Archived:</span>{" "}
                   {formatDateTime(file.archived_at)}
                 </div>
               )}
               <div>
-                <span className="text-neutral-500">Index:</span> {index + 1} / {files.length}
+                <span className="text-ink-faint">Index:</span> {index + 1} / {files.length}
               </div>
             </div>
           )}

@@ -66,7 +66,7 @@ export default function TextReader({ src, filename }: TextReaderProps) {
 
   if (state.loading) {
     return (
-      <p data-text-loading className="text-neutral-400 text-sm py-12">
+      <p data-text-loading className="text-ink-muted text-base py-12">
         Loading {filename}...
       </p>
     );
@@ -75,8 +75,8 @@ export default function TextReader({ src, filename }: TextReaderProps) {
   if (state.error) {
     return (
       <div data-text-error className="text-center px-6">
-        <p className="text-neutral-300">{filename}</p>
-        <p className="text-neutral-500 text-sm mt-2">{state.error}</p>
+        <p className="text-ink">{filename}</p>
+        <p className="text-alarm text-base mt-2">{state.error}</p>
       </div>
     );
   }
@@ -85,12 +85,12 @@ export default function TextReader({ src, filename }: TextReaderProps) {
     <div data-text-reader className="w-full max-w-3xl flex flex-col gap-2">
       <pre
         data-text-body
-        className="whitespace-pre-wrap break-words font-mono text-xs text-neutral-200 bg-neutral-900/70 rounded-md p-4 overflow-auto max-h-[68vh]"
+        className="whitespace-pre-wrap break-words font-mono text-meta text-ink bg-surface/80 border border-line rounded-md p-4 overflow-auto max-h-[68vh]"
       >
         {state.body}
       </pre>
       {state.truncated && (
-        <p data-text-truncated className="text-xs text-amber-400">
+        <p data-text-truncated className="text-meta text-ink-muted">
           This preview stops early. Download the file to read the rest.
         </p>
       )}
