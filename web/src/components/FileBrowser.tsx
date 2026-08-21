@@ -86,7 +86,9 @@ export function FileBrowser({
 
   return (
     <div className="p-4 md:p-6 pb-24">
-      <h2 className="text-xl font-semibold mb-3">{folder}</h2>
+      {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
+          top of the first few characters of the folder name at 390px. */}
+      <h2 className="text-xl font-semibold mb-3 ml-11 md:ml-0">{folder}</h2>
       <FilterBar active={filterKey} onChange={onFilterChange} />
 
       {error && (

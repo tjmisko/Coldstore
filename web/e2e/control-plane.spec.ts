@@ -223,3 +223,23 @@ test("shows warning-class activity for the selected folder", async ({ page }) =>
   // filter the wedge warning would never appear in the last ten.
   await expect(activity).not.toContainText("archive\n");
 });
+
+test.describe("on a phone-sized viewport", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("does not park the sidebar toggle on top of the folder name", async ({ page }) => {
+    // The toggle is `fixed top-3 left-3 md:hidden` and the heading had no left
+    // inset below that breakpoint, so "CameraRoll" rendered as "meraRoll".
+    await page.locator('[data-folder-nav="CameraRoll"]').click();
+
+    const toggle = page.getByRole("button", { name: "Toggle sidebar" });
+    const heading = page.getByRole("heading", { name: "CameraRoll", level: 2 });
+    await expect(heading).toBeVisible();
+
+    const toggleBox = await toggle.boundingBox();
+    const headingBox = await heading.boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(headingBox).not.toBeNull();
+    expect(headingBox!.x).toBeGreaterThanOrEqual(toggleBox!.x + toggleBox!.width);
+  });
+});
