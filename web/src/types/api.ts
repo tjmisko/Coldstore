@@ -181,6 +181,38 @@ export interface BulkPinResponse {
   warning: string | null;
 }
 
+/** One uniform tag change over a set of files. The server returns grouped
+ * changes in TagUndo so heterogeneous starting states can be restored exactly. */
+export interface TagFileMutation {
+  ids: number[];
+  add?: string[];
+  remove?: string[];
+}
+
+export interface BulkTagUniformRequest extends TagFileMutation {
+  changes?: never;
+}
+
+export interface BulkTagExactRequest {
+  changes: TagFileMutation[];
+  ids?: never;
+  add?: never;
+  remove?: never;
+}
+
+export type BulkTagRequest = BulkTagUniformRequest | BulkTagExactRequest;
+
+/** Directly replay this as `api.bulkTags(result.undo)`. */
+export interface TagUndo {
+  changes: TagFileMutation[];
+}
+
+export interface BulkTagResponse {
+  updated: number;
+  created: string[];
+  undo: TagUndo;
+}
+
 export interface JobFailure {
   id: number;
   error: string;

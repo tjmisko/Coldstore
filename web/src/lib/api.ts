@@ -1,5 +1,7 @@
 import type {
   BulkPinResponse,
+  BulkTagRequest,
+  BulkTagResponse,
   CatalogEvent,
   EpubSpine,
   FileIDsResponse,
@@ -185,6 +187,13 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids, pinned }),
+    }),
+
+  bulkTags: (request: BulkTagRequest) =>
+    apiFetch<BulkTagResponse>("/api/v1/files/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
     }),
 
   restore: (id: number) =>

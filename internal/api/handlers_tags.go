@@ -22,6 +22,16 @@ type fileTagsResponse struct {
 	Created []string           `json:"created"`
 }
 
+// bulkFileTagsRequest has two mutually-exclusive forms. The ordinary form is
+// ids/add/remove. The changes form is how the exact inverse returned by this
+// endpoint is replayed in one request and one transaction.
+type bulkFileTagsRequest struct {
+	IDs     []int64                   `json:"ids"`
+	Add     []string                  `json:"add"`
+	Remove  []string                  `json:"remove"`
+	Changes []catalog.TagFileMutation `json:"changes"`
+}
+
 type renameTagRequest struct {
 	Name string `json:"name"`
 }
@@ -53,6 +63,50 @@ func (s *Server) handleAddFileTags(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRemoveFileTags(w http.ResponseWriter, r *http.Request) {
 	s.mutateFileTags(w, r, true)
+}
+
+func (s *Server) handleBulkFileTags(w http.ResponseWriter, r *http.Request) {
+	var req bulkFileTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var changes []catalog.TagFileMutation
+	if req.Changes != nil {
+		if len(req.IDs)+len(req.Add)+len(req.Remove) != 0 {
+			writeError(w, http.StatusBadRequest, "changes cannot be combined with ids, add, or remove")
+			return
+		}
+		if len(req.Changes) == 0 {
+			writeError(w, http.StatusBadRequest, "changes must not be empty")
+			return
+		}
+		for _, change := range req.Changes {
+			if len(change.IDs) == 0 || len(change.Add)+len(change.Remove) == 0 {
+				writeError(w, http.StatusBadRequest, "each change needs ids and add or remove")
+				return
+			}
+		}
+		changes = req.Changes
+	} else {
+		if len(req.IDs) == 0 {
+			writeError(w, http.StatusBadRequest, "ids must not be empty")
+			return
+		}
+		if len(req.Add)+len(req.Remove) == 0 {
+			writeError(w, http.StatusBadRequest, "add or remove must not be empty")
+			return
+		}
+		changes = []catalog.TagFileMutation{{IDs: req.IDs, Add: req.Add, Remove: req.Remove}}
+	}
+
+	result, err := s.cat.ApplyTagMutations(changes, time.Now().Unix())
+	if err != nil {
+		s.writeTagError(w, "updating bulk file tags", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) mutateFileTags(w http.ResponseWriter, r *http.Request, removeOnly bool) {
@@ -127,9 +181,12 @@ func (s *Server) handleDeleteTag(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeTagError(w http.ResponseWriter, operation string, err error) {
 	var invalid *catalog.InvalidTagNameError
 	var descendants *catalog.TagHasDescendantsError
+	var limit *catalog.TagMutationLimitError
 	switch {
 	case errors.As(err, &invalid):
 		writeError(w, http.StatusBadRequest, invalid.Error())
+	case errors.As(err, &limit):
+		writeError(w, http.StatusBadRequest, limit.Error())
 	case errors.As(err, &descendants):
 		writeError(w, http.StatusConflict, descendants.Error())
 	case errors.Is(err, catalog.ErrNoSuchTag):

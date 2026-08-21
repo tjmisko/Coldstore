@@ -1090,13 +1090,25 @@ normalisation is a `400` naming the offending name — never a silently-dropped 
 ```json
 { "ids": [ … ], "add": ["Trips/Iceland"], "remove": [] }
 → 200 { "updated": 431, "created": ["Trips/Iceland"],
-        "undo": { "add": [], "remove": ["Trips/Iceland"], "ids": [ … ] } }
+        "undo": { "changes": [
+          { "ids": [ …actually changed… ], "add": [], "remove": ["Trips/Iceland"] }
+        ] } }
 ```
+
+The ordinary request is the compact uniform form above. The same endpoint also accepts
+`{ "changes": [ { "ids": […], "add": […], "remove": […] }, … ] }`; the two forms are
+mutually exclusive. `undo` uses this grouped form because a uniform inverse is not exact
+when the requested files began with different tag sets. It is directly replayable as one
+POST and still executes in one transaction.
 
 **A request, not a job.** Pins are already a request at 5,000 ids; a tag write is strictly
 cheaper (no mover mutex, no filesystem, no folder aggregate to recompute). Caps: **5,000
 ids** (the same constant shape as `maxBulkPinIDs`, and for the same reason — the request is
 cheap but there is no progress reporting to hide a long one behind) and **16 tag names**.
+The id cap is applied after deduplication and existence filtering; the tag cap is applied
+after normalisation/folding. Unknown file ids are ignored like the bulk-pin primitive and
+never appear in `undo`; if every id is unknown, the request is a successful no-op and does
+not create unused tag rows.
 
 **One transaction, chunked at 500.** The implementation shape, which is the shape
 `SetPinnedBulk` already uses so the codebase has one bulk idiom and not two:
@@ -1114,10 +1126,11 @@ is explicitly **not** implemented with `json_each`: that would work on the bundl
 but it would be the only place in the codebase that depends on the JSON extension being
 compiled in, and the chunked form costs nothing.
 
-**The `undo` block** is the exact inverse of what was applied — the ids that actually
-changed, not the ids that were requested. It is what lets `u` in the UI be a single POST
-with no client-side bookkeeping and no undo stack in the daemon, and it is what makes it
-safe for a tag operation to apply without a confirmation dialog (section 5.9).
+**The `undo.changes` block** is the exact inverse of what was applied — per tag and
+direction, the ids that actually changed, not the ids that were requested. It is what lets
+`u` in the UI be a single POST with no client-side bookkeeping and no undo stack in the
+daemon, and it is what makes it safe for a tag operation to apply without a confirmation
+dialog (section 5.9).
 
 ### 4.5 `PATCH /api/v1/files/{id}` — description and manual capture metadata
 

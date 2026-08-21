@@ -13,6 +13,8 @@ const (
 	maxTagSegmentRunes = 64
 	maxTagPathRunes    = 255
 	maxTagDepth        = 6
+	MaxBulkTagIDs      = 5000
+	MaxBulkTagNames    = 16
 )
 
 var ErrNoSuchTag = errors.New("no such tag")
@@ -44,8 +46,34 @@ type Tag struct {
 }
 
 type TagMutationResult struct {
-	Updated int64
-	Created []string
+	Updated int64    `json:"updated"`
+	Created []string `json:"created"`
+	Undo    TagUndo  `json:"undo"`
+}
+
+// TagFileMutation is one uniform mutation over a set of file ids. A bulk
+// request normally contains one of these; an exact undo may contain several,
+// because the files did not necessarily have the same tags beforehand.
+type TagFileMutation struct {
+	IDs    []int64  `json:"ids"`
+	Add    []string `json:"add"`
+	Remove []string `json:"remove"`
+}
+
+// TagUndo is directly replayable as POST /api/v1/files/tags {"changes": ...}.
+// Changes are grouped by tag and direction instead of repeating every tag name
+// once per file, but name exactly the file associations actually changed.
+type TagUndo struct {
+	Changes []TagFileMutation `json:"changes"`
+}
+
+type TagMutationLimitError struct {
+	Field string
+	Limit int
+}
+
+func (e *TagMutationLimitError) Error() string {
+	return fmt.Sprintf("at most %d unique %s per request", e.Limit, e.Field)
 }
 
 type TagRenameResult struct {
@@ -322,62 +350,180 @@ func deleteTagAssignmentsTx(tx *sql.Tx, tagID int64, ids []int64) error {
 	return nil
 }
 
-// ApplyTags atomically adds and removes leaf tags. Ancestors are materialised
-// but are never applied. Updated counts distinct files whose associations
-// actually changed; unknown file ids are ignored like the bulk pin primitive.
-func (c *Catalog) ApplyTags(ids []int64, add, remove []string, at int64) (TagMutationResult, error) {
-	result := TagMutationResult{Created: []string{}}
-	addNames, err := normalizeTagNames(add)
-	if err != nil {
-		return result, err
+type preparedTagMutations struct {
+	ids         []int64
+	addNames    []normalizedTag
+	removeNames []normalizedTag
+	addIDs      map[string][]int64
+	removeIDs   map[string][]int64
+}
+
+func prepareTagMutations(mutations []TagFileMutation, enforceBulkLimits bool) (preparedTagMutations, error) {
+	prepared := preparedTagMutations{
+		addIDs:    make(map[string][]int64),
+		removeIDs: make(map[string][]int64),
 	}
-	removeNames, err := normalizeTagNames(remove)
-	if err != nil {
-		return result, err
-	}
-	addFolds := make(map[string]bool, len(addNames))
-	for _, name := range addNames {
-		addFolds[name.fold] = true
-	}
-	for _, name := range removeNames {
-		if addFolds[name.fold] {
-			return result, &InvalidTagNameError{Name: name.name, Reason: "cannot be both added and removed"}
+	idSeen := make(map[int64]bool)
+	nameSeen := make(map[string]bool)
+	addSeen := make(map[string]bool)
+	removeSeen := make(map[string]bool)
+	// One intent per (file, folded tag). Repeating an intent is harmless;
+	// opposing intents for the same association are an ambiguous request.
+	intents := make(map[int64]map[string]int8)
+
+	for _, mutation := range mutations {
+		add, err := normalizeTagNames(mutation.Add)
+		if err != nil {
+			return prepared, err
+		}
+		remove, err := normalizeTagNames(mutation.Remove)
+		if err != nil {
+			return prepared, err
+		}
+		addInMutation := make(map[string]bool, len(add))
+		for _, name := range add {
+			addInMutation[name.fold] = true
+		}
+		for _, name := range remove {
+			if addInMutation[name.fold] {
+				return prepared, &InvalidTagNameError{
+					Name: name.name, Reason: "cannot be both added and removed",
+				}
+			}
+		}
+
+		for _, name := range add {
+			if !addSeen[name.fold] {
+				prepared.addNames = append(prepared.addNames, name)
+				addSeen[name.fold] = true
+			}
+			nameSeen[name.fold] = true
+		}
+		for _, name := range remove {
+			if !removeSeen[name.fold] {
+				prepared.removeNames = append(prepared.removeNames, name)
+				removeSeen[name.fold] = true
+			}
+			nameSeen[name.fold] = true
+		}
+
+		for _, id := range uniqueIDs(mutation.IDs) {
+			if !idSeen[id] {
+				idSeen[id] = true
+				prepared.ids = append(prepared.ids, id)
+			}
+			if intents[id] == nil {
+				intents[id] = make(map[string]int8)
+			}
+			for _, name := range add {
+				if intents[id][name.fold] == -1 {
+					return prepared, &InvalidTagNameError{
+						Name: name.name, Reason: "cannot be both added and removed for the same file",
+					}
+				}
+				if intents[id][name.fold] == 0 {
+					intents[id][name.fold] = 1
+					prepared.addIDs[name.fold] = append(prepared.addIDs[name.fold], id)
+				}
+			}
+			for _, name := range remove {
+				if intents[id][name.fold] == 1 {
+					return prepared, &InvalidTagNameError{
+						Name: name.name, Reason: "cannot be both added and removed for the same file",
+					}
+				}
+				if intents[id][name.fold] == 0 {
+					intents[id][name.fold] = -1
+					prepared.removeIDs[name.fold] = append(prepared.removeIDs[name.fold], id)
+				}
+			}
 		}
 	}
 
-	ids = uniqueIDs(ids)
-	if len(ids) == 0 || len(addNames)+len(removeNames) == 0 {
+	if enforceBulkLimits {
+		if len(nameSeen) > MaxBulkTagNames {
+			return prepared, &TagMutationLimitError{Field: "tag names", Limit: MaxBulkTagNames}
+		}
+	}
+	return prepared, nil
+}
+
+func existingIDSet(ids []int64) map[int64]bool {
+	result := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		result[id] = true
+	}
+	return result
+}
+
+func onlyExistingIDs(ids []int64, existing map[int64]bool) []int64 {
+	result := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if existing[id] {
+			result = append(result, id)
+		}
+	}
+	return result
+}
+
+func undoChange(ids []int64, add, remove string) TagFileMutation {
+	change := TagFileMutation{IDs: ids, Add: []string{}, Remove: []string{}}
+	if add != "" {
+		change.Add = append(change.Add, add)
+	}
+	if remove != "" {
+		change.Remove = append(change.Remove, remove)
+	}
+	return change
+}
+
+func (c *Catalog) applyTagMutations(mutations []TagFileMutation, at int64, enforceBulkLimits bool) (TagMutationResult, error) {
+	result := TagMutationResult{Created: []string{}, Undo: TagUndo{Changes: []TagFileMutation{}}}
+	prepared, err := prepareTagMutations(mutations, enforceBulkLimits)
+	if err != nil {
+		return result, err
+	}
+	if len(prepared.ids) == 0 || len(prepared.addNames)+len(prepared.removeNames) == 0 {
 		return result, nil
 	}
+
 	tx, err := c.db.Begin()
 	if err != nil {
 		return result, err
 	}
 	defer tx.Rollback()
-	ids, err = existingFileIDsTx(tx, ids)
+	existingIDs, err := existingFileIDsTx(tx, prepared.ids)
 	if err != nil {
 		return result, err
 	}
-	if len(ids) == 0 {
+	if enforceBulkLimits && len(existingIDs) > MaxBulkTagIDs {
+		return result, &TagMutationLimitError{Field: "file ids", Limit: MaxBulkTagIDs}
+	}
+	if len(existingIDs) == 0 {
 		if err := tx.Commit(); err != nil {
 			return result, err
 		}
 		return result, nil
 	}
-
+	existing := existingIDSet(existingIDs)
 	changedIDs := make(map[int64]bool)
-	for _, name := range addNames {
+
+	for _, name := range prepared.addNames {
+		wanted := onlyExistingIDs(prepared.addIDs[name.fold], existing)
+		if len(wanted) == 0 {
+			continue
+		}
 		tag, created, err := resolveTagTx(tx, name, at)
 		if err != nil {
 			return result, err
 		}
 		result.Created = append(result.Created, created...)
-		assigned, err := assignedFileIDsTx(tx, tag.ID, ids)
+		assigned, err := assignedFileIDsTx(tx, tag.ID, wanted)
 		if err != nil {
 			return result, err
 		}
-		changed := make([]int64, 0, len(ids)-len(assigned))
-		for _, id := range ids {
+		changed := make([]int64, 0, len(wanted)-len(assigned))
+		for _, id := range wanted {
 			if !assigned[id] {
 				changed = append(changed, id)
 				changedIDs[id] = true
@@ -386,8 +532,16 @@ func (c *Catalog) ApplyTags(ids []int64, add, remove []string, at int64) (TagMut
 		if err := insertTagAssignmentsTx(tx, tag.ID, changed, at); err != nil {
 			return result, err
 		}
+		if len(changed) > 0 {
+			result.Undo.Changes = append(result.Undo.Changes, undoChange(changed, "", tag.Name))
+		}
 	}
-	for _, name := range removeNames {
+
+	for _, name := range prepared.removeNames {
+		wanted := onlyExistingIDs(prepared.removeIDs[name.fold], existing)
+		if len(wanted) == 0 {
+			continue
+		}
 		tag, err := findTagByFold(tx.QueryRow(`SELECT id, name, name_fold FROM tags
 			WHERE name_fold = ?`, name.fold), name.fold)
 		if errors.Is(err, ErrNoSuchTag) {
@@ -396,12 +550,12 @@ func (c *Catalog) ApplyTags(ids []int64, add, remove []string, at int64) (TagMut
 		if err != nil {
 			return result, err
 		}
-		assigned, err := assignedFileIDsTx(tx, tag.ID, ids)
+		assigned, err := assignedFileIDsTx(tx, tag.ID, wanted)
 		if err != nil {
 			return result, err
 		}
 		changed := make([]int64, 0, len(assigned))
-		for _, id := range ids {
+		for _, id := range wanted {
 			if assigned[id] {
 				changed = append(changed, id)
 				changedIDs[id] = true
@@ -410,12 +564,32 @@ func (c *Catalog) ApplyTags(ids []int64, add, remove []string, at int64) (TagMut
 		if err := deleteTagAssignmentsTx(tx, tag.ID, changed); err != nil {
 			return result, err
 		}
+		if len(changed) > 0 {
+			result.Undo.Changes = append(result.Undo.Changes, undoChange(changed, tag.Name, ""))
+		}
 	}
+
 	result.Updated = int64(len(changedIDs))
 	if err := tx.Commit(); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+// ApplyTagMutations atomically applies one or more heterogeneous tag changes.
+// Unknown ids are ignored, matching SetPinnedBulk; the undo names only
+// existing files whose associations actually changed.
+func (c *Catalog) ApplyTagMutations(mutations []TagFileMutation, at int64) (TagMutationResult, error) {
+	return c.applyTagMutations(mutations, at, true)
+}
+
+// ApplyTags atomically adds and removes leaf tags. Ancestors are materialised
+// but are never applied. Updated counts distinct files whose associations
+// actually changed; unknown file ids are ignored like the bulk pin primitive.
+func (c *Catalog) ApplyTags(ids []int64, add, remove []string, at int64) (TagMutationResult, error) {
+	// The 16-name cap belongs only to the bulk endpoint. The existing
+	// single-file API predates it and remains source-compatible.
+	return c.applyTagMutations([]TagFileMutation{{IDs: ids, Add: add, Remove: remove}}, at, false)
 }
 
 func (c *Catalog) hydrateFileTags(files []FileRecord) error {

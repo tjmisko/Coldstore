@@ -133,3 +133,27 @@ describe("file metadata", () => {
     expect(stub.calls[0].body).toEqual({ gps_lat: 0, gps_lon: 0 });
   });
 });
+
+describe("bulk tags", () => {
+  it("should post both a uniform mutation and its exact grouped undo", async () => {
+    stub = stubFetch([{ method: "POST", url: "/api/v1/files/tags", body: {
+      updated: 1,
+      created: [],
+      undo: { changes: [{ ids: [2], add: [], remove: ["Favorite"] }] },
+    } }]);
+
+    const result = await api.bulkTags({ ids: [1, 2], add: ["Favorite"], remove: [] });
+    expect(stub.calls[0]).toEqual({
+      url: "/api/v1/files/tags",
+      method: "POST",
+      body: { ids: [1, 2], add: ["Favorite"], remove: [] },
+    });
+
+    await api.bulkTags(result.undo);
+    expect(stub.calls[1]).toEqual({
+      url: "/api/v1/files/tags",
+      method: "POST",
+      body: { changes: [{ ids: [2], add: [], remove: ["Favorite"] }] },
+    });
+  });
+});
