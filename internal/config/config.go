@@ -36,6 +36,29 @@ type Config struct {
 
 type StorageConfig struct {
 	ColdStoragePath string `toml:"cold_storage_path"`
+
+	// RequireMountpoint makes a cold_storage_path that is not its own mount
+	// point a fatal startup error.
+	//
+	// It exists because "coldstore will not create cold_storage_path" is not
+	// the mount check it is usually read as. mount(8) requires the mountpoint
+	// DIRECTORY to exist, so an fstab volume that failed to mount leaves an
+	// empty, writable directory on the root filesystem, and every check in
+	// checkColdStorage passes. The daemon then builds a fresh catalog there --
+	// discarding the budgets and pins the real one held -- and archives into
+	// the root filesystem while Syncthing propagates each deletion to every
+	// device the owner has. When the volume is finally mounted, those copies
+	// are shadowed and the files are gone everywhere else.
+	//
+	// Only a ZFS dataset with a native mountpoint= is self-protecting, because
+	// zfs mount creates the directory itself.
+	//
+	// Default false: a plain directory on an existing filesystem is a
+	// supported layout and is what the tests and the demo use, so this cannot
+	// be the default without breaking them. Set it to true on any deployment
+	// whose cold storage is a separate volume -- which is every deployment
+	// that follows the runbook.
+	RequireMountpoint bool `toml:"require_mountpoint"`
 }
 
 type DaemonConfig struct {

@@ -26,16 +26,29 @@
 # ROOT filesystem, and every check coldstore makes passes. The archive then goes
 # to root while Syncthing propagates each deletion to every device you own.
 #
-# The guard is RequiresMountsFor= in the systemd unit. `coldstore --check`
-# reports the mount state on its "cold storage" line so you can see which case
-# you are in. Only a ZFS dataset with a native mountpoint= is self-protecting,
-# because zfs mount creates the directory itself.
+# The guards are require_mountpoint below and RequiresMountsFor= in the systemd
+# unit. Set BOTH: RequiresMountsFor= does nothing for a daemon started by hand
+# or for a volume unmounted after boot, and require_mountpoint cannot stop
+# systemd launching a daemon that will then exit 1 once a minute forever. Only a
+# ZFS dataset with a native mountpoint= is self-protecting, because zfs mount
+# creates the directory itself.
 #
 # This is also the tier that needs redundancy: once a file is offloaded, the
 # copy under this path is the ONLY copy that still exists anywhere. The
 # Syncthing folders are replicated to every device; this is replicated to
 # nothing. See docs/deployment.md, "Cold storage filesystem".
 cold_storage_path = "/srv/coldstore"
+
+# Refuse to start, and refuse every offload, unless cold_storage_path is its own
+# mount point. TURN THIS ON if cold storage is a separate volume -- which it is
+# in every deployment the runbook describes.
+#
+# It is off by default only because a plain directory on an existing filesystem
+# is a supported layout, and is what the tests and `make demo` use. Restore is
+# deliberately not covered: it reads FROM cold storage, so an unmounted volume
+# fails the open and nothing is lost.
+#
+# require_mountpoint = true
 
 [daemon]
 # WARNING: 0 means "use the default", not 0. Go cannot tell an explicit `0` from an

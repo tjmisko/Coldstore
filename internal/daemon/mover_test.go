@@ -500,3 +500,45 @@ func TestArchiveShouldRestoreThePinWhenTheClaimIsLost(t *testing.T) {
 		t.Error("the pin was cleared by an archive that never started")
 	}
 }
+
+// The other half of the mountpoint guard. Startup catches the boot case; this
+// catches the volume that goes away afterwards, which nothing else would.
+//
+// The offload direction is where it matters: it writes the only surviving copy
+// of the file and then deletes the source, so an unmounted cold_storage_path is
+// a file destroyed rather than a file misplaced. And the 5%-free floor cannot
+// stand in for this -- statfs on the stub answers about the ROOT filesystem,
+// which on a real box has plenty of room.
+func TestArchiveShouldRefuseWhenColdStorageStoppedBeingAMountPoint(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	cfg.Storage.RequireMountpoint = true
+	file := seedSyncedFile(t, cat, syncDir, "photo.jpg", 2048)
+	m := newTestMover(t, cfg, cat)
+
+	_, err := m.ArchiveAutomatic(file.ID)
+	if !errors.Is(err, ErrColdStorageUnmounted) {
+		t.Fatalf("archive error = %v, want ErrColdStorageUnmounted", err)
+	}
+
+	after, err := cat.GetFile("TestFolder", "photo.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != catalog.StatusSynced {
+		t.Errorf("status = %s, want synced: a refused archive must leave the row alone",
+			after.Status)
+	}
+	if _, err := os.Stat(filepath.Join(syncDir, "photo.jpg")); err != nil {
+		t.Errorf("the source file was touched by a refused archive: %v", err)
+	}
+}
+
+func TestArchiveShouldProceedOnAPlainColdStorageDirectoryByDefault(t *testing.T) {
+	syncDir, _, cfg, cat := setupTestEnv(t)
+	file := seedSyncedFile(t, cat, syncDir, "photo.jpg", 2048)
+	m := newTestMover(t, cfg, cat)
+
+	if _, err := m.ArchiveAutomatic(file.ID); err != nil {
+		t.Fatalf("require_mountpoint is off, so a plain directory must archive: %v", err)
+	}
+}

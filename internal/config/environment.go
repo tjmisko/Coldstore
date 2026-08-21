@@ -84,7 +84,44 @@ func (c *Config) checkColdStorage() error {
 			path, currentUserHint(), err,
 			writeFailureHint(err, "Chown it to the account in the unit's User= and check its mode."))
 	}
+
+	// Last, and only when asked for: everything above passes on an UNMOUNTED
+	// mountpoint, which is the one failure here that costs data outright.
+	if c.Storage.RequireMountpoint {
+		if err := requireMountpoint(path); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// requireMountpoint is the [storage] require_mountpoint check. See the field's
+// documentation in config.go for why the absence of the path is not the guard
+// it looks like.
+func requireMountpoint(path string) error {
+	state, err := DescribeMount(path)
+	if err != nil {
+		return fmt.Errorf("[storage] cannot determine whether cold_storage_path %q is a "+
+			"mount point, and require_mountpoint is set: %w", path, err)
+	}
+	if state.IsMountPoint {
+		return nil
+	}
+	return fmt.Errorf(`[storage] cold_storage_path %q is not a mount point, and require_mountpoint is set.
+
+The directory exists and is writable, which is exactly what an unmounted volume
+looks like: mount(8) needs the mountpoint directory to exist, so a volume that
+failed to mount leaves an empty writable stub behind on the root filesystem.
+
+Starting here would build a fresh catalog on the root filesystem -- losing the
+budgets and pins the real one holds -- and archive into it, while Syncthing
+propagated every one of those deletions to every device you own.
+
+    findmnt %s
+    systemctl status $(systemd-escape -p --suffix=mount %s)
+
+If cold storage really is meant to be a plain directory on an existing
+filesystem, remove require_mountpoint from [storage].`, path, path, path)
 }
 
 // checkFolder returns a warning string for a folder that is not ready yet, or an

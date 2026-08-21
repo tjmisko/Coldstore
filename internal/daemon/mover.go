@@ -43,6 +43,12 @@ var (
 	// ErrColdStorageFull means cold storage is below minFreeSpacePercent.
 	ErrColdStorageFull = errors.New("cold storage below 5% free")
 
+	// ErrColdStorageUnmounted means cold_storage_path stopped being a mount
+	// point while the daemon was running, and [storage] require_mountpoint is
+	// set. Startup catches the boot case; this catches the unmount that
+	// happens afterwards, which nothing else would.
+	ErrColdStorageUnmounted = errors.New("cold storage is no longer a mounted volume")
+
 	// ErrInvalidResolution means POST /files/{id}/resolve was given a `keep`
 	// that is neither of the two legal values. It is a 400, not a 409.
 	ErrInvalidResolution = errors.New(`keep must be "device" or "archive"`)
@@ -104,6 +110,28 @@ func NewMover(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) *Mo
 		moveIn:     restorer.MoveIn,
 		adoptRow:   cat.AdoptDeviceCopy,
 	}
+}
+
+// coldStorageReady refuses an offload into a cold_storage_path that is no
+// longer a mounted volume. It is a no-op unless [storage] require_mountpoint is
+// set, because a plain directory is a supported layout.
+func (m *Mover) coldStorageReady() error {
+	if !m.cfg.Storage.RequireMountpoint {
+		return nil
+	}
+	path := m.cfg.Storage.ColdStoragePath
+	state, err := config.DescribeMount(path)
+	if err != nil {
+		return fmt.Errorf("%w: cannot stat %s: %v", ErrColdStorageUnmounted, path, err)
+	}
+	if state.IsMountPoint {
+		return nil
+	}
+	m.cat.LogEventDeduped("cold_storage_unmounted", "", "",
+		fmt.Sprintf("offload refused: %s is not a mounted volume", path), 60)
+	m.logger.Error("cold storage is not a mounted volume, refusing to archive",
+		"path", path)
+	return fmt.Errorf("%w: %s", ErrColdStorageUnmounted, path)
 }
 
 // SetSpaceCheck replaces the cold-storage free-space probe, for testing.
@@ -200,6 +228,17 @@ func (m *Mover) archiveLocked(id int64, explicit bool) (*catalog.FileRecord, err
 
 	fc, err := m.folderForMove(rec.FolderLabel)
 	if err != nil {
+		return nil, err
+	}
+
+	// Before the space check, because an unmounted volume makes the space
+	// check answer about the ROOT filesystem and pass. This is FolderReady's
+	// job done for the other side of the move: the offload direction writes
+	// the only surviving copy of a file, so a cold_storage_path that has
+	// silently become a stub directory on root is a file destroyed, not a file
+	// misplaced. Restore needs no equivalent -- its source is in cold storage,
+	// so an unmounted volume fails the open and nothing is lost.
+	if err := m.coldStorageReady(); err != nil {
 		return nil, err
 	}
 

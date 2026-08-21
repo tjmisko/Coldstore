@@ -351,8 +351,13 @@ equivalent, so on an fstab mount the real protections are:
 
 | Guard | Covers |
 |---|---|
-| `RequiresMountsFor=` in the unit (step 6) | **Boot.** systemd will not start coldstore unless the mount unit succeeded. This is the load-bearing one; it is not optional on an fstab mount. |
-| Nothing | **A mid-run unmount**, or a btrfs volume that flips read-only on error and is then remounted away. The daemon does not re-check, and `statfs` reports the root filesystem's free space, so the 5%-free floor does not catch it either. |
+| `[storage] require_mountpoint = true` | **Startup and every offload.** Exit 1 at startup, and a refusal on each archive if the volume goes away later. Off by default because a plain directory is a supported layout -- **turn it on**, see [`[storage]`](#storage). |
+| `RequiresMountsFor=` in the unit (step 6) | **Boot ordering.** systemd will not start coldstore unless the mount unit succeeded, so the daemon never even runs in the bad state. |
+
+Set both. They fail at different moments and neither subsumes the other:
+`RequiresMountsFor=` does nothing for a daemon started by hand or for a volume
+unmounted an hour after boot, and `require_mountpoint` cannot stop systemd from
+launching a daemon that will then exit 1 once a minute forever.
 
 Do not unmount `cold_storage_path` while the daemon is running. Stop the service
 first:
@@ -795,6 +800,27 @@ Validate it without starting the daemon at any point with
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `cold_storage_path` | string | `"/srv/coldstore"` | Root directory for the archive, catalog database, and thumbnails. |
+| `require_mountpoint` | bool | `false` | Refuse to start, and refuse every offload, unless `cold_storage_path` is its own mount point. **Set this to `true` on any deployment whose cold storage is a separate volume.** |
+
+**`require_mountpoint = true` belongs in every real deployment.** It is the only
+guard against the failure in [step
+2](#coldstore-will-not-create-cold_storage_path----and-that-is-not-a-mount-guard)
+that `RequiresMountsFor=` does not cover: a volume unmounted *after* the daemon
+started, or a daemon started by hand outside systemd. Both leave an empty
+writable stub on the root filesystem that passes every other check, and the
+5%-free floor cannot help because `statfs` on the stub answers about root.
+
+It defaults to `false` only because a plain directory on an existing filesystem
+is a supported layout -- it is what the tests and `make demo` use -- so it cannot
+be the default without breaking them.
+
+Where it applies:
+
+| Point | Behaviour when the path is not a mount |
+|---|---|
+| `--check` and startup | Exit 1, naming `findmnt` and the mount unit. |
+| Every offload -- quota tick, manual archive, bulk job | Refused with `ErrColdStorageUnmounted`; the row stays `synced` and the source file is untouched. A `cold_storage_unmounted` event is written, deduped to one an hour. The API answers `503`. |
+| Restore | Not checked, and does not need to be: a restore reads *from* cold storage, so an unmounted volume fails the open and nothing is lost. |
 
 #### `[daemon]`
 
@@ -1343,6 +1369,7 @@ precise threshold.
 | `INFO` | `running initial catalog scan` | Startup scan in progress. |
 | `WARN` | `initial scan failed after all retries, starting without offload capability` | The daemon is running but will not offload files until a catalog sync tick succeeds. Investigate the scan error. |
 | `WARN` | `skipping quota enforcement: initial scan incomplete` | Quota enforcement is gated on a successful initial scan. Not an error, but persistent appearances mean scans keep failing. |
+| `ERROR` | `cold storage is not a mounted volume, refusing to archive` | `require_mountpoint` is set and `cold_storage_path` stopped being a mount point while the daemon was running. Every offload is refused until it is remounted; nothing has been lost. `findmnt` it. |
 | `WARN` | `cold storage below 5% free, refusing to archive` | The cold storage filesystem is nearly full. Free space or expand the volume. A `cold_storage_low` event is also written to the `events` table, deduped to one an hour. |
 | `WARN` | `folder wedged: pinned bytes exceed budget` | Pinned bytes alone are over the folder's budget, so enforcement cannot converge. Latched in the database and refreshed once a day. |
 | `WARN` | `bulk eviction` | A single tick is about to shed an unusually large share of a folder. Worth reading before it finishes. |
@@ -1482,6 +1509,7 @@ binding a port, and prints the same message the daemon would.
 | `[server] listen_addr ... is not a valid host:port` | Missing port, or a stray space. | `"192.168.1.10:8090"`. |
 | `no [[folders]] are declared` | Empty or truncated config, or the wrong `--config` path. | Check the path in `ExecStart=`. |
 | `cold_storage_path ... does not exist` | The volume is not mounted, or a typo. | `findmnt /srv/coldstore`; then `btrfs device stats` or `zpool status`. coldstore will not create it. |
+| `cold_storage_path ... is not a mount point` | `require_mountpoint` is set and the volume is not mounted -- the path is the empty stub on the root filesystem. | `findmnt` it, fix the mount, restart. **Do not** remove `require_mountpoint` to make the message go away: it is the only thing that stopped the archive landing on root. |
 | `... is not writable ... read-only file system` | `ProtectSystem=strict` plus a path missing from `ReadWritePaths=`. The path is read-only **to this process only**, which is why `ls -ld` and a hand-run `--check` both look fine. | Add the path to `ReadWritePaths=`, then `systemctl daemon-reload && systemctl restart coldstore`. **Not `chown`** -- it cannot make a read-only mount writable. |
 | `... is not writable ... permission denied` | Wrong `User=`, or wrong ownership on the directory. | `chown` it to the account Syncthing runs as. |
 | `... is mounted (.stfolder present) but not writable` | Either of the two above, on a `[[folders]].path`. The message names which. | Read the errno in the message: `read-only file system` → the unit; `permission denied` → `User=`/ownership. |

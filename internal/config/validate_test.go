@@ -207,3 +207,48 @@ func TestShouldAcceptSiblingPathsThatSharePrefixWhenNeitherContainsTheOther(t *t
 		t.Fatalf("sibling paths with a shared string prefix were rejected: %v", err)
 	}
 }
+
+// "coldstore will not create cold_storage_path" reads like a mount check and is
+// not one. mount(8) needs the mountpoint directory to exist, so an fstab volume
+// that failed to mount leaves an empty writable stub on the root filesystem and
+// every check in checkColdStorage passes: exists, directory, writable. The
+// daemon then builds a fresh catalog there -- discarding the budgets and pins
+// the real one holds -- and archives into root while Syncthing propagates each
+// deletion to every device the owner has.
+func TestCheckEnvironmentShouldRefuseAnUnmountedColdStorageStubWhenRequireMountpointIsSet(t *testing.T) {
+	cfg := envCfg(t)
+	cfg.Storage.RequireMountpoint = true
+	cfg.Folders = []FolderConfig{{Label: "Books", Path: mountedFolder(t, "Books"), BudgetBytes: 1}}
+
+	_, err := cfg.CheckEnvironment()
+	if err == nil {
+		t.Fatal("a plain directory passed require_mountpoint")
+	}
+	for _, want := range []string{"not a mount point", "require_mountpoint", "findmnt"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q:\n%v", want, err)
+		}
+	}
+}
+
+// The default has to stay false: a plain directory is a supported layout and is
+// what the demo and every test use.
+func TestCheckEnvironmentShouldAcceptAPlainDirectoryByDefault(t *testing.T) {
+	cfg := envCfg(t)
+	cfg.Folders = []FolderConfig{{Label: "Books", Path: mountedFolder(t, "Books"), BudgetBytes: 1}}
+
+	if cfg.Storage.RequireMountpoint {
+		t.Fatal("require_mountpoint defaults to true; the demo and the tests would break")
+	}
+	if _, err := cfg.CheckEnvironment(); err != nil {
+		t.Fatalf("a plain cold storage directory was refused by default: %v", err)
+	}
+}
+
+// "/" is a mount point, so it is the one path that exercises the passing branch
+// without needing a real volume to mount.
+func TestCheckEnvironmentShouldAcceptAMountPointWhenRequireMountpointIsSet(t *testing.T) {
+	if err := requireMountpoint("/"); err != nil {
+		t.Errorf(`requireMountpoint("/") = %v, want nil`, err)
+	}
+}

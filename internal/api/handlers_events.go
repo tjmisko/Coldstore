@@ -15,7 +15,7 @@ const (
 // handleListEvents is the events table's first reader.
 //
 // Every warning this control plane learned to write -- folder_wedged,
-// cold_storage_low, folder_unavailable, bulk_eviction, restore_conflict,
+// cold_storage_low, cold_storage_unmounted, folder_unavailable, bulk_eviction, restore_conflict,
 // conflict, source_changed, source_vanished, archive_unconfirmed, job_failed
 // -- was until now unreachable from outside SQLite. D3 requires the wedge
 // condition to log ONE deduped warning; writing it into a table nothing reads
