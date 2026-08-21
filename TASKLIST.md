@@ -209,7 +209,7 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
       owner-edit preservation.
 - [ ] #6 — atomic Live Photo pairing and movement (P0 specification above).
 - [x] #7 — normalized tag catalog primitives and CRUD API.
-- [ ] #4 — capture-date sorting/filtering/grouping with honest unknown-offset display.
+- [x] #4 — capture-date sorting/filtering/grouping with honest unknown-offset display.
 - [ ] #5 — location display/proximity filtering and location tagging without geocoding.
 - [x] #8 — descriptions API/editor with keymap-safe text entry.
 - [ ] #9 — extend search to path/description/tags and add tag/untagged filters. Benchmark
