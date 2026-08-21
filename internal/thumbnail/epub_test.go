@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tjmisko/coldstore/internal/catalog"
+	"github.com/tjmisko/coldstore/internal/epub"
 	"github.com/tjmisko/coldstore/internal/filetype"
 )
 
@@ -504,48 +505,6 @@ func TestGenerateShouldReachAnEPUBWhenItHasNoExtensionButWasSniffed(t *testing.T
 	}
 }
 
-func TestResolveArchivePathShouldRefuseWhenTheHrefEscapesTheRoot(t *testing.T) {
-	// A zip entry name is attacker-controlled in the sense that the archive
-	// arrived over Syncthing, and "../../etc/passwd" inside a zip is a real
-	// thing real archives contain.
-	escapes := []struct{ base, href string }{
-		{"OEBPS", "../../../etc/passwd"},
-		{"", "../outside.png"},
-		{"OEBPS", "a/../../../outside.png"},
-		{"OEBPS", "/etc/passwd"},
-		{"OEBPS", "https://example.invalid/cover.png"},
-		{"OEBPS", ""},
-		{"OEBPS", "#only-a-fragment"},
-	}
-	for _, tt := range escapes {
-		if got, err := resolveArchivePath(tt.base, tt.href); err == nil {
-			t.Errorf("resolveArchivePath(%q, %q) = %q, want an error", tt.base, tt.href, got)
-		}
-	}
-}
-
-func TestResolveArchivePathShouldResolveRelativeToTheBaseWhenTheHrefIsOrdinary(t *testing.T) {
-	tests := []struct{ base, href, want string }{
-		{"OEBPS", "cover.png", "OEBPS/cover.png"},
-		{"OEBPS", "images/cover.png", "OEBPS/images/cover.png"},
-		{"OEBPS/pages", "../art/cover.png", "OEBPS/art/cover.png"},
-		{".", "content.opf", "content.opf"},
-		{"", "content.opf", "content.opf"},
-		{"OEBPS", "cover.png#page1", "OEBPS/cover.png"},
-		{"OEBPS", "My%20Cover.png", "OEBPS/My Cover.png"},
-	}
-	for _, tt := range tests {
-		got, err := resolveArchivePath(tt.base, tt.href)
-		if err != nil {
-			t.Errorf("resolveArchivePath(%q, %q): %v", tt.base, tt.href, err)
-			continue
-		}
-		if got != tt.want {
-			t.Errorf("resolveArchivePath(%q, %q) = %q, want %q", tt.base, tt.href, got, tt.want)
-		}
-	}
-}
-
 func TestGenerateShouldRefuseWhenTheCoverDeclaresAnAbsurdSize(t *testing.T) {
 	// The declared size is a claim by the file. Rejecting an honest 400 MB
 	// entry costs nothing; the read is capped again anyway because a
@@ -567,7 +526,7 @@ func TestGenerateShouldRefuseWhenTheCoverDeclaresAnAbsurdSize(t *testing.T) {
 	// A highly compressible entry far larger than the cap: a zip bomb in
 	// miniature.
 	w, _ = zw.Create("OEBPS/cover.png")
-	w.Write(bytes.Repeat([]byte{0}, maxCoverBytes+1024))
+	w.Write(bytes.Repeat([]byte{0}, epub.MaxImageBytes+1024))
 	zw.Close()
 
 	src := filepath.Join(t.TempDir(), "bomb.epub")
