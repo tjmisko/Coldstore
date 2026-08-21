@@ -119,7 +119,12 @@ func (s *Scanner) ScanFolderContext(ctx context.Context, folder catalog.FolderCo
 // holds it for the whole pass, so the per-folder entry point cannot take it
 // again -- sync.Mutex is not reentrant, and a TryLock here would turn every
 // folder after the first into ErrScanInProgress.
-func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRecord) error {
+func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRecord) (retErr error) {
+	defer func() {
+		if retErr != nil {
+			s.recordScanEvent("scan_failed", folder.FolderLabel, retErr.Error())
+		}
+	}()
 	if err := verifyFolderRoot(folder.SyncthingPath); err != nil {
 		return fmt.Errorf("folder root unavailable, skipping scan of %q at %s: %w",
 			folder.FolderLabel, folder.SyncthingPath, err)
@@ -218,6 +223,8 @@ func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRec
 	if incomplete > 0 {
 		s.logger.Warn("folder scan incomplete, not marking any file missing",
 			"label", folder.FolderLabel, "files_scanned", scanned, "errors", incomplete)
+		s.recordScanEvent("scan_incomplete", folder.FolderLabel,
+			fmt.Sprintf("files scanned %d, errors %d", scanned, incomplete))
 		return nil
 	}
 
@@ -231,7 +238,17 @@ func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRec
 	s.logger.Info("folder scan complete",
 		"label", folder.FolderLabel, "files_scanned", scanned,
 		"marked_missing", missing, "conflicts", conflicts, "sniffed", sniffed)
+	s.recordScanEvent("scan_completed", folder.FolderLabel,
+		fmt.Sprintf("files scanned %d, marked missing %d, conflicts %d, sniffed %d",
+			scanned, missing, conflicts, sniffed))
 	return nil
+}
+
+func (s *Scanner) recordScanEvent(eventType, label, details string) {
+	if err := s.cat.LogEvent(eventType, label, "", details); err != nil {
+		s.logger.Warn("cannot record scan health event", "type", eventType,
+			"folder", label, "error", err)
+	}
 }
 
 // sniffBatchesPerScan bounds how much content sniffing one folder's scan does.

@@ -34,6 +34,9 @@ func ReadFolderIdentities(dbPath string) ([]FolderIdentity, error) {
 		}
 		return nil, fmt.Errorf("stating database: %w", err)
 	}
+	if err := ensureNoUncheckpointedWAL(dbPath); err != nil {
+		return nil, err
+	}
 
 	db, err := sql.Open("sqlite3", readOnlyDSN(dbPath))
 	if err != nil {
@@ -67,14 +70,17 @@ func queryFolderIdentities(db *sql.DB) ([]FolderIdentity, error) {
 	return identities, rows.Err()
 }
 
-// readOnlyDSN requests both SQLite's read-only file mode and query_only on the
-// connection. url.URL keeps path characters such as '?' from becoming DSN
-// parameters.
+// readOnlyDSN requests SQLite's immutable read-only mode as well as query_only.
+// Immutable is load-bearing: mode=ro alone can create WAL/SHM sidecars when the
+// database header says WAL. Callers first reject a non-empty WAL so immutable
+// cannot hide committed data. url.URL keeps path characters such as '?' from
+// becoming DSN parameters.
 func readOnlyDSN(dbPath string) string {
 	u := &url.URL{Scheme: "file", Path: dbPath}
 	q := u.Query()
 	q.Set("mode", "ro")
 	q.Set("_query_only", "1")
+	q.Set("immutable", "1")
 	u.RawQuery = q.Encode()
 	return u.String()
 }

@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -92,5 +95,55 @@ func TestCheckShouldReportACataloguedPathUnderAnotherLabel(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already catalogued under label \"Photos\"") {
 		t.Errorf("error = %q, want the catalog ownership conflict", err)
+	}
+}
+
+func TestStatusFlagsShouldRemainAdditiveAndRejectAmbiguousModes(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		scan, check, status, json bool
+		wantErr                   bool
+	}{
+		{"daemon", false, false, false, false, false},
+		{"scan", true, false, false, false, false},
+		{"check", false, true, false, false, false},
+		{"status human", false, false, true, false, false},
+		{"status json", false, false, true, true, false},
+		{"json alone", false, false, false, true, true},
+		{"scan and status", true, false, true, false, true},
+		{"check and status", false, true, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateModeFlags(tc.scan, tc.check, tc.status, tc.json)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateModeFlags error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestWriteStatusShouldReturnFailureAndStructuredJSONForAMissingArchive(t *testing.T) {
+	cold := filepath.Join(t.TempDir(), "missing")
+	cfg := &config.Config{
+		Storage: config.StorageConfig{ColdStoragePath: cold, RequireMountpoint: true},
+		Folders: []config.FolderConfig{{Label: "Photos", Path: filepath.Join(t.TempDir(), "photos"), BudgetBytes: 100}},
+	}
+	var out bytes.Buffer
+	code, err := writeStatus(context.Background(), &out, cfg, filepath.Join(cold, "catalog.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 for a load-bearing failure", code)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("status JSON = %q: %v", out.String(), err)
+	}
+	if decoded["status"] != "failure" {
+		t.Errorf("status = %v, want failure", decoded["status"])
+	}
+	if _, err := os.Stat(cold); !os.IsNotExist(err) {
+		t.Errorf("status created missing archive path: %v", err)
 	}
 }

@@ -90,6 +90,21 @@ type FolderConfig struct {
 }
 
 func Load(path string) (*Config, error) {
+	return load(path, false)
+}
+
+// LoadForInspection parses the configuration for read-only diagnostics. It
+// deliberately does not read credential environment variables and does not
+// require authentication for a non-loopback listener: --status never starts a
+// listener, so a missing service-only environment file must not prevent an
+// offline health report. Secrets and Syncthing device identifiers are scrubbed
+// from the returned value as a second line of defence against accidental
+// serialization.
+func LoadForInspection(path string) (*Config, error) {
+	return load(path, true)
+}
+
+func load(path string, inspection bool) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
@@ -104,13 +119,28 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	cfg.applyEnvOverrides()
+	if !inspection {
+		cfg.applyEnvOverrides()
+	}
 
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(!inspection); err != nil {
 		return nil, err
+	}
+	if inspection {
+		cfg.scrubInspectionSecrets()
 	}
 
 	return &cfg, nil
+}
+
+func (c *Config) scrubInspectionSecrets() {
+	c.Server.Username = ""
+	c.Server.Password = ""
+	c.Syncthing.APIURL = ""
+	c.Syncthing.APIKey = ""
+	for i := range c.Folders {
+		c.Folders[i].SyncthingID = ""
+	}
 }
 
 // applyEnvOverrides lets the environment supply the credential the TOML file
@@ -163,8 +193,14 @@ func (c *Config) setDefaults() error {
 // in CheckEnvironment, which distinguishes "misconfigured" from "not ready yet"
 // and therefore cannot be a pure function.
 func (c *Config) Validate() error {
-	if err := ValidateServerBinding(&c.Server); err != nil {
-		return err
+	return c.validate(true)
+}
+
+func (c *Config) validate(checkServerBinding bool) error {
+	if checkServerBinding {
+		if err := ValidateServerBinding(&c.Server); err != nil {
+			return err
+		}
 	}
 
 	if !filepath.IsAbs(c.Storage.ColdStoragePath) {

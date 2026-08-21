@@ -667,6 +667,67 @@ which enforces the same rule in the kernel's cgroup BPF filter.
 
 ---
 
+## Offline archive health report
+
+Use `--status` when the daemon or HTTP listener is unavailable, and before pasting a
+support handoff:
+
+```bash
+coldstore --config /etc/coldstore/coldstore.toml --status
+coldstore --config /etc/coldstore/coldstore.toml --status --json
+```
+
+`--status` is an inspection mode, not daemon startup. It does not load credential
+environment variables, require Basic Auth for the configured listener, perform
+writability probes, reconcile TOML, resume jobs, scan folders, migrate SQLite, create a
+catalog, change journal mode, or write the schema marker. `--json` is valid only with
+`--status`; `--status`, `--check`, and `--scan` are mutually exclusive.
+
+The report includes the binary build identifier; supported and on-disk schema versions;
+cold-storage mount, filesystem and free space; best-effort btrfs membership; read-only
+folder readiness and budget/pin/wedge state; file counts including transient states;
+active and failed jobs; thumbnail failures and content-detection backlog; redacted recent
+warning events; and the last recorded successful scan and offload. Human output is the
+default. JSON uses the same fields and severities.
+
+Exit status separates the result:
+
+| Exit | Meaning |
+|---|---|
+| `0` | healthy; no findings |
+| `1` | warnings, such as a missing `.stfolder`, stale scan, failed job or derived-data failure |
+| `2` | load-bearing failure, such as missing storage/catalog, schema mismatch, btrfs missing devices, low cold-storage space, a wedged folder or a recent unconfirmed/vanished archive copy |
+
+The command omits server credentials, Syncthing API credentials and Syncthing folder IDs.
+It also omits event paths/details and job error strings; those often contain filenames or
+tool diagnostics unsuitable for a pasted report.
+
+SQLite WAL mode has one important safety boundary. A plain `mode=ro` SQLite connection
+can still create `catalog.db-wal`/`catalog.db-shm`. Status instead uses immutable,
+query-only access and refuses a WAL containing uncheckpointed frames, because ignoring it
+would produce a stale report and checkpointing it would mutate production. Stop the daemon
+cleanly and rerun status. The command never deletes or checkpoints the WAL for you.
+
+Checks the binary cannot make honestly:
+
+- storage/folder writability, because proving it requires the create/delete probes that
+  inspection mode forbids; use `--check` and the daemon's in-sandbox startup preflight;
+- daemon liveness/running version, because status deliberately does not require the HTTP
+  listener; the report identifies its own build and says daemon status was not probed;
+- Syncthing Send & Receive mode, peer health and propagation, because there is no
+  Syncthing API client;
+- metadata-extraction failures in schema 6, because that subsystem/schema does not exist
+  yet;
+- authoritative btrfs device health when `btrfs filesystem show --raw` is absent or denied.
+  An `unknown` result is a warning; run the btrfs command with the privileges appropriate
+  to the host. Raw device output is never copied into the report.
+
+`scan_completed`, `scan_incomplete`, and `scan_failed` events begin with the release that
+adds this command. Until a successful post-upgrade scan runs, “no successful scan recorded”
+is expected and is reported as a warning rather than guessed from per-file timestamps.
+
+---
+
 ## Preflight checklist
 
 `coldstore --config <path> --check` performs all of the automated checks. Run it as

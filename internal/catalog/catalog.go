@@ -1141,8 +1141,8 @@ func (c *Catalog) LogEvent(eventType, folder, path, details string) error {
 	return err
 }
 
-// EventClassWarning selects every event type EXCEPT the three routine
-// per-file ones. A single enforcement pass writes hundreds of archive rows, so
+// EventClassWarning selects every event type EXCEPT routine archive/restore,
+// folder-seeding and successful-scan records. A single enforcement pass writes hundreds of archive rows, so
 // an unfiltered "last 10 events for this folder" would never once show the
 // wedge warning or the cold-storage warning -- the things the list exists to
 // show (design section 6.12). Section 5.11's stray-archive report is the third
@@ -1150,8 +1150,9 @@ func (c *Catalog) LogEvent(eventType, folder, path, details string) error {
 // is written today.
 const EventClassWarning = "warning"
 
-// routineEventTypes are the types EventClassWarning filters out.
-var routineEventTypes = []string{"archive", "restore", "folder_seeded"}
+// routineEventTypes are the types EventClassWarning filters out. Failed and
+// incomplete scans are deliberately absent: they are health warnings.
+var routineEventTypes = []string{"archive", "restore", "folder_seeded", "scan_completed"}
 
 // ListEvents reads the audit log newest first. folder and eventType are exact
 // matches and are ignored when empty; class is either "" or EventClassWarning.

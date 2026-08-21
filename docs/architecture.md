@@ -41,6 +41,12 @@ coldstore/
       catalog.go                 # SQLite operations
       migrations.go              # Schema
       models.go                  # FileRecord, FolderConfig structs
+      readonly.go                # Immutable/query-only diagnostic open; never migrates
+      diagnostics.go             # Read-only derived-data health aggregates
+    diagnostic/
+      report.go                  # Offline health model and severity/exit policy
+      render.go                  # Human and redacted JSON renderers
+      storage.go                 # Best-effort redacted btrfs membership probe
     thumbnail/thumbnail.go       # Image/video thumbnail generation
     api/
       server.go                  # HTTP server, middleware, static serving
@@ -65,6 +71,13 @@ coldstore/
   coldstore.service              # systemd unit
   Makefile                       # build, dev, install, test
 ```
+
+`coldstore --status` branches before normal environment preflight. It uses an
+inspection-only config load (no service credential environment and no write probes),
+checks the on-disk schema before schema-dependent queries, and opens compatible catalogs
+immutable/query-only. A non-empty WAL is refused rather than ignored or checkpointed.
+Diagnostic wire types intentionally omit credentials, Syncthing IDs, event details/paths
+and job error strings.
 
 ## Storage Infrastructure
 

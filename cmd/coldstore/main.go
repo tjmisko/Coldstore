@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,13 +15,41 @@ import (
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 	"github.com/tjmisko/coldstore/internal/daemon"
+	"github.com/tjmisko/coldstore/internal/diagnostic"
 )
 
 func main() {
 	configPath := flag.String("config", "coldstore.toml", "path to config file")
 	scanOnce := flag.Bool("scan", false, "run a single catalog scan and exit")
 	checkOnly := flag.Bool("check", false, "validate the config and the machine, print the result, and exit")
+	statusOnly := flag.Bool("status", false, "print an offline, read-only archive health report and exit")
+	jsonOutput := flag.Bool("json", false, "with --status, emit structured JSON")
 	flag.Parse()
+	if err := validateModeFlags(*scanOnce, *checkOnly, *statusOnly, *jsonOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+		os.Exit(diagnostic.ExitFailure)
+	}
+
+	// Status dispatches before normal config loading and CheckEnvironment. It
+	// neither reads service-only credential environment variables nor performs
+	// the create/delete writability probes used by daemon preflight.
+	if *statusOnly {
+		cfg, err := config.LoadForInspection(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+			os.Exit(diagnostic.ExitFailure)
+		}
+		dbPath := filepath.Join(cfg.Storage.ColdStoragePath, "catalog.db")
+		code, err := writeStatus(context.Background(), os.Stdout, cfg, dbPath, *jsonOutput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: rendering status: %v\n", err)
+			os.Exit(diagnostic.ExitFailure)
+		}
+		if code != diagnostic.ExitHealthy {
+			os.Exit(code)
+		}
+		return
+	}
 
 	// Config is loaded and validated before anything else exists -- before the
 	// catalog is opened and long before a socket is bound. config.Load performs
@@ -141,6 +171,33 @@ func main() {
 		logger.Error("daemon exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func validateModeFlags(scan, check, status, jsonOutput bool) error {
+	modes := 0
+	for _, selected := range []bool{scan, check, status} {
+		if selected {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return fmt.Errorf("--scan, --check and --status are mutually exclusive")
+	}
+	if jsonOutput && !status {
+		return fmt.Errorf("--json requires --status")
+	}
+	return nil
+}
+
+func writeStatus(ctx context.Context, w io.Writer, cfg *config.Config, dbPath string, jsonOutput bool) (int, error) {
+	report := diagnostic.NewBuilder().Build(ctx, cfg, dbPath)
+	var err error
+	if jsonOutput {
+		err = diagnostic.WriteJSON(w, report)
+	} else {
+		err = diagnostic.WriteHuman(w, report)
+	}
+	return report.ExitCode, err
 }
 
 // checkCatalogFolderIdentities is the only catalog access performed by

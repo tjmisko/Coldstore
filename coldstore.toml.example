@@ -14,6 +14,11 @@
 # Validate a config without starting the daemon:
 #
 #     coldstore --config /etc/coldstore/coldstore.toml --check
+#
+# Inspect archive health without starting the daemon or writing to the catalog:
+#
+#     coldstore --config /etc/coldstore/coldstore.toml --status
+#     coldstore --config /etc/coldstore/coldstore.toml --status --json
 
 [storage]
 # Must already exist, be a directory, and be writable by the user in the systemd

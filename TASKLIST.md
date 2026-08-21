@@ -166,19 +166,19 @@ Detailed acceptance criteria are in `docs/interface-refresh.md` section I.
 
 ### 13. Add a safe diagnostic CLI
 
-- [ ] Choose and document the CLI shape without breaking existing flags.
-- [ ] Produce a concise human health report and optional structured JSON.
-- [ ] Work when the daemon/HTTP listener is down.
-- [ ] Open the catalog read-only: no migrations, reconciliation, write probes, scan or other
+- [x] Choose and document the CLI shape without breaking existing flags.
+- [x] Produce a concise human health report and optional structured JSON.
+- [x] Work when the daemon/HTTP listener is down.
+- [x] Open the catalog read-only: no migrations, reconciliation, write probes, scan or other
       mutation.
-- [ ] Report build/running version, supported/on-disk schema, mount/storage health, folder
+- [x] Report build/running version, supported/on-disk schema, mount/storage health, folder
       readiness and budgets, counts, jobs, derived-data failures, warning events and last
       successful scan/offload.
-- [ ] Redact credentials and device identifiers by default.
-- [ ] Exit non-zero for load-bearing failures while separating warnings.
-- [ ] Test missing/degraded mount, schema mismatch, missing `.stfolder`, stale scan, wedge,
+- [x] Redact credentials and device identifiers by default.
+- [x] Exit non-zero for load-bearing failures while separating warnings.
+- [x] Test missing/degraded mount, schema mismatch, missing `.stfolder`, stale scan, wedge,
       interrupted/failed job and recent conflict/data-safety events.
-- [ ] Document checks that need root or a Syncthing API and therefore cannot be performed by
+- [x] Document checks that need root or a Syncthing API and therefore cannot be performed by
       the binary itself.
 
 ## P1 — tagging, metadata and rename implementation

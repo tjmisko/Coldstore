@@ -43,6 +43,9 @@ func DatabaseSchemaVersion(dbPath string) (int, error) {
 		}
 		return 0, fmt.Errorf("stating database: %w", err)
 	}
+	if err := ensureNoUncheckpointedWAL(dbPath); err != nil {
+		return 0, err
+	}
 	db, err := sql.Open("sqlite3", readOnlyDSN(dbPath))
 	if err != nil {
 		return 0, fmt.Errorf("opening database: %w", err)

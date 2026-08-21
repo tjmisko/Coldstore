@@ -25,6 +25,11 @@
 
 Source: `Makefile`
 
+The offline status path is covered by `internal/catalog` (immutable/query-only opening),
+`internal/diagnostic` (health classification, redaction and rendering), and
+`cmd/coldstore` (flag/exit behavior). These are ordinary `go test ./...` tests; they do
+not need a daemon, network, root, btrfs hardware or Syncthing.
+
 ## Build Pipeline Walkthrough
 
 `make build` produces a single self-contained binary in five steps:

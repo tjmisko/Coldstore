@@ -178,6 +178,40 @@ budget = "5GB"
 	}
 }
 
+func TestLoadForInspectionShouldNotRequireOrRetainSecrets(t *testing.T) {
+	t.Setenv(EnvUsername, "environment-user-secret")
+	t.Setenv(EnvPassword, "environment-password-secret")
+	path := writeConfig(t, `
+[storage]
+cold_storage_path = "/srv/coldstore"
+
+[server]
+listen_addr = "0.0.0.0:8090"
+username = "file-user-secret"
+password = "file-password-secret"
+
+[syncthing]
+api_url = "http://private-device:8384"
+api_key = "api-key-secret"
+
+[[folders]]
+label = "Photos"
+syncthing_id = "device-folder-id"
+path = "/srv/sync/photos"
+budget = "10GB"
+`)
+
+	cfg, err := LoadForInspection(path)
+	if err != nil {
+		t.Fatalf("LoadForInspection rejected an offline report config: %v", err)
+	}
+	if cfg.Server.Username != "" || cfg.Server.Password != "" ||
+		cfg.Syncthing.APIURL != "" || cfg.Syncthing.APIKey != "" ||
+		cfg.Folders[0].SyncthingID != "" {
+		t.Errorf("inspection config retained secrets or device identifiers: %+v", cfg)
+	}
+}
+
 // A relative path resolves against whatever directory the daemon was started
 // in, which for a systemd unit is not the one the owner had in mind.
 func TestLoadShouldRejectTheConfigWhenAFolderPathIsRelative(t *testing.T) {
