@@ -193,13 +193,21 @@ func (c *Catalog) AdoptDeviceCopy(id, sizeBytes int64, mtime, atime time.Time) (
 func (c *Catalog) GetFile(folder, relPath string) (*FileRecord, error) {
 	row := c.db.QueryRow(`SELECT `+fileColumns+`
 		FROM files WHERE folder_label = ? AND relative_path = ?`, folder, relPath)
-	return scanFile(row)
+	file, err := scanFile(row)
+	if err != nil {
+		return nil, err
+	}
+	return c.hydrateFile(file)
 }
 
 // GetFileByID retrieves a file by its ID.
 func (c *Catalog) GetFileByID(id int64) (*FileRecord, error) {
 	row := c.db.QueryRow(`SELECT `+fileColumns+` FROM files WHERE id = ?`, id)
-	return scanFile(row)
+	file, err := scanFile(row)
+	if err != nil {
+		return nil, err
+	}
+	return c.hydrateFile(file)
 }
 
 type FileQuery struct {
@@ -299,7 +307,14 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	// records: the SelectionBar patched 50 rows after a bulk restore and the
 	// rest went on rendering as archived. The caller caps the id list.
 	if len(q.IDs) > 0 {
-		return c.queryFiles(query+" ORDER BY id ASC", args...)
+		files, err := c.queryFiles(query+" ORDER BY id ASC", args...)
+		if err != nil {
+			return nil, err
+		}
+		if err := c.hydrateFileTags(files); err != nil {
+			return nil, err
+		}
+		return files, nil
 	}
 
 	// Every sort ends in `id ASC`. Without a total order, two rows that tie on
@@ -328,7 +343,14 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	query += " LIMIT ? OFFSET ?"
 	args = append(args, limit, q.Offset)
 
-	return c.queryFiles(query, args...)
+	files, err := c.queryFiles(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.hydrateFileTags(files); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // ListFileIDs backs "select all in folder". It applies the same filters as

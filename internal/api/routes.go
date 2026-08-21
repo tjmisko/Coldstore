@@ -18,7 +18,12 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/v1/files/{id}/pin", s.handlePinFile)
 	s.mux.HandleFunc("DELETE /api/v1/files/{id}/pin", s.handleUnpinFile)
 	s.mux.HandleFunc("POST /api/v1/files/pin", s.handleBulkPin)
+	s.mux.HandleFunc("POST /api/v1/files/{id}/tags", s.handleAddFileTags)
+	s.mux.HandleFunc("DELETE /api/v1/files/{id}/tags", s.handleRemoveFileTags)
 	s.mux.HandleFunc("POST /api/v1/files/{id}/resolve", s.handleResolveConflict)
+	s.mux.HandleFunc("GET /api/v1/tags", s.handleListTags)
+	s.mux.HandleFunc("PUT /api/v1/tags/{name...}", s.handleRenameTag)
+	s.mux.HandleFunc("DELETE /api/v1/tags/{name...}", s.handleDeleteTag)
 
 	s.mux.HandleFunc("GET /api/v1/folders", s.handleListFolders)
 	s.mux.HandleFunc("PUT /api/v1/folders/{label}", s.handleUpdateFolder)
