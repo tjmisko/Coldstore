@@ -117,34 +117,33 @@ Restyling must not rename or drop them.
 - [x] C3. Restyle the tile: badges, pin toggle, archived/pinned states, hover/focus rings.
 - [x] C4. Restyle the file browser table, filter bar, selection bar, status bar, config panel.
 - [x] C5. Empty states, loading states, error states.
-- [ ] C7. **`Lightbox.tsx` is deliberately not swept** -- BUG-3 is being fixed in it in
-      another worktree and a parallel restyle would collide. It still carries raw Tailwind
-      defaults; sweep it when that branch merges.
+- [x] C7. `Lightbox.tsx` and its merged preview readers use the established tokens while
+      preserving their `data-*` selector contract.
 - [x] C6. Light mode: **no**. Dark only, decided in the interview.
 
 ## D. Keyboard -- vim-flavoured navigation
 
-Leader is **space**. Today there are exactly three `window` keydown listeners and no
-registry: `Gallery.tsx:44-69` (Ctrl/Cmd+A, Escape, Enter), `Lightbox.tsx:67-105` (arrows,
-PageUp/Down, Home/End, Space, Escape) and `ConfirmDialog.tsx:30-37` (Escape). **The
-FileBrowser table has zero keyboard shortcuts and its rows are not even focusable** -- the
-only `tabIndex` in the whole app is on the gallery tile. There are no vim keys anywhere.
-Only `Gallery.tsx:47-55` has an "am I typing?" guard, and it is local rather than shared.
+Leader is **space**. At the initial audit there were three unrelated `window` listeners,
+no registry, no FileBrowser shortcuts and only a local typing guard. The merged keymap now
+has one dispatcher, a generated binding table and scoped overlays.
 
-- [ ] D1. A real keymap layer: a single dispatcher, scoped modes (gallery / browser /
+- [x] D1. A real keymap layer: a single dispatcher, scoped modes (gallery / browser /
       lightbox / palette / preview), and an escape hatch when focus is in a text field.
-- [ ] D2. Motions: `h j k l`, `g g`, `G`, `Ctrl-d`/`Ctrl-u`, `0`/`$` in the grid.
-- [ ] D3. Selection: `x`/`Space` toggle, `v` visual-range select, `V` select all, `Esc` clear.
-- [ ] D4. Actions on selection: archive / restore / pin / download, each with a mnemonic.
-- [ ] D5. `?` opens a keymap cheatsheet overlay.
-- [ ] D6. Focus management so the visible cursor and the DOM focus never disagree.
+- [x] D2. Motions: `h j k l`, `g g`, `G`, `Ctrl-d`/`Ctrl-u`, `0`/`$` in the grid.
+- [x] D3. Selection: `x` toggles the cursor item, `v`/`V` enter visual selection,
+      `Ctrl/Cmd-a` selects the loaded page, `<Space>a` selects the matching folder and
+      `<Space>c` clears. `Esc` exits visual mode while preserving the resulting selection.
+      Space itself is exclusively the leader.
+- [x] D4. Actions on selection: archive / restore / pin / download, each with a mnemonic.
+- [x] D5. `?` opens a keymap cheatsheet overlay.
+- [x] D6. Focus management so the visible cursor and the DOM focus never disagree.
 
 ## E. Command palette
 
-- [ ] E1. `:` opens a command palette (vim ex-line flavour).
-- [ ] E2. Command set: navigation, filters, selection ops, folder switch, config actions.
-- [ ] E3. Argument parsing + completion (`:filter archived`, `:folder Camera`).
-- [ ] E4. Recently-used ordering, fuzzy matching over command names.
+- [x] E1. `:` opens a command palette (vim ex-line flavour).
+- [x] E2. Command set: navigation, filters, selection ops, folder switch, config actions.
+- [x] E3. Argument parsing + completion (`:filter archived`, `:folder Camera`).
+- [x] E4. Recently-used ordering, fuzzy matching over command names.
 
 ## F. Fuzzy finder
 
@@ -155,26 +154,24 @@ and there is no search box anywhere in the app. Server side `q` is
 `AND filename LIKE '%q%'` (`internal/catalog/catalog.go:230-232`): filename only, not path,
 no ranking, no FTS. So "fuzzy" is the part that does not exist yet, at either end.
 
-- [ ] F1. `F10` **and** `<leader>fe` (space, f, e) open a fuzzy file finder.
-- [ ] F2. Decide client-side vs server-side matching -- depends on catalog size at scale.
-      A folder with 100k files cannot ship its filename list to the browser. Note
-      `GET /files/ids` already returns bare ids capped at 20000 (`api.ts:135`), which is the
-      natural seam for a client-side scorer over a bounded set. SQLite FTS5 is the
-      server-side alternative and would be a catalog migration.
+- [x] F1. `F10` **and** `<leader>fe` (space, f, e) open a fuzzy file finder.
+- [x] F2. Use client-side scoring over a 2,000-record bounded corpus, merged with server
+      filename-substring results so a match outside the window remains reachable. The UI
+      states when the corpus is truncated instead of implying a complete search.
 - [x] F3. Preview pane in the finder (telescope-style), reusing the preview work in H.
 - [x] F4. Open / select / act on the result without leaving the keyboard.
 
 ## G. Right-click context menu
 
-- [ ] G1. Native-feeling context menu on tiles and table rows.
+- [x] G1. Native-feeling context menu on tiles and table rows.
 - [x] G2. Actions: open preview, show in Files view, download, archive, restore, pin,
       and copy path. A browser page cannot invoke the operating system's native
       “reveal in folder” action without a trusted native bridge. “Show in Files
       view” is the precise web equivalent: it selects the record's folder,
       clears restrictive filters, switches to the Files view, and focuses the
       record (including finder matches beyond the first loaded page).
-- [ ] G3. Multi-select aware -- right-clicking inside a selection acts on the whole selection.
-- [ ] G4. Keyboard-reachable (context-menu key, and a leader binding).
+- [x] G3. Multi-select aware -- right-clicking inside a selection acts on the whole selection.
+- [x] G4. Keyboard-reachable (context-menu key, and a leader binding).
 
 ## H. Thumbnails and previews for documents
 
@@ -307,10 +304,11 @@ Notes that decided those:
       rather than daemon RSS -- which is exactly why +2.6 MB of frontend and +5.6 MB of
       `pdfium.wasm` are not comparable numbers.
 - [x] H8. Preview must work for **archived** files too, or explicitly say "restore to preview".
-- [ ] H9. **Thumbnails exist at exactly one size** -- `maxEdge = 400`, JPEG q80,
-      `.thumb.jpg` (`internal/thumbnail/thumbnail.go:25-28`). There is no larger derivative,
-      which is why the lightbox loads the full original instead (see BUG-3). A preview tier
-      probably wants a second, larger derivative rather than either extreme.
+- [x] H9. Keep one 400px/q80 `.thumb.jpg` derivative. Browser-decodable images use the
+      original inline route for full-quality viewing; opaque formats such as HEIC use the
+      existing thumbnail rather than downloading an undecodable original. A second larger
+      derivative would add storage, migration and regeneration cost without measured demand,
+      so it is deferred until owner-visible quality evidence justifies it.
 - [ ] H10. Host reality check for H3: the microserver is a **Debian 12 HP N40L, 3.8 GB RAM,
       2 x 1.5 GHz**. Whatever renders PDF pages has to be cheap, and the thumbnail worker
       pool is already sharing those two cores with the scanner.

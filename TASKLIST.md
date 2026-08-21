@@ -63,31 +63,39 @@ deployment.
 
 ### 5. Reconcile feature acceptance status
 
-- [ ] Mark D/E items complete only where implementation and tests prove them.
-- [ ] Rewrite D3's obsolete “Space toggles selection” wording: Space is the leader by owner
+- [x] Mark D/E items complete only where implementation and tests prove them.
+- [x] Rewrite D3's obsolete “Space toggles selection” wording: Space is the leader by owner
       decision; keep the implemented non-colliding selection bindings.
 - [x] Implement F3: fuzzy-finder preview pane using the merged preview surface.
 - [x] Implement F4: keyboard open/select/act flow from fuzzy results.
 - [x] Finish G2: add reveal-folder behavior, or document the platform limitation and replace
       it with a precise supported action.
 - [ ] Mark H0a–H8 and BUG-3 complete only after the combined branch passes verification.
-- [ ] Decide H9: larger preview derivative versus full original/browser rendering.
+- [x] Decide H9: larger preview derivative versus full original/browser rendering.
 - [ ] Complete H10: benchmark PDF thumbnail generation on the actual two-core N40L using
       owner-provided command output; agents have no host access.
 
 ### 6. Prove the integrated branch
 
-- [ ] `make lint`
-- [ ] `make test-web`
-- [ ] repeated targeted keyboard test (20 consecutive runs)
-- [ ] `go vet ./...`
-- [ ] `go test ./...`
-- [ ] `go test -race ./internal/...`
-- [ ] `make test-e2e`
+- [x] `make lint`
+- [x] `make test-web`
+- [x] repeated targeted keyboard test (20 consecutive runs)
+- [x] `go vet ./...`
+- [x] `go test ./...`
+- [x] `go test -race ./internal/...`
+- [x] `make test-e2e`
 - [ ] `make test-playwright` against an isolated root and unused port
-- [ ] fresh-checkout `make build` with no preceding `npm ci`
+- [x] fresh-checkout `make build` with no preceding `npm ci`
 - [ ] `make test-e2e-live` with the `e2e_live` tag alone
-- [ ] Measure and record final frontend distribution and binary sizes.
+- [x] Measure and record final frontend distribution and binary sizes: 3,568 KiB and
+      18,187,688 bytes respectively at `f14af62`.
+
+The two browser/network tiers remain open because this execution environment refuses
+loopback binds even after scoped escalation. Playwright failed before its server could
+listen, and the live harness rejected three alternate ports before Docker startup. The
+fresh-checkout target installed its own dependencies and built successfully with
+`npm_config_ignore_scripts=true`; npm's esbuild postinstall self-check is likewise denied
+by the execution sandbox.
 
 ## P0 — integrate the tagging plan without corrupting migrations
 
@@ -106,6 +114,9 @@ deployment.
       versions; search all issue bodies rather than trusting this list to be exhaustive.
 - [x] Keep the migration rule explicit: assign versions in landing order and never reuse a
       number already shipped on another branch.
+
+GitHub issue edits remain open because both normal and scoped-escalation attempts could not
+reach `api.github.com` from this environment.
 
 ## P0 — live data-safety bugs
 
@@ -238,15 +249,15 @@ requires the owner.
 
 ### 17. Repair tracked documentation
 
-- [ ] Correct rollback prose: migrated catalogs are refused by migration-aware older binaries;
+- [x] Correct rollback prose: migrated catalogs are refused by migration-aware older binaries;
       the silent downgrade hazard applies to pre-migration binaries.
-- [ ] Remove the false claim that archived content can be rebuilt by scanning hot folders.
-- [ ] Add document preview and EPUB endpoints to the API architecture list.
+- [x] Remove the false claim that archived content can be rebuilt by scanning hot folders.
+- [x] Add document preview and EPUB endpoints to the API architecture list.
 - [x] Document preview readers and FileBrowser lightbox flow in the React guide.
 - [x] Update the root docs index for interface/keymap/tagging documents.
 - [x] Mark `docs/control-plane-design.md` historical where its old build instructions conflict
       with current `.gitkeep` and dependency rules.
-- [ ] Remove or repair the ignored stale `coldstore-demo.toml`; `make demo` itself uses the
+- [x] Confirm the ignored stale `coldstore-demo.toml` is absent; `make demo` uses the
       generated safe loopback config.
 
 ### 18. Repair local-only deployment records

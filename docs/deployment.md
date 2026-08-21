@@ -821,10 +821,11 @@ Manual checks `--check` cannot make:
 **Back up `/srv/coldstore/catalog.db` before every upgrade.**
 
 The catalog carries a `PRAGMA user_version` and each release migrates it forward.
-An **older binary opens a migrated catalog without complaining**. It does not know
-about the `pinned` column and it does not read the budget from the database, so on
-its first quota tick it will archive every pinned file -- and Syncthing will
-delete each one from every device you own.
+A migration-aware older binary refuses a catalog whose `user_version` is newer
+than it supports, before the daemon starts concurrent work. The silent downgrade
+hazard applies only to binaries from before migration/version checks existed:
+those binaries can open a newer catalog while ignoring fields such as `pinned`,
+then make unsafe quota decisions.
 
 ```bash
 sudo systemctl stop coldstore
@@ -1546,13 +1547,11 @@ Use the `.backup` command (not a file copy) to get a consistent snapshot even wh
 
 **Thumbnails** are fully regenerable. If lost, the daemon will regenerate them on its next catalog sync tick for any files with an empty `thumbnail_path`.
 
-**The catalog is reconstructible.** If the catalog database is lost or corrupt, you can rebuild it from the files on disk:
-
-```bash
-coldstore --config /etc/coldstore/coldstore.toml --scan
-```
-
-This walks all configured Syncthing folders and populates the catalog. However, it will not know about archived files -- those will need to be manually reconciled or restored.
+**The catalog is not reconstructible from the hot folders.** A scan can discover
+only files still present in configured Syncthing folders. It cannot recover the
+rows that map offloaded files to `archive/`, or restore pins, conflicts, runtime
+folder policy, jobs and audit history. The SQLite `.backup` is therefore
+irreplaceable state, not merely a faster way to rebuild a cache.
 
 ## Troubleshooting
 
@@ -1584,21 +1583,14 @@ UPDATE files SET status = 'synced', archived_at = NULL WHERE id = ?;
 
 ### Catalog corruption recovery
 
-If the catalog database is corrupt:
-
-1. Stop the daemon: `sudo systemctl stop coldstore`
-2. Move the corrupt database aside: `mv /srv/coldstore/catalog.db /srv/coldstore/catalog.db.corrupt`
-3. Also remove WAL/SHM files if present: `rm -f /srv/coldstore/catalog.db-wal /srv/coldstore/catalog.db-shm`
-4. Run a one-shot scan to rebuild: `coldstore --config /etc/coldstore/coldstore.toml --scan`
-5. Restart the daemon: `sudo systemctl start coldstore`
-
-The rebuilt catalog will contain all files currently present in the Syncthing folders (marked `synced`). Files in the `archive/` directory will **not** be automatically re-cataloged by `--scan` -- they must be restored manually or you can insert records directly:
-
-```sql
--- Example: re-catalog an archived file
-INSERT INTO files (folder_label, relative_path, filename, extension, size_bytes, file_mtime, status)
-VALUES ('CameraRoll', 'DCIM/IMG_0001.jpg', 'IMG_0001.jpg', '.jpg', 4194304, '2024-06-15 10:30:00', 'archived');
-```
+If the catalog database is corrupt, stop the daemon and preserve the database plus
+its WAL/SHM sidecars for diagnosis. Restore the newest consistent SQLite
+`.backup`, then run `coldstore --status` before allowing the daemon to start. Do
+not create an empty catalog and run `--scan` as a recovery procedure: that would
+make hot files visible again while silently orphaning everything already in the
+archive. If no backup exists, keep the daemon stopped and perform an explicit
+forensic reconciliation of both trees; ad-hoc `INSERT` statements are not a safe
+substitute for all catalog invariants.
 
 ### Daemon won't start
 

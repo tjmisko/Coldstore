@@ -132,8 +132,8 @@ do not expose it have no supported label-rename operation.
 **`persistent_paths`** -- glob patterns for never-offload rules per folder
 
 **`events`** -- audit log, readable through `GET /api/v1/events`. `class=warning`
-excludes the routine per-file `archive`, `restore` and `folder_seeded` rows, which a
-single enforcement pass writes hundreds of.
+excludes routine `archive`, `restore`, `folder_seeded` and `scan_completed` rows;
+failed and incomplete scans remain warnings.
 
 ## API Endpoints
 
@@ -142,6 +142,9 @@ GET    /api/v1/files?folder=X&status=Y&ext=Z&q=search&pinned=1&pin_source=user
                      &ids=1,2,3&sort=mtime&offset=0&limit=50
 GET    /api/v1/files/ids?folder=X&status=Y&...   # {ids, total, truncated}, capped at 20000
 GET    /api/v1/files/{id}/download
+GET    /api/v1/files/{id}/preview                # inline PDF/image/video/text; Range capable
+GET    /api/v1/files/{id}/epub                   # ordered title/spine metadata
+GET    /api/v1/files/{id}/epub/{resource...}     # allowlisted, size-capped book resources
 POST   /api/v1/files/{id}/restore
 POST   /api/v1/files/{id}/archive
 POST   /api/v1/files/{id}/pin
