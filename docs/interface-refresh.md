@@ -310,6 +310,32 @@ Notes that decided those:
       2 x 1.5 GHz**. Whatever renders PDF pages has to be cheap, and the thumbnail worker
       pool is already sharing those two cores with the scanner.
 
+## I. Operational status dump
+
+The first production rollout showed that answering “is the archive healthy?” currently
+means assembling output from `systemctl`, `journalctl`, `findmnt`, SQLite, btrfs and the HTTP
+API by hand. Add one CLI surface that produces a concise report suitable for routine checks
+and for pasting into a support handoff.
+
+- [ ] I1. Add a read-only status-dump command to the `coldstore` binary. It must work when
+      the daemon or HTTP listener is unavailable and must never require the Basic Auth
+      password in argv, shell history or output.
+- [ ] I2. Report the running/build version when available, supported and on-disk catalog
+      schema versions, cold-storage mount status, configured folder readiness, budget and
+      pinned/wedged state, file counts by status, active/failed jobs, thumbnail/metadata
+      failures, recent warning events, and the most recent successful scan and offload.
+- [ ] I3. Opening the catalog for this command must not run migrations, reconcile TOML,
+      write probes, start a scan or otherwise mutate production state. A newer catalog must
+      be reported rather than “fixed”.
+- [ ] I4. Default output is human-readable and explicitly redacts credentials, Syncthing
+      device IDs and other secrets; add structured JSON for automation. Exit non-zero when
+      a load-bearing health check fails, while distinguishing warnings from failures.
+- [ ] I5. Cover the failure modes that matter on the deployed host: archive mount absent,
+      degraded btrfs membership, schema mismatch, folder missing its `.stfolder`, stale or
+      failed scan, wedged folder, failed/interrupted job, derived-data failures and recent
+      conflict/data-safety events. Document what the command can and cannot verify without
+      root privileges or a Syncthing API client.
+
 ---
 
 ## Bugs found while driving the seeded demo
