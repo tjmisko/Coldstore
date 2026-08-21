@@ -803,11 +803,9 @@ func (c *Catalog) UpdateThumbnailPath(id int64, thumbPath string) error {
 //
 // As with OffloadCandidates the cap is mandatory and there is no unbounded
 // variant to reach for by accident.
-// The detectedTypes arm is what makes an extension-less file reachable at all.
-// mime_type and extension both come from the filename, so a bookmark export
-// called "reading" has extension '' and is invisible to an extension-keyed
-// predicate no matter how many formats the generator learns. detected_type
-// comes from the bytes.
+//
+// It matches on extension alone, which cannot reach a file that has none. See
+// FilesNeedingThumbnailsByType.
 func (c *Catalog) FilesNeedingThumbnails(extensions []string, limit int) ([]FileRecord, error) {
 	return c.FilesNeedingThumbnailsByType(extensions, nil, limit)
 }
@@ -816,6 +814,12 @@ func (c *Catalog) FilesNeedingThumbnails(extensions []string, limit int) ([]File
 // matching on the content-sniffed type. A file qualifies on EITHER its
 // extension or its detected type; passing nil for detectedTypes gives the
 // extension-only behaviour.
+//
+// That second arm is what makes an extension-less file reachable at all. Both
+// extension and mime_type are derived from the filename, so a bookmark export
+// called "reading" has an empty extension and an empty mime_type, and is
+// invisible to an extension-keyed predicate no matter how many formats the
+// generator learns. detected_type comes from the bytes.
 func (c *Catalog) FilesNeedingThumbnailsByType(extensions, detectedTypes []string, limit int) ([]FileRecord, error) {
 	if len(extensions) == 0 && len(detectedTypes) == 0 {
 		return nil, nil

@@ -26,11 +26,6 @@ const (
 	maxEdge     = 400
 	jpegQ       = 80
 	thumbSuffix = ".thumb.jpg"
-
-	// defaultFFmpegTimeout bounds a single ffmpeg invocation. A truncated or
-	// malformed video can make ffmpeg sit forever; without a deadline one such
-	// file stalls the whole thumbnail backlog.
-	defaultFFmpegTimeout = 30 * time.Second
 )
 
 // imageExts are extensions handled by the Go imaging pipeline.
