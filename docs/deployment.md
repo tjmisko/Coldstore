@@ -27,6 +27,11 @@ Everything after that is reference material.
 - **ffmpeg** -- required for HEIF/HEIC decoding and video thumbnail extraction.
   Nothing else uses it; see [What actually gets a
   thumbnail](#what-actually-gets-a-thumbnail) before assuming your library needs it.
+- **poppler-utils** -- required for PDF thumbnails. The generator shells out to
+  `pdftocairo`. Without it, PDFs get no thumbnail: the attempt is recorded as a
+  failure per file, which the UI shows as a warning glyph rather than failing
+  quietly. Everything else -- EPUB covers, plaintext preview, the in-browser
+  readers -- works without it. It is ~716 kB installed.
 - **Syncthing** -- running and configured with the folders you want to manage
 - **A separate filesystem for cold storage.** btrfs and ZFS are both good
   choices and both are covered below; the requirement is checksums and, ideally,
@@ -236,7 +241,7 @@ verification that it is not reachable from anywhere else.
 
 ```bash
 sudo apt update
-sudo apt install -y ffmpeg sqlite3 btrfs-progs   # or zfsutils-linux, if that is your pool
+sudo apt install -y ffmpeg poppler-utils sqlite3 btrfs-progs   # or zfsutils-linux, if that is your pool
 
 # Only if you are building the Go binary on this box (the usual case):
 sudo apt install -y build-essential
@@ -1407,20 +1412,38 @@ batches and watch `df`.
 
 ### What actually gets a thumbnail
 
-`thumbnail.CanThumbnail` is an extension allowlist, and it is narrower than most
-people assume:
+`thumbnail.CanThumbnail` is an allowlist, and it is worth knowing exactly what
+is on it:
 
-| Pipeline | Extensions |
-|---|---|
-| Go imaging | `.jpg` `.jpeg` `.png` `.webp` |
-| ffmpeg (decode) | `.heif` `.heic` |
-| ffmpeg (frame extract) | `.mp4` `.mov` `.avi` `.mkv` `.webm` |
+| Pipeline | Extensions | Needs |
+|---|---|---|
+| Go imaging | `.jpg` `.jpeg` `.png` `.webp` `.gif` | nothing |
+| ffmpeg (decode) | `.heif` `.heic` | ffmpeg |
+| ffmpeg (frame extract) | `.mp4` `.mov` `.avi` `.mkv` `.webm` | ffmpeg |
+| poppler (`pdftocairo`) | `.pdf` | poppler-utils |
+| Go `archive/zip` | `.epub` | nothing |
 
-Everything else -- **`.pdf`, `.epub`, `.mobi`, `.djvu`, office documents, plain
-text** -- gets no thumbnail and no error. A library of books and articles will
-show an essentially empty gallery, and that is working as designed, not a
-deployment fault. It is also the case where `ffmpeg` is installed and never
-invoked.
+The PDF path renders the first page that actually has something on it, trying up
+to three pages before keeping page 1 regardless -- a cover sheet is a common
+thing for a document to open with. The EPUB path extracts the book's declared
+cover; a book that declares none, and has no image in its first ten sections,
+gets no thumbnail. A cover stored as SVG is recorded as a clean failure rather
+than pulling a vector rasteriser onto the box.
+
+Everything else -- **`.mobi`, `.djvu`, office documents, plain text** -- still
+gets no thumbnail and no error.
+
+**A file with no extension is reached by its content, not its name.** The
+scanner reads a bounded prefix of every new or changed file and records what the
+bytes say it is, so a browser bookmark export called `reading` or a screenshot
+saved without a suffix is thumbnailed and previewed like any other file. That
+read happens once per file, on insert or when the mtime or size changes -- not
+on every scan.
+
+Previewing is wider than thumbnailing. PDFs, EPUBs and plaintext all open in the
+browser through the reader the daemon ships, and **previewing an archived file
+streams it out of cold storage without restoring it**: the row stays archived.
+None of that needs poppler; poppler is only for the thumbnail.
 
 Two knobs matter on a small box. `thumbnail_workers` is that many concurrent
 decoders, and the Go path decodes a whole image into memory: a 48-megapixel JPEG
