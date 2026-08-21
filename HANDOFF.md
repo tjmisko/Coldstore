@@ -1,122 +1,90 @@
-# Handoff — coldstore interface refresh
+# Handoff — coldstore closeout
 
-Repo `github.com/tjmisko/Microserver`. Owner ran a deployment, gave interface feedback,
-asked for parallel agent work. Spec: `docs/interface-refresh.md` (tasklist + decisions).
+This is the short pickup document. Read these files before changing anything:
 
-## Branches
+1. `STATUS.md` — verified repository, branch, test and production state.
+2. `TASKLIST.md` — the authoritative ordered list of remaining work.
+3. `docs/interface-refresh.md` — detailed interface/access/document-preview decisions.
+4. `docs/keymap-design.md` — keyboard grammar and interaction contract.
+5. `docs/tagging-design.md` on `feat/tagging-design` — authoritative tagging design;
+   merge it only at the point named in `TASKLIST.md`.
+
+The old handoff said the keymap merge was unresolved and uncommitted. That was stale.
+Commit `28ba626` is the completed two-parent merge, and `feat/interface-refresh` is clean
+apart from work deliberately performed after this document was read.
+
+## Start here
+
+Work in `.worktrees/feat/interface-refresh` on `feat/interface-refresh`.
+
+1. Confirm `git status --short --branch` and read `STATUS.md` / `TASKLIST.md`.
+2. Fix the intermittent keyboard handler race described in `STATUS.md` before merging
+   another frontend branch.
+3. Merge `feat/documents` **onto** `feat/interface-refresh`. Preserve the interface/keymap
+   structure and graft the document reader into it; do not take either frontend side whole.
+4. Complete the combined design-token and z-index sweep.
+5. Run the combined verification matrix, including the live Syncthing tier.
+6. Merge `feat/tagging-design`, then repair its migration numbers and corresponding GitHub
+   issue text before implementing tagging.
+
+Exact conflict guidance and test commands are in `TASKLIST.md`.
+
+## Production boundary
+
+- The owner explicitly does **not** authorize SSH or other direct host access. Ask the owner
+  for any production observation or command output. Do not probe the host indirectly.
+- Do not deploy, restart the service, alter production budgets, migrate the production
+  catalog or run archive/restore operations without separate explicit approval.
+- Production is intentionally loopback-only behind an SSH tunnel for now.
+- The permanent access solution must work in an ordinary browser without requiring a VPN
+  client and should accommodate guests. Treat public exposure of the raw coldstore port as
+  rejected; domain-backed HTTPS requires the session-auth work in the tasklist.
+- The owner has confirmed a real archive propagates deletion through Syncthing and that
+  restore works correctly.
+
+## Branch map
 
 | Branch | State |
 |---|---|
-| `feat/interface-refresh` | **merge of `feat/keymap` IN PROGRESS, UNCOMMITTED** — see below |
-| `feat/keymap` | done, verified (= `worktree-agent-accbd99e410721eda`) |
-| `feat/tagging-design` | done, docs only (= `worktree-agent-a5c6d024a429c00fc`, `9bcbb3f`) |
-| `feat/documents` | **done, green**, 12 commits, branched from `feat/interface-refresh`@`5cab271` |
+| `main` | Clean local baseline at `9bcb7e8`, nine commits ahead of deployed/upstream `37ad497`. |
+| `feat/interface-refresh` | Active integration branch. Contains identity, design refresh, BUG-1/2 and the completed keymap merge. |
+| `feat/keymap` | Done and already an ancestor of `feat/interface-refresh`. Do not merge again. |
+| `feat/documents` | Done in isolation, not merged. Twelve commits from shared base `5cab271`; adds schema 6. |
+| `feat/tagging-design` | Done, documentation only, not merged. Its migration numbers are stale after documents. |
 
-Worktrees: `.worktrees/feat/interface-refresh`, `.claude/worktrees/agent-*`.
+All existing worktrees were clean at the status audit. Re-check rather than assuming.
 
-## FIRST THING TO DO
+## Non-negotiable implementation invariants
 
-`.worktrees/feat/interface-refresh` has an **uncommitted, resolved merge** of `feat/keymap`.
-Conflicts (App, ConfirmDialog, FileBrowser, Gallery, SelectionBar) resolved by taking the
-keymap structure and re-applying the token classes. Verified green:
-`make lint`, `go test ./...`, playwright **27/27**.
+- One SQLite connection/writer.
+- One shared `daemon.Mover`; filesystem moves and pin writes go through it.
+- Claim a file row with compare-and-swap before moving bytes.
+- Startup recovery finishes before concurrent actors exist.
+- Never overwrite or truncate a destination. Ambiguity keeps bytes and records an event.
+- TOML owns folder identity/path; SQLite owns runtime policy.
+- A status/diagnostic command must open the catalog read-only and must not migrate it.
+- Never remove or rename an existing frontend `data-*` attribute; tests use them as API.
+- Zero ESLint warnings and no `eslint-disable` in `web/src`.
 
-`make test-web` shows **2 intermittent failures in `web/src/components/keyboard.test.tsx`**
-(visual mode / context menu). **This flakiness is pre-existing on `feat/keymap` itself** —
-confirmed 2-of-3 clean runs on the unmerged branch, so it is NOT a merge artifact. Was
-mid-diagnosis when handed off. Suspect module-level state or a leaked pending-key timeout
-bleeding between tests. Fix it, then commit the merge.
+## Important hazards
 
-Playwright needs an isolated root — both agents share `/tmp/coldstore-e2e`:
-`COLDSTORE_E2E_ROOT=/tmp/coldstore-e2e-design COLDSTORE_E2E_ADDR=127.0.0.1:8093 make test-playwright`
+1. `feat/documents` consumes migration 6 for `detected_type`; tagging currently also calls
+   its schema change migration 6 and rename migration 7. They must become 7 and 8.
+2. Production still runs `37ad497`, schema 2. The deployed binary predates the implemented
+   `require_mountpoint` guard; its systemd `RequiresMountsFor=` is currently the sole mount
+   guard until a newer binary is deployed.
+3. Issue #13: changing a TOML folder label duplicates the catalog. Do not rename labels.
+4. Issue #6: Live Photo members are not atomic yet and can be split by quota enforcement.
+5. The documents branch has never passed `test-e2e-live`; isolated branch success is not a
+   substitute for the combined live test.
+6. Use an isolated Playwright root/port. A schema-6 test database cannot be reopened by an
+   older branch binary.
 
-## Done
+## Where detail lives
 
-- **A. Identity** — real `<title>`, per-view suffix, SVG favicon, apple-touch-icon, manifest,
-  `.webmanifest` mime registered in Go (Debian lacks it → iOS install silently fails).
-- **C. Design refresh** — Tailwind v4 `@theme` in `web/src/index.css`. Rule: **colour means
-  where a file lives, never what a button does.** cold=archived, held=pinned, alarm=broken,
-  and one reserved hue (`cursor`, teal) for the keyboard cursor only. IBM Plex Sans+Mono,
-  latin, committed under `web/public/fonts/` (no egress on the target host).
-  `Lightbox.tsx` deliberately UNSWEPT — documents agent owns it.
-- **BUG-1** gallery selection dead on touch (hover-only checkbox) — fixed + 2 browser tests.
-- **BUG-2** mobile toggle over folder heading — fixed + test.
-- **D–G keyboard** — full operator-pending vim engine, palette, fuzzy find, context menu,
-  cheatsheet. `docs/keymap-design.md`.
-- **Tagging** — `docs/tagging-design.md` (1811 lines) + **GitHub issues #1–#15**.
-- **H. Documents (`feat/documents`)** — all of H0a–H8, H0g, **BUG-3**. `pdftocairo` PDF
-  thumbs + ink-coverage first-page-with-content, hand-rolled EPUB cover extraction
-  (`internal/epub`), content sniffing (`internal/filetype`, migration 6, as a queue not a
-  walk step), inline `GET /files/{id}/preview`, pdf.js + server-extracted EPUB reader behind
-  one `React.lazy`. Green: `make test`, `test-web` 107, `lint`, `test-playwright` 22,
-  `test-e2e`, and a **fresh-clone `make build` with no `npm ci`**. `test-e2e-live` NOT run.
-  Deviations worth knowing: dist **3.4 MB not 2.6**, binary **18 MB not ~17** (pdf.js 5 needs
-  a `wasm/` dir the research predated — required for scanned PDFs on a no-egress box); the
-  **Files view gained a lightbox**, because `App` only picks the gallery for
-  photographic-sounding folder names so documents were unreachable; `seed-demo` had to sniff
-  its own files (Documents is seeded disabled → never scanned).
-
-## Open
-
-1. **ACCESS (blocks section B) — needs the owner.** Tailscale + `tailscale serve` gives
-   LAN+remote+real cert, free, no domain, zero code change. But owner wants **guest access**,
-   which Tailscale can't do. He asked "is a real domain the way to go?" — unanswered. A domain
-   makes session auth (B7) mandatory, not cosmetic. `coldstore.service:215` `IPAddressAllow`
-   omits Tailscale's `100.64.0.0/10` — only matters if binding to the TS IP.
-2. **Merge `feat/documents`** into `feat/interface-refresh` AFTER committing the keymap merge.
-   Author's guidance: its `Lightbox.tsx` / `FileBrowser.tsx` edits are small and localised
-   (one `resolvePreview` call + `<PreviewSurface>`; a filename `<button>` + a `<Lightbox>`
-   mount) — **merge documents ON TOP of the design/keymap side, not the reverse.**
-   It branched from `5cab271`; `feat/interface-refresh` is now at `13fe402`+.
-   Its migration 6 bumps catalog schema — older binaries refuse the upgraded DB (this is what
-   broke the shared `/tmp/coldstore-e2e` root).
-   Its `Lightbox.tsx` is still UNSWEPT for design tokens — sweep after merging.
-4. **Sweep new keymap components onto tokens** — palette/finder/menu/cheatsheet were written
-   against raw Tailwind (that branch predates the tokens). Check:
-   `grep -rn "neutral-\|amber-\|emerald-\|indigo-\|red-[0-9]\|blue-\|sky-" web/src --include=*.tsx | grep -v '\.test\.'`
-
-## Metadata research outcome (affects issues #1, #6)
-
-- **GPS `0,0` blocker WITHDRAWN, #1 unblocked, library choice settled.** Real iPhone 12 Pro
-  HEIC (iOS 16.7.1) reads correctly through `evanoberholster/imagemeta` — GPS,
-  `DateTimeOriginal`, `OffsetTimeOriginal`, `SubSecTimeOriginal` all match exiftool. §8 no
-  longer gates step 2. Retraction is *recorded, not deleted*: the synthetic bisect was
-  internally valid and mechanistically explained and still didn't generalise, because a real
-  44-entry maker note doesn't trigger what 3-entry fixtures do. The fixture matters as much
-  as the verb.
-- **Apple maker note 0x0011 unreadable from pure Go — confirmed on real data, and it is a
-  whole class, not a flaky field.** Embedded (≤4 byte) values parse; **every offset-based one
-  fails**. A UUID is a string → `ContentIdentifier` is always offset-based → always broken.
-  Structural, so it will not quietly get fixed. So Live Photo pairing must use `exiftool -stay_open` for the still
-  half; MOV half is free from ffprobe. **Invoke exiftool as a SUBPROCESS, never import
-  `barasher/go-exiftool` — it is GPL-3.0** and would make the binary derivative. Precedent:
-  `internal/thumbnail/thumbnail.go:162` shells out to ffmpeg.
-- `evanoberholster/imagemeta` **silently drops all EXIF when HEIC `iloc` precedes `iinf`**
-  (libheif/Nokia files; Apple/Canon fine). Cross-check with `bep/imagemeta`, which is
-  unaffected (returns unsigned GPS — apply the ref sign yourself).
-- ffprobe `creationdate` offset has no colon → use `"2006-01-02T15:04:05-0700"`, not RFC3339.
-- ffprobe surfaces **zero** EXIF from stills. Separate path required.
-- New edge case: the reader tries the Apple maker note only when IFD0 `Make == "Apple"`, and
-  returns **nothing at all** — not even Make/Model — for a file that lost IFD0 but kept its
-  maker note. A file with metadata presenting as one without. The `bep/imagemeta` re-probe
-  catches this too: one mechanism now covers three failure modes (empty EXIF from
-  `iloc`-first, `0,0` GPS, and lost-IFD0).
-- Only unmeasured claim left in the tagging design is the **FTS5 performance argument in #9**;
-  that issue's acceptance criteria already require measuring it.
-
-## Pre-existing bugs found (not in the owner's notes)
-
-- **#13** editing a folder label in `coldstore.toml` **silently duplicates the catalog** —
-  `ReconcileFolderFromTOML` (`internal/catalog/catalog.go:857`) upserts
-  `ON CONFLICT(folder_label)`. Old row stays `present_in_toml=0`; scanner re-inserts every
-  file under the new label; archived files survive only as old-label rows. Verified. Live risk
-  — owner is actively editing that file.
-- **#6** quota enforcement can archive half a Live Photo pair (mtime ordering splits them).
-
-## Conventions
-
-Conventional commits, no emoji, `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
-Tests named "should [behavior] when [condition]". Zero eslint warnings, no `eslint-disable`
-in `web/src`. Never remove a `data-*` attribute (28 pre-existing = test contract). Never add
-`mkdir -p internal/api/dist` to a Makefile target. `noclobber` is set — use `>|`.
-Demo: `:8099` (`:8090` is the owner's live SSH tunnel — do not bind it).
+- Current evidence and production facts: `STATUS.md`
+- Ordered work and definitions of done: `TASKLIST.md`
+- Verified metadata decisions and library caveats: `feat/tagging-design:docs/tagging-design.md`
+- Global data-safety contract: `docs/control-plane-design.md` section 0
+- Host-specific installation records: ignored local files under `docs/`; never commit their
+  identifiers or copy them into tracked documentation.
