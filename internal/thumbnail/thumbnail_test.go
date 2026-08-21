@@ -78,9 +78,11 @@ func TestCanThumbnail(t *testing.T) {
 		{".heic", true},
 		{".mp4", true},
 		{".mov", true},
-		{".pdf", false},
+		{".gif", true},
+		{".pdf", true},
 		{".txt", false},
 		{".doc", false},
+		{".epub", false},
 	}
 
 	for _, tt := range tests {
