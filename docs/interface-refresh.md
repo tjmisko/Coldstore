@@ -104,14 +104,22 @@ contract both test tiers are written against (`data-file-id`, `data-selected`,
 `data-folder-nav`, `data-view-nav`, `data-filter`, `data-badge`, `data-toast`, ~28 in all).
 Restyling must not rename or drop them.
 
-- [ ] C1. Aesthetic direction: palette, type scale, spacing, elevation, motion.
-- [ ] C2. Selection affordance -- bigger, prettier checkboxes, tuned for photo tiles.
+- [x] C1. Aesthetic direction. **One rule: colour means where a file lives, never what a
+      button does.** The axis is thermal -- cold for archived, held (warm) for pinned, alarm
+      for missing/conflicted/over-budget -- and one hue, a pale teal, is reserved for the
+      keyboard's position and nothing else may use it. Type is IBM Plex Sans + Mono, latin
+      subset, three woff2 files committed under `web/public/fonts/` because the daemon has no
+      egress. Every ink step lighter and every size a step larger than before.
+- [x] C2. Selection affordance -- bigger, prettier checkboxes, tuned for photo tiles.
       Current: native `<input type="checkbox" class="accent-blue-500">` at `top-1 left-1`
       inside a `bg-black/50` chip (`web/src/components/Gallery.tsx:229`). Too small to hit on
       a phone, and it disappears until hover. See BUG-1.
-- [ ] C3. Restyle the tile: badges, pin toggle, archived/pinned states, hover/focus rings.
-- [ ] C4. Restyle the file browser table, filter bar, selection bar, status bar, config panel.
-- [ ] C5. Empty states, loading states, error states.
+- [x] C3. Restyle the tile: badges, pin toggle, archived/pinned states, hover/focus rings.
+- [x] C4. Restyle the file browser table, filter bar, selection bar, status bar, config panel.
+- [x] C5. Empty states, loading states, error states.
+- [ ] C7. **`Lightbox.tsx` is deliberately not swept** -- BUG-3 is being fixed in it in
+      another worktree and a parallel restyle would collide. It still carries raw Tailwind
+      defaults; sweep it when that branch merges.
 - [x] C6. Light mode: **no**. Dark only, decided in the interview.
 
 ## D. Keyboard -- vim-flavoured navigation
@@ -308,7 +316,11 @@ Notes that decided those:
 
 Not in the owner's notes -- found by screenshotting the running UI at 1440x900 and 390x844.
 
-- [ ] **BUG-1. Gallery selection is unreachable on a touch device.** The tile checkbox is
+- [x] **BUG-1. Gallery selection is unreachable on a touch device.** Fixed in 93affd0;
+      two browser tests at a 390px viewport hold it. The pin toggle had the same defect and
+      was fixed alongside.
+
+  Original diagnosis: The tile checkbox is
       `opacity-0 group-hover:opacity-100` (`web/src/components/Gallery.tsx:227`). A phone has
       no hover, so the checkbox never appears, and the only other way in --
       `anySelected` -- cannot be reached because nothing can be selected first. The
