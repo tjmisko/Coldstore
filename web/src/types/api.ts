@@ -5,6 +5,15 @@ export type FileStatus =
   | "restoring"
   | "missing";
 
+/** The two pins D2 keeps apart: "restore" is applied automatically by every
+ *  restore, "user" is an explicit press and is never downgraded to "restore". */
+export type PinSource = "user" | "restore";
+
+/** Sort keys GET /api/v1/files understands. "pinned_at" is ascending -- oldest
+ *  pin first -- because the auto-pins an owner has forgotten are the ones the
+ *  wedge banner sends them to triage. */
+export type FileSort = "mtime" | "size" | "name" | "pinned_at";
+
 export type JobAction = "restore" | "archive" | "scan";
 export type JobState = "pending" | "running" | "done" | "failed";
 
@@ -33,7 +42,7 @@ export interface FileRecord {
   pinned_at: number | null;
   /** "restore" is the automatic pin a restore applies; "user" is explicit and
    *  is never downgraded to "restore". */
-  pin_source: "" | "user" | "restore";
+  pin_source: "" | PinSource;
   thumb_attempts: number;
   thumb_last_attempt?: number;
   thumb_error?: string;

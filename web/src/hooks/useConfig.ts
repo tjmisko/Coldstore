@@ -1,117 +1,221 @@
-import { useState, useEffect, useCallback } from "react";
-import type { FolderConfig, PersistentPath, StatusResponse } from "../types/api";
+import { useCallback, useEffect, useState } from "react";
+import { ApiRequestError, api, errorMessage } from "../lib/api";
+import type {
+  CatalogEvent,
+  FolderConfig,
+  PersistentPath,
+  StatusResponse,
+  UpdateFolderRequest,
+} from "../types/api";
 
-// Each hook below loads once on mount and exposes `refetch` for callers.
-//
-// The mount effects deliberately `await refetch()` inside an async IIFE instead of
-// calling `refetch()` directly. The state update inside refetch always happens after
-// `await fetch(...)`, so it was never actually synchronous, but calling an async
-// function straight from an effect body trips react-hooks/set-state-in-effect. The IIFE
-// makes the asynchrony explicit to the linter. Runtime behavior is unchanged: one fetch
-// per mount, state set when it resolves.
+/** Ten seconds. over_budget, wedged and the budget bars have to move while a
+ *  bulk job runs, and a dashboard that only updates when the owner presses
+ *  refresh is one that reports a wedge they cleared five minutes ago. */
+const STATUS_POLL_MS = 10_000;
 
-export function useStatus() {
-  const [status, setStatus] = useState<StatusResponse | null>(null);
-
-  const refetch = useCallback(async () => {
-    try {
-      const res = await fetch("/api/v1/status");
-      setStatus(await res.json());
-    } catch (err) {
-      console.error("Failed to fetch status:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    void (async () => {
-      await refetch();
-    })();
-  }, [refetch]);
-
-  const triggerScan = useCallback(async () => {
-    try {
-      await fetch("/api/v1/scan", { method: "POST" });
-    } catch (err) {
-      console.error("Failed to trigger scan:", err);
-    }
-  }, []);
-
-  return { status, refetch, triggerScan };
+export interface StatusState {
+  status: StatusResponse | null;
+  error: string | null;
+  /** The HTTP status of the last failure, so the caller can tell "wrong
+   *  password" from "daemon is not running". They need different sentences. */
+  errorStatus: number | null;
+  refetch(): Promise<void>;
 }
 
-export function useFolders() {
-  const [folders, setFolders] = useState<FolderConfig[]>([]);
+export function useStatus(): StatusState {
+  const [status, setStatus] = useState<StatusResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [errorStatus, setErrorStatus] = useState<number | null>(null);
 
-  const refetch = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const res = await fetch("/api/v1/folders");
-      setFolders(await res.json());
+      const next = await api.status();
+      if (signal?.aborted) return;
+      setStatus(next);
+      setError(null);
+      setErrorStatus(null);
     } catch (err) {
-      console.error("Failed to fetch folders:", err);
+      if (signal?.aborted) return;
+      setError(errorMessage(err));
+      setErrorStatus(err instanceof ApiRequestError ? err.status : null);
     }
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      await load(controller.signal);
+      if (controller.signal.aborted) return;
+      timer = setTimeout(() => void tick(), STATUS_POLL_MS);
+    };
+
+    void tick();
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [load]);
+
+  const refetch = useCallback(() => load(), [load]);
+  return { status, error, errorStatus, refetch };
+}
+
+export interface FoldersState {
+  folders: FolderConfig[];
+  error: string | null;
+  /** Narrowed to the three fields the UI owns. With Partial<FolderConfig> the
+   *  first budget editor written against it would have PUT syncthing_path="",
+   *  grace_minutes=0 and enabled=false alongside the budget -- disabling the
+   *  folder on its first save. */
+  updateFolder(label: string, patch: UpdateFolderRequest): Promise<FolderConfig>;
+  refetch(): Promise<void>;
+}
+
+export function useFolders(): FoldersState {
+  const [folders, setFolders] = useState<FolderConfig[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const next = await api.folders();
+      if (signal?.aborted) return;
+      setFolders(next);
+      setError(null);
+    } catch (err) {
+      if (signal?.aborted) return;
+      setError(errorMessage(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    // The await is not decorative. react-hooks/set-state-in-effect inlines a
+    // function called straight from an effect body and sees the setState
+    // inside it as synchronous; behind an await it is what it has always
+    // really been -- a continuation that runs after the request returns.
     void (async () => {
-      await refetch();
+      await load(controller.signal);
     })();
-  }, [refetch]);
+    return () => controller.abort();
+  }, [load]);
 
   const updateFolder = useCallback(
-    async (label: string, config: Partial<FolderConfig>) => {
-      await fetch(`/api/v1/folders/${label}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
-      });
-      refetch();
+    async (label: string, patch: UpdateFolderRequest) => {
+      const updated = await api.updateFolder(label, patch);
+      setFolders((prev) => prev.map((f) => (f.folder_label === label ? updated : f)));
+      return updated;
     },
-    [refetch],
+    [],
   );
 
-  return { folders, updateFolder, refetch };
+  const refetch = useCallback(() => load(), [load]);
+  return { folders, error, updateFolder, refetch };
 }
 
-export function usePersistentPaths(folderLabel: string) {
-  const [paths, setPaths] = useState<PersistentPath[]>([]);
+export interface PersistentPathsState {
+  paths: PersistentPath[];
+  error: string | null;
+  addPath(pattern: string): Promise<void>;
+  deletePath(id: number): Promise<void>;
+  refetch(): Promise<void>;
+}
 
-  const refetch = useCallback(async () => {
-    if (!folderLabel) return;
-    try {
-      const res = await fetch(`/api/v1/folders/${folderLabel}/persistent`);
-      setPaths(await res.json());
-    } catch (err) {
-      console.error("Failed to fetch persistent paths:", err);
-    }
-  }, [folderLabel]);
+export function usePersistentPaths(folderLabel: string): PersistentPathsState {
+  const [paths, setPaths] = useState<PersistentPath[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!folderLabel) {
+        setPaths([]);
+        return;
+      }
+      try {
+        const next = await api.persistentPaths(folderLabel);
+        if (signal?.aborted) return;
+        setPaths(next);
+        setError(null);
+      } catch (err) {
+        if (signal?.aborted) return;
+        setError(errorMessage(err));
+      }
+    },
+    [folderLabel],
+  );
 
   useEffect(() => {
+    const controller = new AbortController();
+    // The await is not decorative. react-hooks/set-state-in-effect inlines a
+    // function called straight from an effect body and sees the setState
+    // inside it as synchronous; behind an await it is what it has always
+    // really been -- a continuation that runs after the request returns.
     void (async () => {
-      await refetch();
+      await load(controller.signal);
     })();
-  }, [refetch]);
+    return () => controller.abort();
+  }, [load]);
 
   const addPath = useCallback(
     async (pattern: string) => {
-      await fetch(`/api/v1/folders/${folderLabel}/persistent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pattern }),
-      });
-      refetch();
+      await api.addPersistentPath(folderLabel, pattern);
+      await load();
     },
-    [folderLabel, refetch],
+    [folderLabel, load],
   );
 
   const deletePath = useCallback(
     async (id: number) => {
-      await fetch(`/api/v1/folders/${folderLabel}/persistent/${id}`, {
-        method: "DELETE",
-      });
-      refetch();
+      await api.deletePersistentPath(folderLabel, id);
+      await load();
     },
-    [folderLabel, refetch],
+    [folderLabel, load],
   );
 
-  return { paths, addPath, deletePath, refetch };
+  const refetch = useCallback(() => load(), [load]);
+  return { paths, error, addPath, deletePath, refetch };
+}
+
+/** useEvents reads the audit log. warningsOnly is the default the ConfigPanel
+ *  needs: one enforcement pass writes hundreds of `archive` rows, so an
+ *  unfiltered "last 10 events" would never once show the wedge warning, the
+ *  cold-storage warning or a conflict. */
+export function useEvents(
+  folder: string,
+  options: { warningsOnly?: boolean; type?: string; limit?: number } = {},
+) {
+  const { warningsOnly = true, type, limit = 10 } = options;
+  const [events, setEvents] = useState<CatalogEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const next = await api.events({ folder, type, warningsOnly, limit });
+        if (signal?.aborted) return;
+        setEvents(next);
+        setError(null);
+      } catch (err) {
+        if (signal?.aborted) return;
+        setError(errorMessage(err));
+      }
+    },
+    [folder, type, warningsOnly, limit],
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    // The await is not decorative. react-hooks/set-state-in-effect inlines a
+    // function called straight from an effect body and sees the setState
+    // inside it as synchronous; behind an await it is what it has always
+    // really been -- a continuation that runs after the request returns.
+    void (async () => {
+      await load(controller.signal);
+    })();
+    return () => controller.abort();
+  }, [load]);
+
+  const refetch = useCallback(() => load(), [load]);
+  return { events, error, refetch };
 }

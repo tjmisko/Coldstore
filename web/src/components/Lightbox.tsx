@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { formatDateTime, formatSize } from "../lib/format";
+import type { FileActions } from "../hooks/useFileWorkspace";
 import type { FileRecord } from "../types/api";
+import { PinToggle } from "./PinToggle";
 
 interface LightboxProps {
   files: FileRecord[];
@@ -7,29 +10,22 @@ interface LightboxProps {
   onClose: () => void;
   onLoadMore: () => void;
   hasMore: boolean;
+  /** The same actions the grid and the table use, so a pin applied here
+   *  repaints the row behind the lightbox without a refetch. */
+  actions: FileActions;
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-export function Lightbox({ files, initialIndex, onClose, onLoadMore, hasMore }: LightboxProps) {
+export function Lightbox({
+  files,
+  initialIndex,
+  onClose,
+  onLoadMore,
+  hasMore,
+  actions,
+}: LightboxProps) {
   const [index, setIndex] = useState(initialIndex);
   const [showMeta, setShowMeta] = useState(false);
-  const [restoring, setRestoring] = useState(false);
+  const [busy, setBusy] = useState(false);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const file = files[index];
@@ -50,21 +46,22 @@ export function Lightbox({ files, initialIndex, onClose, onLoadMore, hasMore }: 
     }
   }, [index]);
 
-  const handleRestore = useCallback(async () => {
-    if (restoring || file.status !== "archived") return;
-    setRestoring(true);
-    try {
-      await fetch(`/api/v1/files/${file.id}/restore`, { method: "POST" });
-    } catch (err) {
-      console.error("Restore failed:", err);
-    } finally {
-      setRestoring(false);
-    }
-  }, [file, restoring]);
-
-  const handleDownload = useCallback(() => {
-    window.open(`/api/v1/files/${file.id}/download`, "_blank");
-  }, [file]);
+  // Every action routes through the workspace, which checks the response and
+  // writes the returned record back into the list. The old handler awaited
+  // fetch() with no res.ok check and no repaint: a restore that 409ed and a
+  // restore that worked both left the button exactly as it was.
+  const run = useCallback(
+    async (action: () => Promise<void>) => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await action();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy],
+  );
 
   // Keyboard navigation
   useEffect(() => {
@@ -126,7 +123,9 @@ export function Lightbox({ files, initialIndex, onClose, onLoadMore, hasMore }: 
     }
   };
 
-  const imgSrc = file.thumbnail_path
+  // Only a file that produced a thumbnail is renderable as an image, and only
+  // one that is on the device or in cold storage can be downloaded at all.
+  const imgSrc = file.thumbnail_path && file.status !== "missing"
     ? `/api/v1/files/${file.id}/download`
     : "";
 
@@ -187,14 +186,24 @@ export function Lightbox({ files, initialIndex, onClose, onLoadMore, hasMore }: 
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">{file.filename}</p>
             <p className="text-xs text-neutral-400">
-              {formatSize(file.size_bytes)} &middot; {formatDate(file.file_mtime)} &middot;{" "}
+              {formatSize(file.size_bytes)} &middot; {formatDateTime(file.file_mtime)} &middot;{" "}
               <span className={file.status === "archived" ? "text-amber-400" : "text-green-400"}>
                 {file.status}
               </span>
+              {file.pinned && (
+                <span className="text-indigo-300">
+                  {" "}
+                  &middot; pinned{file.pin_source === "restore" ? " on restore" : " by you"}
+                </span>
+              )}
             </p>
           </div>
 
           <div className="flex items-center gap-2 ml-4">
+            <PinToggle
+              file={file}
+              onPin={(pinned) => void run(() => actions.setPinned(file, pinned))}
+            />
             <button
               onClick={() => setShowMeta(!showMeta)}
               className="px-3 py-1.5 text-xs rounded-md bg-neutral-700 hover:bg-neutral-600 transition-colors"
@@ -202,18 +211,27 @@ export function Lightbox({ files, initialIndex, onClose, onLoadMore, hasMore }: 
               Info
             </button>
             <button
-              onClick={handleDownload}
+              onClick={() => actions.download(file)}
               className="px-3 py-1.5 text-xs rounded-md bg-blue-600 hover:bg-blue-500 transition-colors"
             >
               Download
             </button>
             {file.status === "archived" && (
               <button
-                onClick={handleRestore}
-                disabled={restoring}
-                className="px-3 py-1.5 text-xs rounded-md bg-green-600 hover:bg-green-500 disabled:opacity-50 transition-colors"
+                onClick={() => void run(() => actions.restore(file))}
+                disabled={busy}
+                className="px-3 py-1.5 text-xs rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 transition-colors"
               >
-                {restoring ? "Restoring..." : "Restore to Sync"}
+                {busy ? "Working..." : "Restore to Sync"}
+              </button>
+            )}
+            {file.status === "synced" && (
+              <button
+                onClick={() => void run(() => actions.archive(file))}
+                disabled={busy}
+                className="px-3 py-1.5 text-xs rounded-md bg-amber-600 hover:bg-amber-500 disabled:opacity-50 transition-colors"
+              >
+                {busy ? "Working..." : "Archive"}
               </button>
             )}
           </div>
@@ -232,11 +250,12 @@ export function Lightbox({ files, initialIndex, onClose, onLoadMore, hasMore }: 
               <span className="text-neutral-500">Type:</span> {file.mime_type || file.extension}
             </div>
             <div>
-              <span className="text-neutral-500">First seen:</span> {formatDate(file.first_seen)}
+              <span className="text-neutral-500">First seen:</span> {formatDateTime(file.first_seen)}
             </div>
             {file.archived_at && (
               <div>
-                <span className="text-neutral-500">Archived:</span> {formatDate(file.archived_at)}
+                <span className="text-neutral-500">Archived:</span>{" "}
+                {formatDateTime(file.archived_at)}
               </div>
             )}
             <div>
