@@ -242,9 +242,9 @@ requires the owner.
       the silent downgrade hazard applies to pre-migration binaries.
 - [ ] Remove the false claim that archived content can be rebuilt by scanning hot folders.
 - [ ] Add document preview and EPUB endpoints to the API architecture list.
-- [ ] Document preview readers and FileBrowser lightbox flow in the React guide.
+- [x] Document preview readers and FileBrowser lightbox flow in the React guide.
 - [ ] Update the root docs index for interface/keymap/tagging documents.
-- [ ] Mark `docs/control-plane-design.md` historical where its old build instructions conflict
+- [x] Mark `docs/control-plane-design.md` historical where its old build instructions conflict
       with current `.gitkeep` and dependency rules.
 - [ ] Remove or repair the ignored stale `coldstore-demo.toml`; `make demo` itself uses the
       generated safe loopback config.
