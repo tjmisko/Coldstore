@@ -19,6 +19,8 @@ It builds to nine decisions:
 | T7 | Tag writes do **not** take the `Mover` mutex, because a tag changes nothing quota enforcement reads. The moment a tag gates offloading, that stops being true. |
 | T8 | "Rename a folder" means renaming a **directory inside** a Syncthing folder. It rewrites three trees and two columns and runs as a durable job. The coldstore folder **label** is not renameable; a cosmetic `display_name` is offered instead. |
 | T9 | Live Photos are a first-class **pair group**. A member is never archived, restored or renamed alone. |
+| T10 | Metadata reading is **hybrid**: pure Go for the bulk capture-time and GPS path, `ffprobe` for QuickTime, and `exiftool` **as a subprocess** — never as an import — for the Live Photo still probe only. |
+| T11 | Tagging registers `t` / `T` as operators in the existing grammar. Because an operator carries a **range but not an argument**, there are three tagging paths: picker, repeat, and leader-prefixed quick slots. |
 
 ---
 
@@ -79,16 +81,24 @@ already excluded by `skipScanEntry` in `internal/daemon/scanner.go`.
 stripping events, and they are frequently confused:
 
 - **The share sheet.** Sharing photos through the iOS share sheet exposes an *Options*
-  control with a **Location** toggle. With it off — and it defaults off for some share
-  targets — the exported copy has its **GPS IFD removed entirely** while
-  `DateTimeOriginal` survives. A photo that arrives with a date and no location has very
-  often been through this.
-- **Transfer/format conversion.** *Settings → Camera → Formats* chooses what the camera
-  **writes**: "High Efficiency" produces `.HEIC` + HEVC `.MOV`, "Most Compatible" produces
-  `.JPG` + H.264 `.MOV`. Separately, *Settings → Photos → Transfer to Mac or PC* chooses
-  whether a transfer is allowed to transcode HEIC to JPEG ("Automatic") or must hand over
-  the original ("Keep Originals"). A transcode preserves EXIF including GPS, but it is a
-  re-encode; and it may renumber or rename.
+  control with a **Location** toggle (added in iOS 15). With it off, the exported copy has
+  its **GPS tags removed** while `DateTimeOriginal`, the device model and the camera
+  settings all survive — it strips location, not metadata in general. A photo that arrives
+  with a date and no location has very often been through this. Reportedly AirDrop, email
+  attachments and direct file transfers preserve everything including GPS, and the toggle
+  binds only for share targets that honour it. *Unverified against a device; treat the
+  behaviour as the likely explanation for missing GPS, not as a rule to code against.*
+- **Two settings are routinely confused, and they are not the same setting.**
+  - *Settings → Camera → Formats* controls what the camera **records**: **High Efficiency**
+    writes `.HEIC` + HEVC `.MOV`; **Most Compatible** writes `.JPG` + H.264 `.MOV`.
+  - *Settings → Photos → Transfer to Mac or PC* controls **USB export**: **Automatic**
+    transcodes HEIC→JPEG and HEVC→H.264; **Keep Originals** hands over the original bytes.
+
+  There is no "Most Compatible" under *Transfer to Mac or PC*. The distinction matters
+  beyond pedantry: **Keep Originals is the setting that preserves Live Photo pairing**, and
+  Automatic is a common reason Live Photos arrive as bare videos with no still beside them
+  (see 1.6). A transcode does preserve EXIF including GPS, but it is a re-encode and it may
+  renumber or rename.
 
 **Consequence for the design:** coldstore must treat *absent* metadata as the normal case,
 not the error case. A photo with no capture date and no location is not a failure to
@@ -125,14 +135,20 @@ unmodified modern iPhone writes. Any library that only handles JPEG is not a can
 The three datetime tags are `YYYY:MM:DD HH:MM:SS` ASCII and are **naive** — they carry no
 timezone at all. That is not a defect of the format; it is a deliberate property. The offset
 tags (0x9010 `OffsetTime`, 0x9011 `OffsetTimeOriginal`, 0x9012 `OffsetTimeDigitized`) were
-added by EXIF 2.31 (2016) precisely to repair it, and iOS has written them for several major
-versions — but not forever, and not for files that have been through a transcoder that
-dropped them.
+added by EXIF 2.31 (2016) precisely to repair it. **[UNVERIFIED]** how long iOS has written
+them: "iOS 13 and later" is repeated widely in secondary sources with no authoritative Apple
+documentation behind it, so this document does not state it. What *is* **[VERIFIED]** is the
+negative — an iOS 5.1.1 original carries `DateTimeOriginal` and no `OffsetTime*`, no GPS and
+no maker note — and that is the case the design has to survive anyway. **Absent offset is a
+first-class case at every iOS version**, and no code may branch on an assumed one.
 
 For QuickTime containers the equivalents are:
 
-- `com.apple.quicktime.creationdate` — an ISO 8601 string **with an offset**, e.g.
-  `2023-07-14T18:32:07+0200`. This is the good one.
+- `com.apple.quicktime.creationdate` — an ISO 8601 string **with an offset**. This is the
+  good one, and it has a trap: **Apple writes the offset without a colon** —
+  `2026-03-14T15:09:26-0700`, not `-07:00`. `time.RFC3339` will **not** parse that. Use the
+  layout `"2006-01-02T15:04:05-0700"`, and accept the colon form as a second attempt for
+  non-Apple writers.
 - `creation_time` from the `mvhd` box — seconds since 1904-01-01, **UTC**, with no offset
   recorded. ffprobe surfaces it as an RFC 3339 UTC string. Usable, but it tells you the
   instant and not the wall clock, which is the wrong half (see 1.4).
@@ -191,6 +207,16 @@ holds the offset **when it was actually recorded** and NULL when it was not, and
 UTC epoch is stored**. Anything that needs an instant computes it in Go from the pair, and
 refuses to compute one when the offset is NULL rather than substituting a default.
 
+**The Go trap that makes this decision load-bearing rather than merely tidy.** EXIF readers
+hand back a `time.Time`, and when the file recorded no offset they default it to UTC. That
+is the right default — it is host-timezone independent — but it means an absent offset and a
+genuine `+00:00` are **indistinguishable in the resulting `time.Time`**. Worse, the
+`*time.Location` such a reader exposes for `OffsetTimeOriginal` is correctly `nil` when the
+tag is absent, and **a nil `*time.Location` prints as `"UTC"`**, because Go maps nil to UTC
+in `String()`. Logging it will tell you the photo was taken in UTC when the truth is that
+nobody knows. Test the pointer with `== nil`; carry the nil through to a NULL column; never
+let the formatted string decide.
+
 The UI is required to render an unknown offset as unknown — "18:32, timezone not recorded" —
 and never to render a naive time in the browser's local zone, which is the default behaviour
 of `new Date(...)` and would be a lie for every photo taken away from home.
@@ -198,6 +224,13 @@ of `new Date(...)` and would be a lie for every photo taken away from home.
 `SubSecTimeOriginal` is appended as `.sss` when present. It matters more than it looks: a
 burst writes ten frames inside one second, and without sub-seconds the only tiebreak is `id`,
 which is scan order, not shutter order.
+
+**It is a string of fractional digits, not a number, and leading zeros are significant.**
+`"05"` means `.05 s` and `"537"` means `.537 s`. Parse it as an integer and `"05"` becomes 5,
+which appended as `.5` is ten times wrong and reorders a burst. Concatenate the digits after
+the decimal point; never round-trip through a numeric type. (exiftool with `-n` compounds
+this by returning `537` as a float64 and `"05"` as a string on the same field, so a fixture
+generator has to handle both.)
 
 ### 1.5 GPS
 
@@ -219,28 +252,47 @@ when `OffsetTimeOriginal` is missing: `offset ≈ round(naive_local − gps_utc)
 15 minutes.
 
 **Apple QuickTime.** Videos and Live Photo movies carry
-`com.apple.quicktime.location.ISO6709`, an ISO 6709 string in Apple's fixed-width form:
+`com.apple.quicktime.location.ISO6709`. **This is not a fixed-width format and an earlier
+draft of this document was wrong to say it was.** ISO 6709 admits three encodings of the same
+coordinate, and all three occur in files coldstore will actually see:
 
 ```
-+37.7749-122.4194+010.000/
-±DD.dddd±DDD.dddd±AAA.aaa/
++37.7749-122.4194+52.300/          decimal degrees, unpadded  (exiftool writes this)
++41.1971+019.1686+089.373/         decimal degrees, zero-padded  (iOS writes this)
++372410.339-1220038.701+4.35CRSWGS_84/   degrees-minutes-seconds, in the wild
 ```
 
-Parsing rules that a naive `strings.Split` gets wrong:
+A parser that assumes `±DD.dddd±DDD.dddd` fails on the third form outright and mis-splits
+the second. Follow ExifTool's reference parser and try **three regexps in this order**,
+first match wins — the order is load-bearing, because the DMS pattern will happily match a
+decimal-degrees string and read the wrong digits:
 
-- Every field is **sign-prefixed**, including the first. The sign is the field delimiter;
+1. decimal degrees — `±DD(.ddd)?±DDD(.ddd)?`
+2. degrees + decimal minutes — `±DDMM(.mmm)?±DDDMM(.mmm)?`
+3. degrees, minutes, seconds — `±DDMMSS(.sss)?±DDDMMSS(.sss)?`
+
+The rules that hold across all three:
+
+- Every field is **sign-prefixed**, including the first. The sign *is* the field delimiter;
   there is no separator character.
-- Latitude precedes longitude, and longitude carries **three** integer digits where latitude
-  carries two.
+- Latitude precedes longitude, and longitude carries **one more** integer degree digit than
+  latitude. That digit count is what disambiguates the three forms.
 - The altitude field is **optional**. `+37.7749-122.4194/` is legal.
-- A CRS suffix may follow the `/`, e.g. `CRSWGS_84`. Ignore it, but do not choke on it.
-- The trailing `/` is mandatory in the standard and is present in Apple's output; accept its
+- A CRS suffix may follow, e.g. `CRSWGS_84`, with or without an intervening `/`. Ignore it,
+  but do not choke on it.
+- The trailing `/` is mandatory in the standard and present in Apple's output; accept its
   absence anyway rather than rejecting the tag.
 
-Implement this as a single regexp with named groups and a table-driven test over the four
-shapes above plus a southern-hemisphere and a below-sea-level case. ffprobe surfaces the raw
-string in `format.tags` under both `com.apple.quicktime.location.ISO6709` and, for some
-writers, a normalised `location` key; read the reverse-DNS one first.
+Table-driven tests must cover all seven shapes: the three encodings, altitude present and
+absent, a CRS suffix, a missing trailing slash, and a southern-hemisphere / below-sea-level
+coordinate. Validate the expectations against `exiftool` offline (1.8).
+
+**Two different atoms, both worth reading.** ffprobe exposes
+`com.apple.quicktime.location.ISO6709` from the QuickTime **Keys/`mdta`** atom — this is
+Apple's — and a plain `location` (plus `location-eng`) from the **`udta` `©xyz`** atom, which
+is what Android and other cameras write. They are not two spellings of one tag. Read the
+Apple key first and fall back to `location`; a folder that has been through more than one
+phone will contain both.
 
 **Storage.** `gps_lat REAL`, `gps_lon REAL`, `gps_altitude_m REAL`, `gps_accuracy_m REAL`,
 all NULL when unknown, all WGS84 signed decimal degrees. REAL, not TEXT: a bounding-box
@@ -259,11 +311,41 @@ IMG_1234.HEIC     the still
 IMG_1234.MOV      ~3 seconds of video, HEVC, silent-ish
 ```
 
-They are bound together by an Apple UUID written into both:
+They are bound together by an Apple UUID written into both, and **the UUID is the authority
+— the shared stem is only a hint**:
 
-- In the `.MOV`, the QuickTime tag `com.apple.quicktime.content.identifier`.
+- In the `.MOV`, the QuickTime tag `com.apple.quicktime.content.identifier`. **[VERIFIED]**
+  present in `ffprobe`'s `format.tags`, which the daemon already runs. This half is free.
 - In the `.HEIC`, `ContentIdentifier` inside the **Apple maker note** (`MakerApple` tag
-  0x0011) in the EXIF.
+  0x0011) in the EXIF. ExifTool's own `Apple.pm` documents 0x0011 with the comment *"if
+  defined, there is a live photo associated with the video"*; Apple's internal name for it is
+  `AssetIdentifier`. **[VERIFIED] No pure-Go library reads it.** `evanoberholster/imagemeta`
+  has the API surface and the tag constant but returns garbage, and its upstream test asserts
+  only hardcoded defaults and skips when its fixture is absent, so the field is effectively
+  untested (1.8).
+
+**So the still half needs `exiftool`, and the design pays for it deliberately and narrowly.**
+
+| Half | Reader | Cost |
+|---|---|---|
+| `.MOV` | `ffprobe`, already running | free |
+| `.HEIC` / `.JPG` of a **Live Photo candidate only** | `exiftool` via `-stay_open` | ~3 ms/file resident |
+| Every other still | pure Go | ~18 µs/file |
+
+`-stay_open` is what makes this affordable: a spawned-per-file `exiftool` costs 58.7 ms, of
+which ~55 ms is interpreter startup, so a resident process is twenty times cheaper and feeding
+it one file at a time costs the same as batching.
+
+**Deploy implication, stated because this project is careful about its runbook:** `exiftool`
+becomes a **conditional** runtime dependency, exercised on the small fraction of stills that
+look like Live Photo candidates — not a blanket one, and not on the bulk capture-time and GPS
+path. Where it is absent the daemon logs once per pass and pairing falls back to the
+narrowing heuristic below, which is **degraded and known to be degraded**, not silently
+equivalent.
+
+Neighbouring Apple maker-note tags worth knowing about because they answer adjacent
+questions: `BurstUUID` (0x000b) groups a burst, and `ImageUniqueID` (0x0015) identifies a
+single capture.
 
 Related iOS naming conventions that appear in the same folders:
 
@@ -285,7 +367,15 @@ be applied again.
   - `stem:<dir>/<stem>` when the pairing was inferred from the filename.
 - `pair_source TEXT NOT NULL DEFAULT ''` — `''` | `'content_id'` | `'basename'`.
 
-**Basename inference rules** (used only when no content identifier is available):
+**The stem is a candidate filter, not a pairing decision.** An earlier draft of this
+document made basename matching the fallback *mechanism*, promoted to authority whenever a
+content identifier was unavailable. That is withdrawn. Its job now is to decide **which
+stills are worth an `exiftool` probe** — which is what keeps the conditional dependency
+conditional — and the UUID decides the grouping. Only where `exiftool` is genuinely absent
+does a stem-derived key get written, and `pair_source` records that so the UI and the
+offloader both know the group is a guess.
+
+**Candidate rules** (a `.MOV` and a still are worth probing together when):
 
 - Same folder, same directory, same case-folded stem, and at least one member is a video
   extension or an `.aae`.
@@ -295,12 +385,28 @@ be applied again.
 - Capture times, when both are known, must be within 60 seconds. This is what stops
   `notes.txt` and `notes.mov` in a Documents folder being called a Live Photo.
 
+A candidate pair is confirmed by comparing the `.MOV`'s
+`com.apple.quicktime.content.identifier` against the still's `ContentIdentifier`. Equal is a
+pair; unequal is **not** a pair, however similar the names, and that negative answer is the
+whole point of doing the probe.
+
 **What breaks basename matching, and why the content identifier is preferred:** an import
-that renumbers on collision (`IMG_1234 (1).HEIC`), a user rename of one member, a folder
-merge that puts two devices' `IMG_1234` in one directory, and any tool that re-encodes the
-video to `.mp4` with a different stem. The content identifier survives all of these; the
-stem survives none of them. Basename matching is the fallback, it is marked as such in
-`pair_source`, and the UI says which it used.
+that renumbers on collision, a user rename of one member, a folder merge that puts two
+devices' `IMG_1234` in one directory, and any tool that re-encodes the video to `.mp4` with a
+different stem. The content identifier survives all of these; the stem survives none of them.
+
+The renumbering case is worth spelling out, because it does not merely fail to pair — **it
+pairs the wrong files**. A documented real collision has the true pair being `IMG_1234.HEIC`
++ `IMG_1234(2).MOV`, with an unrelated `IMG_1234.MOV` also in the directory. Stem matching
+confidently produces the wrong group, and the consequence is that archiving takes a still
+away from its own video while protecting a stranger's. Basename matching is therefore a
+cheap **first pass** to narrow candidates, never the decision: where a content identifier
+exists on either half it wins, `pair_source` records which rule fired, and the UI says so.
+
+**A transcoding export breaks pairing at the source.** *Transfer to Mac or PC → Automatic*
+(1.1) re-encodes HEVC to H.264 and can deliver the video without its still, so a folder can
+legitimately contain a bare `.MOV` that never had a partner. An unpaired video is not
+evidence of a bug in this code.
 
 **The rule the rest of the system obeys:** `ExpandPairGroups(ids []int64) []int64` is a
 single catalog primitive, and **every** entry point that selects files for a move calls it:
@@ -365,24 +471,107 @@ Constraints: the target is a low-power 2-core home server with a few gigabytes o
 shells out to ffmpeg for HEIF decode and video frames); the binary is a single static
 artifact and CGO is already in play via `mattn/go-sqlite3`.
 
-**Decision: a pure-Go EXIF reader for still images, `ffprobe` for QuickTime containers.**
+**Decision: a pure-Go reader for the bulk path, `bep/imagemeta` as a cross-check, `ffprobe`
+for QuickTime containers, and `exiftool` as a subprocess for the Live Photo still probe
+only.** Everything below was measured or read from source on a developer machine. Claims are
+marked **[VERIFIED]** (someone ran it), **[SOURCE]** (read from the library's or ExifTool's
+own code) or **[UNVERIFIED]** (secondary sources only). That distinction is kept visible
+rather than flattened into prose, because the unverified items are exactly the ones that
+should not be coded against.
 
-| Candidate | Verdict |
+| Candidate | Licence | Pure Go | Maintained | HEIC | Apple 0x0011 | Verdict |
+|---|---|---|---|---|---|---|
+| `github.com/evanoberholster/imagemeta` | MIT | yes | yes | yes **[VERIFIED]** | **no** | **Leading candidate for the bulk path — not settled. See the blocker below.** It reads HEIC and it is fast (18.4 µs/file). It *appears* to support Apple maker notes — `exif.MakerNote.Apple.ContentIdentifier`, `TagAppleContentID = 0x0011` — but **[VERIFIED]** it returns garbage for the field, and its upstream test asserts only hardcoded defaults and skips when its fixture is absent, so the support is effectively untested. Treat 0x0011 as unavailable from pure Go. |
+| `github.com/bep/imagemeta` | MIT | yes | yes | yes **[VERIFIED]** | no | **Adopt as the cross-check, not the primary** — no Apple maker notes, and it returns **unsigned** GPS with a separate ref (`GPSLongitude = 122.4194`, `GPSLongitudeRef = "W"`), so the caller applies the sign. **[VERIFIED]** it reads HEIC files whose `iloc` precedes `iinf`, which is precisely what the primary drops. The two libraries' HEIC failure modes are **complementary**, which makes a 15 µs re-probe on an empty result cheap insurance rather than belt-and-braces. |
+| `github.com/dsoprea/go-exif/v3` | MIT | yes | **no** (last push 2024) | **not alone** | unverified | **Reject.** Parses EXIF/TIFF blobs only. HEIC needs `go-heic-exif-extractor` (last push 2021), JPEG needs `go-jpeg-image-structure` (2022): a three-repo pipeline whose container halves are four and five years stale. |
+| `github.com/rwcarlsen/goexif` | BSD-2 | yes | **no** (2022, self-described alpha) | no | no | **Reject, and it is disqualifying rather than merely dated. [VERIFIED]** `DateTime()` returns the value in `time.Local` — the *server's* zone — so one file yields three different instants under three `TZ` values. It also cannot see `OffsetTimeOriginal` at all (its tag table predates EXIF 2.31) and reports the tag absent when it is present. Both failures are silent. |
+| `github.com/barasher/go-exiftool` | **GPL-3.0** | no | yes | yes | yes | **Do not import it. Drive the `exiftool` binary as a subprocess instead** — see below. |
+| `exiftool` as a subprocess (`-stay_open True -@ -`) | — | conditional runtime dep | — | yes **[VERIFIED]** | **yes [VERIFIED]** | **Adopt for the Live Photo still probe only** (1.6), and offline as the fixture oracle. 2.7–3.1 ms/file resident. |
+| `ffprobe -v quiet -print_format json -show_format -show_streams` | — | already a dependency | n/a | container only | n/a | **Adopt for `.mov`/`.mp4`, and for nothing else. [VERIFIED]** exposes `com.apple.quicktime.content.identifier`, `com.apple.quicktime.creationdate`, `com.apple.quicktime.location.ISO6709`, `location`/`location-eng` and `creation_time` in `format.tags`; ffmpeg passes every `mdta`/Keys atom through verbatim. Reuse `internal/thumbnail`'s timeout, process group and cancel func rather than writing a second `exec.CommandContext` call site. |
+| `trimmer-io/go-xmp` | — | — | — | — | — | **Not needed.** Only the export path emits XMP, and that is a small fixed template. |
+
+**Why `exiftool` is a subprocess and never an import.** `barasher/go-exiftool` is **GPL-3.0**,
+the only non-permissive licence in this table. Importing it into the Go module would make the
+built binary a derivative work under GPL-3.0. The project currently ships no `LICENSE` at
+all, so that is not an immediate legal problem — it is worse than one: it would **silently
+foreclose ever releasing coldstore under a permissive licence**, an irreversible decision
+taken as a side effect of picking a metadata library.
+
+It is also unnecessary, because **this codebase already has the right pattern**.
+`internal/thumbnail/thumbnail.go:162` invokes `ffmpeg` — itself GPL/LGPL — through
+`exec.CommandContext` as a separate process, which does not make the binary a derivative
+work. Do exactly the same for exiftool: drive `exiftool -stay_open True -@ -` over
+stdin/stdout using the existing harness — `Setpgid`, process-group `SIGKILL` on cancel,
+`WaitDelay`, per-invocation deadline. That is on the order of a hundred lines, it reuses a
+harness that is already tested, it keeps the licence posture exactly where it is, and it
+preserves the measured 2.7–3.1 ms/file resident cost.
+
+Two gotchas for that wrapper: pass `-n` (`NoPrintConversion`) or GPS comes back as
+`37 deg 46' 29.64" N` instead of a number; and with `-n`, `SubSecTimeOriginal` arrives as a
+**float64 for `537` but a string for `"05"`** on the same field, so the decoder must accept
+both types — and must preserve the leading zero, per 1.4.
+
+> ### ⚠ Unresolved blocker: GPS on files carrying an Apple maker note
+>
+> **[VERIFIED, on a synthetic fixture]** On a file carrying an Apple maker note,
+> `evanoberholster/imagemeta` returned **GPS `0,0`** — it regressed a field that works
+> correctly on files *without* one. The measurement used a synthetic maker note, and the
+> researcher was explicit that a real iPhone file might take a different code path.
+>
+> If it reproduces on real files, the recommended bulk library **silently loses location on
+> every iPhone photo** — one of the two things the owner said he cares about, failing in the
+> mode this document spends section 1.1 warning about: no error, just an empty field that
+> reads as "this photo had no GPS".
+>
+> **The library choice is therefore not settled.** Adoption requires a **real iPhone HEIC**
+> fixture, not a synthetic one, and `0,0` from any reader must be treated as suspicious in
+> its own right — it is both a plausible bug signature and a real coordinate in the Gulf of
+> Guinea.
+
+**ffprobe reads no EXIF from stills at all.** Verified against JPEG and HEIC files carrying
+full EXIF and GPS: it returns nothing for JPEG, and for HEIC it opens the container with the
+mov/mp4 demuxer and reports only `major_brand`, `minor_version` and `compatible_brands`.
+This is worth stating because "we already shell out to ffmpeg for HEIF thumbnails, so let us
+use ffprobe for HEIC metadata too" is the obvious shortcut and it silently yields nothing.
+
+**The HEIC box-order bug, and the design's answer to it.** `evanoberholster/imagemeta`
+**silently drops all EXIF from a HEIC when the `iloc` box precedes `iinf`** inside `meta`.
+It returns no error — just an empty result. The cause is that its `iloc` reader matches
+against an item id that only the `iinf` reader populates. ISO 14496-12 does not mandate box
+order: Apple and Canon write `iinf` first and work; libheif- and Nokia-encoded files write
+`iloc` first and break. This was reproduced by swapping only those two boxes in one file,
+which took it from zero tags to full EXIF and GPS.
+
+The consequence for coldstore is specific and bad. Section 1.1 makes "absent metadata" a
+first-class, honestly-recorded state, and section 3.2 gives the owner an `undated=1` filter
+built on it. This bug would file a photo that *has* a capture date under "we looked and
+there was nothing", permanently, with no error anywhere. So:
+
+> **An empty extraction result from a HEIC is suspicious, not authoritative.** When the
+> primary reader returns no tags at all for a `.heic`/`.heif`, re-probe with
+> `bep/imagemeta` before writing the empty result. If the fallback finds tags, use them and
+> record `captured_source` normally; if both come back empty, the file really has nothing.
+
+That is one extra parse — tens of microseconds — on the small minority of HEICs that return
+nothing, and it is the difference between a correct catalog and a quietly wrong one.
+
+**Cost budget, measured.** Per file, 200 JPEGs, warm cache, on a fast ARM machine; multiply
+by three to ten for the low-power target:
+
+| Path | Cost per file |
 |---|---|
-| `github.com/evanoberholster/imagemeta` (pure Go) | **Leading candidate for stills**, on the grounds that it is the current pure-Go option that reads HEIF/HEIC as well as JPEG/TIFF/DNG, which is the requirement HEIC imposes. **Confirm before adopting**: its license, its HEIC path against a real fixture, and whether it exposes Apple maker notes — the last of those decides whether Live Photo pairing gets content identifiers or falls back to stem matching (1.6). Single-maintainer risk is real and is mitigated by keeping every call behind one interface (1.9), so a replacement is one file. |
-| `github.com/dsoprea/go-exif/v3` (MIT, pure Go) | **Reject as primary.** JPEG and TIFF only without the companion `-image-structure` packages, and the HEIC extractor lives in a separate repo in a family that has had availability problems. Acceptable as a second opinion in a fixture test. |
-| `github.com/rwcarlsen/goexif` | **Reject.** Unmaintained for years, JPEG/TIFF only, no HEIC. |
-| `github.com/barasher/go-exiftool` (wraps Phil Harvey's perl `exiftool`) | **Reject as the runtime path, adopt as the fixture oracle.** exiftool is the reference implementation and it is right about everything, including Apple maker notes. But it is a perl runtime dependency on a box that has none, and a cold invocation costs on the order of 100–200 ms; `-stay_open` amortises that to single-digit milliseconds but adds a long-lived subprocess to supervise. Use it **offline**, on a developer machine, to generate the expected values in `internal/metadata/testdata/`. That gets exiftool's correctness into the test suite without putting perl on the server. |
-| `ffprobe -v quiet -print_format json -show_format -show_streams` | **Adopt for `.mov`/`.mp4`.** Already installed, already wrapped with a timeout, a process group and a cancel func in `internal/thumbnail/thumbnail.go` — reuse that machinery rather than writing a second `exec.CommandContext` call site. It is expected to expose `format.tags` including `com.apple.quicktime.creationdate`, `com.apple.quicktime.location.ISO6709`, `com.apple.quicktime.content.identifier` and `creation_time`; **the content-identifier key in particular must be proven against a real fixture**, because the pairing design leans on it. |
-| `trimmer-io/go-xmp` | **Not needed.** Only the export path emits XMP, and that is a small fixed template; a dependency to write four elements is not worth it. |
+| `bep/imagemeta` | 14.9 µs |
+| `evanoberholster/imagemeta` | 18.4 µs |
+| `rwcarlsen/goexif` | 44.4 µs |
+| `exiftool` via `-stay_open` | 2.7–3.1 ms |
+| `exiftool` spawned per file | 58.7 ms (≈55 ms of it is interpreter startup) |
 
-**Cost budget.** A pure-Go EXIF parse reads the first tens of kilobytes and walks a few
-hundred IFD entries: low single-digit milliseconds of CPU, dominated by the disk seek. An
-`ffprobe` spawn is tens of milliseconds of process setup plus the parse. For a 50,000-file
-camera roll that is roughly a couple of minutes of CPU for the stills and a few minutes for
-the videos, spread across a batched, cancellable, two-worker pass — the same shape and the
-same budget as the existing thumbnail backlog, which is already known to be survivable on
-this hardware.
+Pure-Go extraction is **two to three orders of magnitude cheaper than an exiftool
+subprocess**, and cheaper than the earlier estimate in this document by a similar margin: a
+50,000-file backfill is single-digit seconds of CPU for the stills, not minutes. The video
+half dominates, because each `ffprobe` is a process spawn. The pass is still batched and
+cancellable (1.9) — but for disk-seek and courtesy reasons, not because the parsing is
+expensive.
 
 **The seam.** Everything above sits behind one interface in a new `internal/metadata`
 package:
@@ -864,7 +1053,7 @@ compiled in, and the chunked form costs nothing.
 **The `undo` block** is the exact inverse of what was applied — the ids that actually
 changed, not the ids that were requested. It is what lets `u` in the UI be a single POST
 with no client-side bookkeeping and no undo stack in the daemon, and it is what makes it
-safe for a tag operation to apply without a confirmation dialog (section 5.7).
+safe for a tag operation to apply without a confirmation dialog (section 5.9).
 
 ### 4.5 `PATCH /api/v1/files/{id}` — description and manual capture metadata
 
@@ -928,52 +1117,115 @@ DELETE /api/v1/tags/Trips%2FIceland?cascade=1                       → delete +
 ## 5. The keyboard-first tagging UX
 
 The hard requirement is: *"I want to use this without touching my mouse at all, ever."* The
-keyboard layer being built in parallel provides a real vim operator-pending grammar —
-counts, motions, operators — with leader = space. This section specifies how tagging **fits
-into** that grammar rather than bolting a second keymap beside it.
+keyboard layer provides a real vim operator-pending grammar — counts, motions, operators —
+with leader = space. This section specifies how tagging **fits into** that grammar rather
+than bolting a second keymap beside it.
 
-### 5.1 The composition rule
+It has been rewritten against that layer's actual bindings and its actual command model. Two
+things it originally assumed were wrong: `gt` / `gT` and `<Space>t` were already taken (5.1),
+and **an operator carries a range but not an argument**, so `tt` is two steps rather than one
+and a picker-per-photo cannot be the fast path (5.2). Both corrections shaped everything
+below.
 
-An operator-pending grammar is `[count] operator [count] motion`, where the operator applies
-to everything the motion covers. That is exactly the right shape for tagging, because the
-unit of work in a culling session is "these photos, that tag".
+### 5.1 What the keyboard layer already owns
 
-Three obligations follow, and they are the whole of this section's discipline:
+The grammar, the modes and most of the alphabet exist. This section specifies tagging as an
+addition **inside** that layer, and the first job is to write down what is already spent so
+nothing here quietly collides with it.
 
-1. **Tagging contributes operators and text objects, not one-off chords.** If tagging needs
-   a bespoke `Ctrl+Alt+T`, the grammar has failed.
-2. **Every operator is repeatable with `.`** and undoable with `u`. Vim users press both
-   without thinking, and a grammar where they do nothing is a costume.
-3. **A text input is a MODE, not a focus state.** The current `Gallery.tsx` guards its window
-   shortcuts by checking `target.tagName === "INPUT"`. That check is right for what it does
-   and is not enough here: it cannot distinguish "the owner entered insert mode on purpose"
-   from "a re-render moved focus into an input". The keyboard layer must own an explicit
-   mode variable, and the tagging surfaces must read it.
+| Class | Bound |
+|---|---|
+| Motions | `h` `j` `k` `l` `0` `$` `gg` `G` `<C-d>` `<C-u>` `<C-f>` `<C-b>` |
+| Operators | `d` archive · `r` restore · `p` pin · `u` unpin · `y` download |
+| Selection | `x` toggle · `v` visual · `V` visual-line · `<C-a>` select all |
+| Open / menu | `<CR>` `o` `<Menu>` |
+| Lightbox | `q` `i` |
+| Conflicts | `cd` `ca` |
+| Navigation | `gt` / `gT` next / previous view · `]f` / `[f` |
+| Overlays | `:` `?` `<F10>` `<Esc>` |
+| Leader (`<Space>`) | `a` `c` `g` `b` `s` `o` `t` `m` `R` `fe` `?` |
 
-### 5.2 The tag operator
+Machine modes are `normal`, `visual` and `visual-line`. Everything else is a **scope** —
+a keymap layer pushed with `useKeymapLayer(name, handler)` and resolved by `SCOPE_PRIORITY`,
+optionally cutting off the layers beneath it via `EXCLUSIVE_SCOPES`. That distinction runs
+through the rest of this section: Tag mode and the description editor are scopes, not modes.
+
+**Tagging takes `t` and `T`.** They are unbound in every scope and semantically free: that
+layer implements no till-motions, because `t` / `T` / `;` / `,` have no meaning when the unit
+is a file rather than a character in a line. An earlier draft of this document offered
+`gt` / `gT` as a fallback; **that was the actual collision** — `gt` and `gT` are
+next / previous view — and `<Space>t`, this section's original Tag-mode key, is the filter
+palette. The fallback is withdrawn rather than left in the document as a trap.
+
+The three obligations that follow from working inside a real grammar:
+
+1. **Tagging contributes operators, motions and scopes — never a one-off chord.** If tagging
+   needs a bespoke `Ctrl+Alt+T`, it has failed.
+2. **The operator is repeatable with `.`.** Vim users press it without thinking, and 5.3
+   specifies what "repeat" has to mean here for it to do anything useful.
+3. **Undo is `U`, not `u`.** `u` is the unpin operator in this app. This is a genuine cost —
+   the single most reflexive key in vim is unavailable — and it is recorded here rather than
+   discovered at the keyboard. `<C-r>` redoes.
+
+### 5.2 The constraint that shapes everything: operators take a range, not an argument
+
+This is the correction the rest of the section is built around.
+
+An operator in this grammar resolves a **range** — from a count, a motion, or the current
+selection — and hands those ids to a bulk action. There is no register concept, so **the
+keystroke cannot carry *which tag***. `t` + motion resolves the range and then the
+interpreter must ask.
+
+Two consequences, and the second is the design problem:
+
+- **`tt` is two steps, not one.** It resolves "this file", then opens a picker. Every
+  arbitrary-tag path is at minimum operator + motion + picker + commit.
+- **A culling pass cannot afford a picker per photo.** The premise of this whole section is
+  moving quickly across hundreds of frames, and a modal question on every one of them is
+  exactly the thing that makes people reach for the mouse instead.
+
+So the design is not "one tagging path with a picker". It is **three paths, and the picker is
+only the first of them**. The professional tools this feature is modelled on solved the same
+problem the same way — Photo Mechanic applies a colour class on a bare keypress, not through
+a dialog — and the escape from the picker therefore belongs in the keymap surface, not in a
+follow-up issue.
+
+### 5.3 The three tagging paths
+
+| Path | Keys | When |
+|---|---|---|
+| **Picker** | `t{motion}` | An arbitrary or brand-new tag. Always available; the only one needed for correctness. |
+| **Repeat** | `t{motion}<CR>`, or `.` on the cursor target | The same tag again, over a new range. The picker opens **pre-seeded with the last committed tag set**, selected, so `<CR>` alone reapplies it and any keystroke replaces it. One key of overhead, no new binding. |
+| **Quick slots** | `<Space>1` … `<Space>9` | The handful of tags a given pass actually uses. Applies slot *N* immediately, **no picker**, to the current selection if there is one and to the file under the cursor otherwise. |
+
+**`.` replays the resolved tag set, not the keystroke.** A naive `.` re-runs the operator and
+reopens the picker, which is worse than useless — it looks like a repeat and asks a question.
+`.` must replay `(operator, tag set)` against the current cursor target with no prompt. The
+repeated case is the only case `.` exists for.
+
+**Quick slots are `<Space>1`–`<Space>9`, not bare `1`–`9`.** Bare digits are **counts** in an
+operator-pending grammar; binding them would break `3j` and `2t3j` everywhere they were live.
+Leader-prefixed digits are unambiguous, are free in the leader namespace, and work identically
+in the gallery and in Tag mode. Slot contents are configured in the tag manager (section 7)
+and persist per folder; an unassigned slot is a no-op with a status-line note, never a silent
+nothing.
+
+### 5.4 The tag operator and its motions
 
 | Keys | Effect |
 |---|---|
-| `t{motion}` | Tag every file the motion covers. Opens the tag prompt. |
-| `tt` | Doubled operator = "this one", exactly as `dd` and `yy` |
-| `3tj` / `t3j` | Tag the current file and the three below |
-| `tG` | Tag from here to the end of the loaded set |
-| `t}` | Tag to the end of the current capture-day group |
-| `T{motion}` | **Untag.** The prompt lists only tags actually present on the covered set. |
-| `.` | Repeat the last tag operation on the current target — the fastest path in a culling run |
-| `u` | Undo the last tag write (section 5.7) |
+| `t{motion}` | Tag the covered range |
+| `tt` | Doubled operator = the current file, exactly as `dd` and `yy` |
+| `3tj` / `t3j` / `2t3j` | Counts compose on both sides, as the grammar already provides |
+| `tG` | To the end of the loaded set |
+| `t}` | To the end of the current capture-day group |
+| `t` in visual / visual-line | Applies to the selection |
+| `T{motion}` | **Untag**, same grammar; the picker offers only tags present on the covered set |
+| `.` | Replay the last tag operation on the cursor target (5.3) |
+| `U` / `<C-r>` | Undo / redo the last tag write (5.9) |
 
-**On claiming `t` and `T`.** In vim these are the till-motions. A photo grid has no
-character line to move within, so the till-motions have no meaning here and are not
-implemented; the document says so rather than leaving a user to discover it. Tagging is the
-single most frequent action in a photo-vault session and it earns a home-row key. **If the
-parallel keyboard layer has already spent `t`, the fallback is `gt`/`gT`** — a `g`-prefixed
-custom operator is the idiomatic way to add one without a collision (`gc`, `gq`, `gU`), and
-vim's own `gt`/`gT` mean "next/previous tab", which this app does not have. That choice
-belongs to the keyboard layer, not to this document; both spellings are acceptable and the
-issue tracking this names both.
-
-**Motions tagging adds** (they are motions, so every operator gets them for free):
+Motions tagging adds — they are motions, so every operator gets them free, including the
+existing `d` archive and `p` pin:
 
 | Keys | Motion |
 |---|---|
@@ -982,170 +1234,185 @@ issue tracking this names both.
 | `]u` / `[u` | Next / previous **untagged** file — the culling workhorse |
 | `]p` / `[p` | Next / previous file in a different **pair group** (skips a Live Photo's `.MOV`) |
 
-### 5.3 The tag prompt
+`]u` and `[u` must cross the loaded window: an untagged file beyond the last fetched page is
+still the next untagged file, so the motion triggers `loadMore()` rather than stopping at the
+edge.
 
-`t{motion}` opens a **single-line prompt at the bottom of the viewport**, styled as a vim
-command line, not a modal dialog. A dialog steals focus, needs a close button, traps `Tab`,
-and is the thing a keyboard-first user is trying to escape.
+### 5.5 The picker
+
+A **single line at the bottom of the viewport**, styled as a command line — not a modal
+dialog. A dialog steals focus, needs a close button, traps `Tab`, and is what a keyboard-first
+user is trying to escape.
 
 ```
  tag 47 files ▸ trips/ice▏          trips/iceland (431)  ·  + new tag
 ```
 
-Rules:
+It is pushed as an **exclusive scope** (`tag-prompt`), so the layers beneath it do not fire
+and `<C-u>` means "clear the line" rather than "scroll half a page".
 
 - **It states the count before you type.** `tag 47 files`, never a bare cursor. A bulk
   operation must never look like a single one.
-- `<Tab>` / `<C-n>` / `<C-p>` cycle completions from `GET /tags?prefix=&folder=`, debounced
-  at 120 ms and aborted with an `AbortController` on every keystroke (the generation-counter
+- It opens **pre-seeded with the last committed tag set**, selected. `<CR>` alone is the
+  repeat path of 5.3; typing anything replaces the seed.
+- `<Tab>` / `<C-n>` / `<C-p>` cycle completions from `GET /tags?prefix=&folder=`, debounced at
+  120 ms and aborted with an `AbortController` on every keystroke (the generation-counter
   pattern `useFiles` already uses — a stale completion list is worse than none).
-- `<CR>` commits. `<Esc>` cancels **the whole operation**; nothing is written.
 - `,` or `;` commits the current token and keeps the prompt open, so
-  `iceland,reykjavik,2024<CR>` is three tags in one prompt without three round trips.
+  `iceland,reykjavik,2024<CR>` is three tags in one prompt and one round trip.
 - `/` builds hierarchy as you type; the completion list shows the subtree.
-- A name with no match shows `+ new tag` **before** you commit. Silently creating `icelnad`
-  next to `iceland` is how a vocabulary rots, and the fix is one word of feedback.
-- `<C-w>` deletes the previous word, `<C-u>` clears the line. These are free if the prompt is
-  a real input; they are worth asserting in a test because a custom key handler can eat them.
+- A name with no match shows `+ new tag` **before** commit. Silently creating `icelnad` next
+  to `iceland` is how a vocabulary rots, and one word of feedback is the fix.
+- `<Esc>` cancels the **whole** operation — no partial tag, no created tag.
+- `<C-w>` deletes the previous word, `<C-u>` clears the line. Free from a real input, and
+  worth asserting, because a custom key handler eats them.
 
-`T{motion}` uses the same prompt with an inverted completion source: only tags that appear on
+`T{motion}` uses the same component with an inverted completion source: only tags present on
 the covered set, each with the count of covered files carrying it
 (`removing "Untriaged" from 47 of 47`).
 
-### 5.4 Tag mode — the culling surface
+### 5.6 Tag mode — a scope, not a mode
 
-`<Space>t` from the gallery enters **Tag mode**, the analogue of Photo Mechanic's
-contact-sheet-plus-preview and Lightroom's Library Loupe. Dark-only, no chrome:
+`<Space>e` enters it. (`<Space>t` — the obvious key, and this document's original choice — is
+the filter palette.) It adds `"tagging"` to `Scope` with a `SCOPE_PRIORITY` entry and is
+**non-exclusive**, so motions fall through to the layer beneath exactly as the lightbox's do.
+The machine mode stays `normal`.
 
-```
-┌──────────────────────────────────────────┬──────────────────────┐
-│                                          │ IMG_1234.HEIC        │
-│                                          │ 14 Jun 2024 18:32    │
-│              large preview               │ +02:00 · EXIF        │
-│                                          │ 64.1466, -21.9426    │
-│                                          │ ─────────────────    │
-│                                          │ trips/iceland        │
-│                                          │ 2024                 │
-│                                          │ ─────────────────    │
-│                                          │ description…        │
-├──────────────────────────────────────────┴──────────────────────┤
-│ ▸ 231 / 4,812   ·   47 untagged ahead   ·   [,] carry: on       │
-└─────────────────────────────────────────────────────────────────┘
-```
+Dark only, no chrome: a large preview, a metadata and tag panel on the right, a status line.
 
 | Keys | Effect |
 |---|---|
-| `j` / `k` | Next / previous file. The only navigation that matters. |
-| `J` / `K` | Next / previous **untagged** file (equivalent to `]u` / `[u`) |
-| `gg` / `G` | First / last |
+| `j` / `k` | Next / previous file — falls through to the layer beneath |
+| `J` / `K` | Next / previous **untagged** file |
 | `{` / `}` | Previous / next capture day |
-| `i` | Enter the description editor (5.5) |
-| `t` / `T` | Tag / untag the current file — the operator, with an implicit `tt` |
-| `1`–`9` | Apply the Nth tag from the **carry set** without opening the prompt |
+| `i` | Enter the description editor (5.7) |
+| `t` / `T` | Tag / untag — the operator, with an implicit `tt` |
+| `<Space>1`–`<Space>9` | Quick slots (5.3) |
 | `,` | Toggle **carry-forward** |
-| `<Space><Space>` | Toggle selection of the current file (feeds 5.6) |
-| `<Esc>` | Leave Tag mode, returning to the same file in the gallery |
+| `x` | Toggle selection of the current file — the layer's existing binding |
+| `<Esc>` | Leave, returning to the same file in the gallery |
 
-**Carry-forward** is the single largest speed win in a real culling run, and it is what Photo
-Mechanic's stationery pad and Lightroom's "sync metadata" are for. With `,` on, the tags you
-applied to the previous file become a *pending set* on the next one; `<CR>` accepts it, any
-other key discards it. It is off by default and its state is on screen at all times, because
-a sticky write the owner has forgotten about is how 400 photos end up tagged `iceland`.
+`i` is a **scope-local binding that shadows the lightbox's `i`**. That is deliberate and
+cheap: `i` for insert is the most idiomatic key in vim, and the lightbox's `i` opens an info
+panel that Tag mode renders permanently anyway, so nothing is lost.
 
-**Prefetching.** Tag mode must never wait on the network to advance. It prefetches the full
-image for `index+1` and `index+2` and holds the previous two, and it calls `loadMore()` when
-within five of the end — the rule the Lightbox already follows.
+**Carry-forward** is the largest speed win in a real culling run — it is what Photo Mechanic's
+stationery pad and Lightroom's sync-metadata are for. With `,` on, the tags applied to the
+previous file become a *pending set* on the next one; `<CR>` accepts it, any other key
+discards it. It is **off by default and its state is on screen at all times**, because a
+sticky write the owner has forgotten about is how 400 photos end up tagged `iceland`. It
+overlaps with quick slots and does not replace them: carry-forward propagates whatever you
+just did, slots apply a tag you chose in advance.
 
-### 5.5 The description editor, and the key-swallowing rule
+**Prefetching.** Tag mode must never wait on the network to advance: prefetch the full image
+for `index+1` and `index+2`, hold the previous two, and call `loadMore()` within five of the
+end — the rule `Lightbox` already follows.
 
-This is the specific failure the owner named. The answer is a mode, and an explicit exit that
-also advances.
+### 5.7 The description editor — an exclusive scope
 
-- `i` on the focused file enters **description insert**. A `<textarea>` takes focus and the
-  keyboard layer's mode becomes `insert`. From that moment `j` types the letter j — which is
-  **correct**, and is the behaviour a vim user expects, because they typed `i` on purpose.
-- `<Esc>` commits and returns to normal mode.
-- **`<C-j>` commits and advances to the next file, staying in insert.** `<C-k>` does the same
-  backwards. This is the professional-tool behaviour and it is the whole reason the mode is
-  usable: you caption a frame, press `<C-j>`, and you are captioning the next one without
-  ever leaving the keyboard or leaving insert.
-- `<C-t>` opens the tag prompt **from inside** the description editor, commits the tag, and
-  returns to insert at the same cursor position. Tagging and captioning are one pass, not two.
-- **Autosave**: on `<Esc>`, on `<C-j>`/`<C-k>`, on blur, and on a 1.5 s idle debounce. A
-  caption lost to a closed tab is a caption that gets retyped once and then never written
-  again.
-- **Never bind bare `j`/`k` while mode is `insert`.** Not "while an input has focus" — while
-  the *mode* is insert. The target-tag check in `Gallery.tsx` stays as a second line of
-  defence, but the mode variable is the contract.
-- `<C-c>` and `<Esc>` both leave; `<C-c>` **discards** uncommitted text and says so in the
-  status line. Two ways out with different semantics is vim; one way out that sometimes
-  discards is a bug.
+This is the specific failure the owner named: a description field that swallows your
+navigation keys.
 
-### 5.6 Multiselect and bulk tagging
+The answer is **not** a mode variable that every binding remembers to check. It is an
+**exclusive scope** (`description` in `EXCLUSIVE_SCOPES`), so the keymap layer itself cuts off
+everything beneath and no individual binding can forget.
 
-Selection already exists (`useSelection`, ids not indices, anchored ranges). The keyboard
-layer maps onto it:
+- `i` on the focused file enters it; a `<textarea>` takes focus and the `description` scope is
+  pushed.
+- While it is active, `j` types the letter j. That is **correct**, and is what a vim user
+  expects, because they typed `i` on purpose.
+- `<Esc>` commits and pops the scope. `<C-c>` **discards** uncommitted text and says so in the
+  status line. Two exits with different semantics is vim; one exit that sometimes discards is
+  a bug.
+- **`<C-j>` commits and advances to the next file, staying in the editor.** `<C-k>` goes
+  backwards. This is the professional-tool behaviour and the whole reason the surface is
+  usable: caption a frame, `<C-j>`, caption the next one, never leaving the keyboard.
+- `<C-t>` opens the tag picker from **inside** the editor, commits, and returns the cursor
+  where it was. Tagging and captioning are one pass, not two.
+- **Autosave** on `<Esc>`, on `<C-j>` / `<C-k>`, on blur, and on a 1.5 s idle debounce. A
+  caption lost to a closed tab gets retyped once and then never written again.
 
-| Keys | Effect |
-|---|---|
-| `v` | Enter visual selection at the cursor |
-| `v{motion}` | Extend — `vG`, `v}`, `v10j` |
-| `V` | Select the whole current capture-day group |
-| `<Space>a` | Select **all matching the current filter** — `GET /files/ids`, up to 20,000 |
-| `<Space><Space>` | Toggle the file under the cursor |
-| `<Esc>` | Clear the selection (already bound) |
-| `t` / `T` in visual mode | Apply the tag operator to the selection |
+The existing `target.tagName === "INPUT"` guard in `Gallery.tsx` stays as a second line of
+defence, but it is no longer the contract — it cannot distinguish "the owner entered the
+editor on purpose" from "a re-render moved focus into an input", and `EXCLUSIVE_SCOPES` can.
 
-**Selection wins over the cursor.** When a selection is non-empty, `t` applies to the
-selection and the prompt says `tag 431 files`, not `tag 1 file`. There is no separate
-"bulk tag" key, because a second key for the same operator is exactly the kind of one-off
-chord rule 1 of 5.1 forbids.
+### 5.8 Multiselect
 
-**Above 20,000 the ids endpoint truncates** and reports `truncated: true`; the prompt must
-say `tag 20,000 of 47,331 files (the rest will not be tagged)` rather than implying it
-covered everything. That is the same honesty rule as the restore preflight.
+`useSelection` already holds **ids, never indices**, with an anchored range whose toggle
+applies the anchor's state, and ids that scroll out of the loaded window stay selected. That
+is exactly what bulk tagging needs and requires no change. The selection keys are the layer's
+existing ones — `x`, `v`, `V`, `<C-a>` — and tagging adds none of its own.
 
-### 5.7 Undo, and why tagging never confirms
+**Selection wins over the cursor.** When the selection is non-empty, `t` applies to it and the
+picker says `tag 431 files`. There is **no separate bulk-tag key**; a second key for the same
+operator is exactly the one-off chord 5.1 forbids. The same rule governs `<Space>1`–`<Space>9`.
+
+**Above the cap, say so.** `<C-a>` resolves through `GET /files/ids`, which truncates at
+20,000 and reports `truncated: true`. The picker must then read
+`tag 20,000 of 47,331 files (the rest will not be tagged)` rather than implying it covered
+everything — the same honesty rule as the restore preflight, which names the folder, the
+overage and the eviction count rather than asking "are you sure?".
+
+### 5.9 Undo, and why tagging never confirms
 
 An archive is a Syncthing deletion on every device, so it confirms. **A tag write moves no
-bytes and is perfectly reversible, so it never confirms** — a confirmation dialog on a
-reversible action is a keystroke tax that trains the owner to hit `<CR>` without reading,
-which is what makes the *irreversible* dialogs stop working.
+bytes and is perfectly reversible, so it must not** — a confirmation on a reversible action
+trains the owner to dismiss confirmations, which is what makes the irreversible ones stop
+working.
 
-What makes that safe is that undo is real:
+What makes that safe:
 
+- The picker shows the count **before** commit.
 - The bulk endpoint returns `undo`: the exact inverse of what it actually applied (4.4).
-- The client holds the **last one**, and `u` posts it. One level, no stack, no daemon state.
-- The toast reports the truth — `tagged 4,231 files · u to undo` — and stays for the 20
-  seconds `ToastProvider` already gives errors.
-- After `u`, `<C-r>` re-applies (the inverse of the inverse, which the same endpoint returns).
+- The client holds the **last one**; `U` posts it, `<C-r>` re-applies. One level, no stack, no
+  daemon state.
+- The toast reports the truth and the escape — `tagged 4,231 files · U to undo` — held for the
+  20 seconds `ToastProvider` already gives errors.
 
-One level is deliberate. A deeper stack needs invalidation rules for "someone else changed
-this file", and there is no someone else on a single-owner LAN daemon — but there *is* an
-extraction pass and a quota tick, and a five-deep undo that silently no-ops because a row
-moved is worse than an undo that only ever promises one step.
+One level is deliberate. A deeper stack needs invalidation rules for "something else changed
+this file", and there *is* something else: the extraction pass and the quota tick. A five-deep
+undo that silently no-ops because a row moved is worse than one that only ever promises a
+single step.
 
-### 5.8 The `data-*` selector contract
+### 5.10 What this costs the keyboard layer
 
-The browser tier drives the embedded UI through `data-*` attributes
-(`web/e2e/helpers.ts`). Tagging adds:
+Small, and worth recording so the estimate is not re-derived:
+
+- **The operator is one row in the bindings array** —
+  `{ id: "op.tag", keys: "t", command: { kind: "operator", operator: "tag" }, scopes: NAVIGABLE }`
+  — which yields `tt`, `3tj`, `2t3j`, `tG`, visual-mode `t` and a generated cheatsheet row
+  with no state-machine change. `T` is a second row.
+- **Three typed seams take one line each**: `OperatorId`, `useBulkActions.execute()` and
+  `describeBulk()`. All three are exhaustive switches, so the compiler names every site.
+- **Two scope families**: `"tagging"` (non-exclusive), and `"description"` and `"tag-prompt"`
+  (both in `EXCLUSIVE_SCOPES`) — each a `SCOPE_PRIORITY` entry and a `useKeymapLayer` call.
+- **The motions** (`}` `{` `]t` `[t` `]u` `[u` `]p` `[p`) are ordinary motion rows, but each
+  needs a resolver that can page — see 5.4.
+
+### 5.11 The `data-*` selector contract
+
+The browser tier drives the embedded UI through `data-*` attributes (`web/e2e/helpers.ts`).
+Tagging adds:
 
 | Attribute | On |
 |---|---|
-| `data-tag-mode` | The Tag mode root, `"on"` / absent |
-| `data-tag-prompt` | The prompt container |
+| `data-tag-scope` | The Tag mode root, `"on"` / absent |
+| `data-tag-prompt` | The picker container |
 | `data-tag-prompt-count` | Text is the count the operator will affect |
 | `data-tag-completion="<name>"` | Each completion row |
 | `data-tag-chip="<name>"` | Each tag chip on a tile or in the panel |
+| `data-quick-slot="<n>"` | Each configured quick-slot indicator |
 | `data-description-editor` | The textarea |
-| `data-capture-date` | The rendered capture time; attribute value is the raw `captured_local` |
+| `data-capture-date` | The rendered capture time; the value is the raw `captured_local` |
 | `data-capture-source` | `"exif"` / `"quicktime"` / `"manual"` / `""` |
 | `data-pair-group="<pair_key>"` | Tiles belonging to a pair group |
-| `data-keymode` | The keyboard layer's current mode — `"normal"` / `"insert"` / `"visual"` / `"prompt"` |
+| `data-keymode` | The **machine mode**: `"normal"` / `"visual"` / `"visual-line"` |
+| `data-keyscope` | The **top active scope**: `"gallery"` / `"lightbox"` / `"tagging"` / `"tag-prompt"` / `"description"` |
 
-`data-keymode` is not decorative: it is the only way a browser test can assert that `j` does
-not navigate while a caption is being typed, which is the regression this whole section
-exists to prevent.
+`data-keymode` and `data-keyscope` are two attributes because they are two things, and the one
+that matters here is the scope: it is the only way a browser test can assert that `j` does not
+navigate while a caption is being typed, which is the regression this section exists to
+prevent.
 
 ---
 
@@ -1312,10 +1579,12 @@ zero `eslint-disable` in `web/src`, dark only.
 | Path | What |
 |---|---|
 | `web/src/hooks/useTags.ts` | `GET /tags` with a folder-scoped cache, `prefix` completion with abort-on-keystroke, and the mutation wrappers |
-| `web/src/hooks/useTagOperator.ts` | The operator state machine: pending operator, count, motion, target resolution, prompt open/closed |
-| `web/src/components/TagPrompt.tsx` | The command-line prompt of 5.3 |
-| `web/src/components/TagMode.tsx` | The culling surface of 5.4 |
-| `web/src/components/DescriptionEditor.tsx` | The insert-mode textarea of 5.5 |
+| `web/src/hooks/useTagOperator.ts` | Range resolution and the three paths of 5.3. **Not** a state machine: the keyboard layer already resolves the range, so this receives ids and decides picker / repeat / slot |
+| `web/src/hooks/useQuickSlots.ts` | Per-folder slot assignments, persisted; an unassigned slot is a no-op with a status-line note |
+| `web/src/components/TagPrompt.tsx` | The picker of 5.5, pre-seeded with the last committed tag set |
+| `web/src/components/TagMode.tsx` | The culling scope of 5.6 |
+| `web/src/components/DescriptionEditor.tsx` | The exclusive-scope textarea of 5.7 |
+| `web/src/components/QuickSlots.tsx` | The `<Space>1`–`<Space>9` slot indicators, and the editor that assigns them (5.3) |
 | `web/src/components/TagChips.tsx` | Chips on tiles, in the lightbox, in the Tag mode panel |
 | `web/src/components/CaptureMeta.tsx` | Capture time + offset + source + coordinates, with the "timezone not recorded" wording |
 
@@ -1334,15 +1603,26 @@ zero `eslint-disable` in `web/src`, dark only.
   are.
 - `Gallery.tsx`: tag chips on tiles (collapsed to `+3` past two), a `sort=captured` option,
   and capture-day group headers that `{`/`}` navigate between.
+- `TagManager` (in `ConfigPanel`): assigns the nine quick slots per folder, beside the tag
+  tree. A slot is the fast path of 5.3, so it needs somewhere to be chosen; leaving it to a
+  config file would put the one keyboard-first affordance behind a text editor.
+- The keyboard layer's bindings array: two operator rows (`t`, `T`), the eight motions of
+  5.4, and three scope registrations (`tagging` non-exclusive; `tag-prompt` and
+  `description` exclusive). Three typed seams — `OperatorId`,
+  `useBulkActions.execute()`, `describeBulk()` — take one line each and are exhaustive
+  switches, so the compiler names every site.
 - `Lightbox.tsx`: the metadata panel gains capture time, source, coordinates and tags, and
   keeps `file_mtime` **separately labelled** — never merged into one "date" row.
 
 **Tests**
 
 - `make test-web`: prompt key handling (`,` commits a token, `<Esc>` writes nothing,
-  `<Tab>` cycles), the count shown before commit, the undo round trip, the query-building
-  for every new filter, and — the important one — that `j` typed in the description editor
-  produces the letter `j` and does not navigate.
+  `<Tab>` cycles), the count shown before commit, the seeded-repeat path (`<CR>` alone
+  reapplies the last tag), `.` replaying without reopening the picker, the undo round trip
+  under `U`, the query-building for every new filter, and — the important one — that `j`
+  typed in the description editor produces the letter `j` and does not navigate.
+- A test that **bare `3j` still counts** with the tag operator registered. Quick slots are
+  leader-prefixed precisely so digits stay counts, and that is the assertion which proves it.
 - `make test-playwright`: `scripts/seed-demo` gains a tagged folder, an untagged folder, a
   Live Photo pair, a file with EXIF, a file with GPS, a file with **no** metadata, and a
   file with a manual capture date. Without those fixtures half of this UI is unreachable —
@@ -1357,7 +1637,7 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
 | # | Step | Issue | Depends on |
 |---|---|---|---|
 | 1 | The label-rename guard (6.4). Small, independent, closes a live footgun | #13 | — |
-| 2 | `internal/metadata`: the `Extractor` interface, EXIF + ffprobe, the ISO 6709 parser, the precedence rules. Pure package, exiftool-generated fixtures, no schema and no daemon changes | #1 | — |
+| 2 | `internal/metadata`: the `Extractor` interface, EXIF + ffprobe + the exiftool subprocess, the ISO 6709 parser, the precedence rules. Pure package, exiftool-generated fixtures, no schema and no daemon changes. **Gated on resolving the GPS `0,0` blocker of 1.8 against a real iPhone fixture** | #1 | — |
 | 3 | Migration 6, plus `fileColumns`, `scanFile`, `FileRecord`, `types/api.ts`. Schema only | #2 | — |
 | 4 | The extraction pass: `FilesNeedingMetadata`, `SetExtractedMetadata`, the failure budget, the manual-rescan reset | #3 | #1, #2 |
 | 5 | Pair grouping: `ExpandPairGroups`, wired into `OffloadCandidates` and the job enqueue path, plus the `pair_split` event | #6 | #1, #2, #3 |
@@ -1376,6 +1656,15 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
 
 ## 9. Edge cases, named
 
+- **An empty extraction result from a HEIC is suspicious, not authoritative.** The primary
+  reader silently drops all EXIF when `iloc` precedes `iinf` (1.8), so "no tags" and "a
+  library bug" are the same observation. Re-probe with the cross-check reader before writing
+  the empty result. This is the one place where the honest-absence design of 1.1 could be
+  turned into a lie by a dependency.
+- **`0,0` is both a real coordinate and a bug signature.** It is a legitimate point in the
+  Gulf of Guinea, and it is also what the primary reader returned on a file carrying an Apple
+  maker note (1.8). Log it, cross-check it, and never use it as a sentinel in either
+  direction.
 - **A photo with no metadata at all** is the normal case, not an error. `meta_scanned_at` set
   and `captured_local = ''` means "we looked and there was nothing"; `meta_scanned_at IS NULL`
   means "not yet". The UI must render these differently and the `undated=1` filter must select
@@ -1468,7 +1757,7 @@ because a pin changes what quota enforcement may touch. A tag does not. Serialis
 the responsiveness that is the entire point of a culling mode.
 
 **9. A confirmation dialog on bulk tagging.**
-Rejected — section 5.7. A confirmation on a reversible action trains the owner to dismiss
+Rejected — section 5.9. A confirmation on a reversible action trains the owner to dismiss
 confirmations, which is what makes the irreversible ones (bulk archive, conflict resolution)
 stop working. Real undo plus an honest count in the prompt is the correct trade.
 
@@ -1484,7 +1773,39 @@ Rejected. A directory rename is three `os.Rename` calls and two SQL statements; 
 as 4,000 items would make it slower, non-atomic, and would replace an operation that either
 happened or did not with one that can be 63% complete.
 
-**12. Allowing the coldstore folder label to be renamed.**
+**12. Basename matching as the *mechanism* for Live Photo pairing.**
+Rejected — 1.6. An earlier draft promoted stem matching from a hint to the fallback
+authority whenever a content identifier was unavailable. Verification showed no pure-Go
+library reads Apple's `ContentIdentifier`, which would have made the stem the authority for
+essentially every still — and the stem does not merely fail to pair, it **pairs the wrong
+files** when an import renumbers on collision. The stem's job is now to choose which stills
+are worth an `exiftool` probe; the UUID decides the grouping. Where `exiftool` is absent a
+stem-derived key is written and `pair_source` says so, because a degraded group the system
+knows is degraded is a different thing from one it believes.
+
+**13. Importing `github.com/barasher/go-exiftool`.**
+Rejected — 1.8. It is GPL-3.0, and importing it would make the built binary a derivative
+work, silently foreclosing any future permissive licence for coldstore as a side effect of
+choosing a metadata library. Driving the `exiftool` binary as a separate process carries no
+such term, is what this codebase already does for `ffmpeg` at
+`internal/thumbnail/thumbnail.go:162`, reuses a subprocess harness that is already tested,
+and costs the same 2.7–3.1 ms/file.
+
+**14. Bare `1`–`9` as quick-tag keys.**
+Rejected — 5.3. Photo Mechanic applies a colour class on a bare number key, which is the
+right ergonomics and the wrong grammar: in an operator-pending keymap bare digits are
+**counts**, so binding them would break `3j` and `2t3j` wherever they were live. Leader-
+prefixed digits (`<Space>1`–`<Space>9`) are unambiguous, free in the leader namespace, and
+identical in the gallery and in Tag mode.
+
+**15. `gt` / `gT` as the tag operator's fallback keys.**
+Rejected — 5.1, and worth recording because the fallback was *more* dangerous than the
+primary it was hedging. `gt` and `gT` are next / previous view in the keyboard layer, and
+`<Space>t`, this document's original Tag-mode key, is the filter palette. Bare `t` and `T` —
+the keys the fallback existed to avoid claiming — turned out to be unbound and semantically
+free, because that layer implements no till-motions.
+
+**16. Allowing the coldstore folder label to be renamed.**
 Rejected — section 6.4. It is a join key in five tables and a path component in two on-disk
 trees, and it is TOML-owned, so any UI rename is undone at the next restart in the worst
 possible way. `display_name` gives the owner what they actually wanted with none of it.
