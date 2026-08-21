@@ -1,4 +1,4 @@
-.PHONY: build binary deps dev dev-web lint test test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend
+.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend
 
 BINARY := coldstore
 BUILD_DIR := ./cmd/coldstore
@@ -14,6 +14,17 @@ BUILD_DIR := ./cmd/coldstore
 # still just vite.
 deps:
 	cd web && { [ -d node_modules ] || npm ci; }
+	@$(MAKE) --no-print-directory node-modules-boundary
+
+# `go build ./...` walks into web/node_modules, and npm packages do ship Go
+# source -- eslint pulls in `flatted`, which carries a golang/ directory, so a
+# plain `go test ./...` after an npm install lists a package from node_modules.
+# Today it merely compiles; the day a transitive dependency ships Go that does
+# not, the Go build breaks for a reason nobody would think to look for. A
+# nested go.mod is a module boundary, and the parent's ./... stops at it.
+node-modules-boundary:
+	@[ -d web/node_modules ] && printf 'module coldstore/web-node-modules-boundary\n\ngo 1.24\n' \
+		> web/node_modules/go.mod || true
 
 frontend: deps
 	cd web && npm run build
@@ -69,8 +80,25 @@ test-e2e-live:
 test-e2e-live-down:
 	docker compose -p coldstore-live -f docker/compose.test.yml down -v --remove-orphans
 
-test-playwright:
-	go test -tags playwright ./tests/e2e/...
+# The React unit and component tier: vitest + Testing Library, jsdom, no
+# daemon and no browser. Fast enough to run on every save.
+test-web: deps
+	cd web && npm run test
+
+# The browser tier. scripts/playwright-server.sh builds the frontend, seeds a
+# throwaway demo installation and starts the REAL daemon, so these tests drive
+# the bundle the binary ships rather than a dev server.
+#
+# This target used to run `go test -tags playwright`, whose only file was four
+# t.Skip stubs -- a green target that asserted nothing.
+test-playwright: deps
+	cd web && npx playwright test
+
+# Seed and run a demo installation: four folders covering every state the
+# control plane can render, on http://127.0.0.1:8090.
+demo: binary
+	go run ./scripts/seed-demo
+	./$(BINARY) --config /tmp/coldstore-demo/coldstore.toml
 
 clean:
 	rm -f $(BINARY)
