@@ -942,6 +942,7 @@ only consumer. Migration 7's fifteen columns are appended to it, in DDL order, a
 	PairSource       string     `json:"pair_source"`
 	MetaScannedAt    *int64     `json:"meta_scanned_at"`
 	MetaAttempts     int        `json:"meta_attempts"`
+	MetaLastAttempt  *int64     `json:"meta_last_attempt,omitempty"`
 	MetaError        string     `json:"meta_error,omitempty"`
 	Tags             []string   `json:"tags"`                      // hydrated, not a column
 ```
@@ -1732,7 +1733,7 @@ Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint
 | 10 | Search and filter: the extended `q`, `tag=`, `untagged=` | #9 | #2, #7 |
 | 11 | Frontend, non-keyboard first: chips, the prompt, the tag manager, the filter presets. Everything works with a mouse before anything works without one, so a broken key binding is isolated to the keyboard layer | #10 | #7, #9 |
 | 12 | Multiselect tagging: the bulk endpoint, the caps, the undo contract, `SelectionBar` | #12 | #7, #9, #10 |
-| 13 | Migration 8 + the rename job, and `display_name` | #14 | #2, #6, #13 |
+| 13 | Migration 8 + the rename job. (`display_name` already landed in migration 7.) | #14 | #2, #6, #13 |
 | 14 | The keyboard layer: the operator, the motions, Tag mode, visual-mode bulk, undo. Last, because it depends on every other layer being correct | #11 | #4, #6, #8, #9, #10 |
 | 15 | Export: XMP sidecars into `{cold_storage_path}/sidecars/` | not yet filed | #7 |
 

@@ -52,7 +52,10 @@ const idChunkSize = 500
 const fileColumns = `id, folder_label, relative_path, filename, extension, mime_type,
 	size_bytes, file_mtime, file_atime, first_seen, archived_at, status,
 	thumbnail_path, content_hash, pinned, pinned_at, pin_source, last_seen,
-	thumb_attempts, thumb_last_attempt, thumb_error, detected_type`
+	thumb_attempts, thumb_last_attempt, thumb_error, detected_type,
+	description, captured_local, captured_offset_minutes, captured_source,
+	gps_lat, gps_lon, gps_altitude_m, gps_accuracy_m, gps_source,
+	pair_key, pair_source, meta_scanned_at, meta_attempts, meta_last_attempt, meta_error`
 
 type Catalog struct {
 	db *sql.DB
@@ -915,7 +918,7 @@ func (c *Catalog) ResetThumbnailFailures(folder string) (int64, error) {
 // ---------------------------------------------------------------------------
 
 const folderConfigColumns = `id, folder_label, syncthing_id, syncthing_path, budget_bytes,
-	grace_minutes, enabled, present_in_toml, wedge_warned_at, last_enforced_at`
+	grace_minutes, enabled, present_in_toml, wedge_warned_at, last_enforced_at, display_name`
 
 // ReconcileFolderFromTOML upserts the infrastructure fields of a folder
 // declared in coldstore.toml. budget/grace/enabled are written ONLY when the
@@ -1232,11 +1235,15 @@ type fileScanner interface{ Scan(dest ...any) error }
 func scanFile(s fileScanner) (*FileRecord, error) {
 	var f FileRecord
 	var archivedAt sql.NullTime
-	var pinnedAt, lastAttempt sql.NullInt64
+	var pinnedAt, thumbLastAttempt, capturedOffset, metaScannedAt, metaLastAttempt sql.NullInt64
+	var gpsLat, gpsLon, gpsAltitude, gpsAccuracy sql.NullFloat64
 	err := s.Scan(&f.ID, &f.FolderLabel, &f.RelativePath, &f.Filename, &f.Extension,
 		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FileAtime, &f.FirstSeen, &archivedAt,
 		&f.Status, &f.ThumbnailPath, &f.ContentHash, &f.Pinned, &pinnedAt, &f.PinSource,
-		&f.LastSeen, &f.ThumbAttempts, &lastAttempt, &f.ThumbError, &f.DetectedType)
+		&f.LastSeen, &f.ThumbAttempts, &thumbLastAttempt, &f.ThumbError, &f.DetectedType,
+		&f.Description, &f.CapturedLocal, &capturedOffset, &f.CapturedSource,
+		&gpsLat, &gpsLon, &gpsAltitude, &gpsAccuracy, &f.GPSSource,
+		&f.PairKey, &f.PairSource, &metaScannedAt, &f.MetaAttempts, &metaLastAttempt, &f.MetaError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoSuchFile
 	}
@@ -1249,9 +1256,32 @@ func scanFile(s fileScanner) (*FileRecord, error) {
 	if pinnedAt.Valid {
 		f.PinnedAt = &pinnedAt.Int64
 	}
-	if lastAttempt.Valid {
-		f.ThumbLastAttempt = &lastAttempt.Int64
+	if thumbLastAttempt.Valid {
+		f.ThumbLastAttempt = &thumbLastAttempt.Int64
 	}
+	if capturedOffset.Valid {
+		offset := int(capturedOffset.Int64)
+		f.CapturedOffsetMin = &offset
+	}
+	if gpsLat.Valid {
+		f.GPSLat = &gpsLat.Float64
+	}
+	if gpsLon.Valid {
+		f.GPSLon = &gpsLon.Float64
+	}
+	if gpsAltitude.Valid {
+		f.GPSAltitudeM = &gpsAltitude.Float64
+	}
+	if gpsAccuracy.Valid {
+		f.GPSAccuracyM = &gpsAccuracy.Float64
+	}
+	if metaScannedAt.Valid {
+		f.MetaScannedAt = &metaScannedAt.Int64
+	}
+	if metaLastAttempt.Valid {
+		f.MetaLastAttempt = &metaLastAttempt.Int64
+	}
+	f.Tags = make([]string, 0)
 	return &f, nil
 }
 
@@ -1277,7 +1307,8 @@ func scanFolderConfig(s fileScanner) (*FolderConfigRecord, error) {
 	var fc FolderConfigRecord
 	var wedgeWarnedAt, lastEnforcedAt sql.NullInt64
 	err := s.Scan(&fc.ID, &fc.FolderLabel, &fc.SyncthingID, &fc.SyncthingPath, &fc.BudgetBytes,
-		&fc.GraceMinutes, &fc.Enabled, &fc.PresentInTOML, &wedgeWarnedAt, &lastEnforcedAt)
+		&fc.GraceMinutes, &fc.Enabled, &fc.PresentInTOML, &wedgeWarnedAt, &lastEnforcedAt,
+		&fc.DisplayName)
 	if err != nil {
 		return nil, err
 	}

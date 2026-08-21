@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,6 +77,62 @@ func userVersion(t *testing.T, dbPath string) int {
 	return version
 }
 
+// createDatabaseAtVersion builds the exact schema emitted by a historical
+// migration runner. Version zero uses the populated pre-runner schema rather
+// than an empty file, because that is the dangerous upgrade case.
+func createDatabaseAtVersion(t *testing.T, dbPath string, version int) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version == 0 {
+		if _, err := db.Exec(legacySchemaSQL); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		return db
+	}
+	for _, migration := range migrations {
+		if migration.version > version {
+			break
+		}
+		if _, err := db.Exec(migration.sql); err != nil {
+			db.Close()
+			t.Fatalf("applying historical migration %d: %v", migration.version, err)
+		}
+		if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, migration.version)); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+	}
+	return db
+}
+
+func tableColumnNames(t *testing.T, db *sql.DB, table string) map[string]bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return columns
+}
+
 func TestMigrateShouldStampTheCurrentSchemaVersionWhenTheDatabaseIsFresh(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	cat, err := Open(dbPath)
@@ -86,6 +143,176 @@ func TestMigrateShouldStampTheCurrentSchemaVersionWhenTheDatabaseIsFresh(t *test
 
 	if got := userVersion(t, dbPath); got != schemaVersion {
 		t.Errorf("user_version = %d, want %d", got, schemaVersion)
+	}
+}
+
+func TestMigration7ShouldCreateTheCompleteAdditiveSchemaOnAFreshDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fresh.db")
+	cat, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cat.Close()
+
+	for _, table := range []string{"tags", "file_tags"} {
+		var count int
+		if err := cat.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master
+			WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("table %s count = %d, want 1", table, count)
+		}
+	}
+
+	fileColumns := tableColumnNames(t, cat.db, "files")
+	for _, column := range []string{
+		"description", "captured_local", "captured_offset_minutes", "captured_source",
+		"gps_lat", "gps_lon", "gps_altitude_m", "gps_accuracy_m", "gps_source",
+		"pair_key", "pair_source", "meta_scanned_at", "meta_attempts",
+		"meta_last_attempt", "meta_error",
+	} {
+		if !fileColumns[column] {
+			t.Errorf("files.%s is missing", column)
+		}
+	}
+	if !tableColumnNames(t, cat.db, "folder_configs")["display_name"] {
+		t.Error("folder_configs.display_name is missing")
+	}
+
+	for _, index := range []string{
+		"idx_file_tags_tag", "idx_files_meta_queue", "idx_files_captured",
+		"idx_files_gps", "idx_files_pair",
+	} {
+		var count int
+		if err := cat.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master
+			WHERE type = 'index' AND name = ?`, index).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Errorf("index %s count = %d, want 1", index, count)
+		}
+	}
+
+	var fileTagsSQL string
+	if err := cat.db.QueryRow(`SELECT sql FROM sqlite_master
+		WHERE type = 'table' AND name = 'file_tags'`).Scan(&fileTagsSQL); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToUpper(fileTagsSQL), "WITHOUT ROWID") {
+		t.Errorf("file_tags DDL does not use WITHOUT ROWID: %s", fileTagsSQL)
+	}
+
+	if _, err := cat.db.Exec(`INSERT INTO tags (name, name_fold, created_at)
+		VALUES ('Trips', 'trips', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.db.Exec(`INSERT INTO tags (name, name_fold, created_at)
+		VALUES ('TRIPS', 'trips', 2)`); err == nil {
+		t.Error("tags.name_fold must be unique")
+	}
+	if _, err := cat.db.Exec(`INSERT INTO file_tags (file_id, tag_id, applied_at)
+		VALUES (99, 1, 3)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.db.Exec(`INSERT INTO file_tags (file_id, tag_id, applied_at)
+		VALUES (99, 1, 4)`); err == nil {
+		t.Error("file_tags composite primary key must reject duplicate applications")
+	}
+}
+
+func TestMigration7ShouldUpgradeEveryOlderSchemaWithoutLosingRows(t *testing.T) {
+	for version := 0; version < 7; version++ {
+		t.Run(fmt.Sprintf("schema_%d", version), func(t *testing.T) {
+			dbPath := filepath.Join(t.TempDir(), "catalog.db")
+			raw := createDatabaseAtVersion(t, dbPath, version)
+			mtime := time.Date(2020, time.March, 4, 5, 6, 7, 0, time.UTC)
+			if _, err := raw.Exec(`INSERT INTO files
+				(folder_label, relative_path, filename, extension, mime_type, size_bytes,
+				 file_mtime, file_atime, status, thumbnail_path, content_hash)
+				VALUES ('Photos', 'kept.jpg', 'kept.jpg', '.jpg', 'image/jpeg', 12345,
+				        ?, ?, 'archived', 'thumb.jpg', 'abc123')`, mtime, mtime); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := raw.Exec(`INSERT INTO folder_configs
+				(folder_label, syncthing_id, syncthing_path, budget_bytes, grace_minutes, enabled)
+				VALUES ('Photos', 'sync-id', '/srv/Photos', 98765, 75, 1)`); err != nil {
+				t.Fatal(err)
+			}
+			if err := raw.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			cat, err := Open(dbPath)
+			if err != nil {
+				t.Fatalf("opening schema %d: %v", version, err)
+			}
+			defer cat.Close()
+
+			if got := userVersion(t, dbPath); got != 7 {
+				t.Errorf("user_version = %d, want 7", got)
+			}
+			file, err := cat.GetFile("Photos", "kept.jpg")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if file.SizeBytes != 12345 || file.Status != StatusArchived ||
+				file.ThumbnailPath != "thumb.jpg" || file.ContentHash != "abc123" {
+				t.Errorf("preserved file = %+v", file)
+			}
+			if file.Description != "" || file.CapturedLocal != "" || file.CapturedSource != "" ||
+				file.CapturedOffsetMin != nil || file.GPSLat != nil || file.GPSLon != nil ||
+				file.GPSAltitudeM != nil || file.GPSAccuracyM != nil || file.GPSSource != "" ||
+				file.PairKey != "" || file.PairSource != "" || file.MetaScannedAt != nil ||
+				file.MetaAttempts != 0 || file.MetaLastAttempt != nil || file.MetaError != "" {
+				t.Errorf("migration 7 defaults = %+v", file)
+			}
+			if file.Tags == nil || len(file.Tags) != 0 {
+				t.Errorf("Tags = %#v, want non-nil empty slice", file.Tags)
+			}
+			folder, err := cat.FolderConfigByLabel("Photos")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if folder.BudgetBytes != 98765 || folder.GraceMinutes != 75 || folder.DisplayName != "" {
+				t.Errorf("preserved folder = %+v", folder)
+			}
+		})
+	}
+}
+
+func TestMigration7ShouldPreserveEverySchema6Field(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "schema6.db")
+	raw := createDatabaseAtVersion(t, dbPath, 6)
+	mtime := time.Date(2021, time.April, 5, 6, 7, 8, 0, time.UTC)
+	if _, err := raw.Exec(`INSERT INTO files
+		(folder_label, relative_path, filename, extension, mime_type, size_bytes,
+		 file_mtime, file_atime, status, thumbnail_path, content_hash,
+		 pinned, pinned_at, pin_source, last_seen, thumb_attempts,
+		 thumb_last_attempt, thumb_error, detected_type)
+		VALUES ('Photos', 'live.heic', 'live.heic', '.heic', 'image/heic', 456,
+		        ?, ?, 'synced', 'live.thumb.jpg', 'hash', 1, 101, 'user', 202,
+		        2, 303, 'old failure', 'image/heic')`, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cat, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cat.Close()
+	file, err := cat.GetFile("Photos", "live.heic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !file.Pinned || file.PinnedAt == nil || *file.PinnedAt != 101 ||
+		file.PinSource != PinSourceUser || file.LastSeen != 202 || file.ThumbAttempts != 2 ||
+		file.ThumbLastAttempt == nil || *file.ThumbLastAttempt != 303 ||
+		file.ThumbError != "old failure" || file.DetectedType != "image/heic" {
+		t.Errorf("schema 6 fields changed during migration: %+v", file)
 	}
 }
 
@@ -259,6 +486,40 @@ func TestMigrateShouldChangeNothingWhenTheDatabaseIsAlreadyCurrent(t *testing.T)
 	}, time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
+	file, err := first.GetFile("Photos", "a.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.ReconcileFolderFromTOML("Photos", "sync-id", "/srv/Photos", 1000, 30); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.db.Exec(`UPDATE files SET
+		description = 'kept caption', captured_local = '2024-05-06 07:08:09.010',
+		captured_offset_minutes = -420, captured_source = 'exif',
+		gps_lat = 0.0, gps_lon = 0.0, gps_altitude_m = -12.5,
+		gps_accuracy_m = 3.25, gps_source = 'exif',
+		pair_key = 'cid:uuid', pair_source = 'content_id',
+		meta_scanned_at = 111, meta_attempts = 2, meta_last_attempt = 222,
+		meta_error = 'kept error' WHERE id = ?`, file.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.db.Exec(`UPDATE folder_configs SET display_name = 'Family Photos'
+		WHERE folder_label = 'Photos'`); err != nil {
+		t.Fatal(err)
+	}
+	res, err := first.db.Exec(`INSERT INTO tags (name, name_fold, created_at)
+		VALUES ('Trips/Iceland', 'trips/iceland', 123)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.db.Exec(`INSERT INTO file_tags (file_id, tag_id, applied_at)
+		VALUES (?, ?, 456)`, file.ID, tagID); err != nil {
+		t.Fatal(err)
+	}
 	first.Close()
 
 	second, err := Open(dbPath)
@@ -270,8 +531,35 @@ func TestMigrateShouldChangeNothingWhenTheDatabaseIsAlreadyCurrent(t *testing.T)
 	if got := userVersion(t, dbPath); got != schemaVersion {
 		t.Errorf("user_version = %d, want %d", got, schemaVersion)
 	}
-	if _, err := second.GetFile("Photos", "a.jpg"); err != nil {
-		t.Errorf("row lost across reopen: %v", err)
+	got, err := second.GetFile("Photos", "a.jpg")
+	if err != nil {
+		t.Fatalf("row lost across reopen: %v", err)
+	}
+	if got.Description != "kept caption" || got.CapturedLocal != "2024-05-06 07:08:09.010" ||
+		got.CapturedOffsetMin == nil || *got.CapturedOffsetMin != -420 ||
+		got.GPSLat == nil || *got.GPSLat != 0 || got.GPSLon == nil || *got.GPSLon != 0 ||
+		got.GPSAltitudeM == nil || *got.GPSAltitudeM != -12.5 ||
+		got.GPSAccuracyM == nil || *got.GPSAccuracyM != 3.25 ||
+		got.PairKey != "cid:uuid" || got.MetaScannedAt == nil || *got.MetaScannedAt != 111 ||
+		got.MetaAttempts != 2 || got.MetaLastAttempt == nil || *got.MetaLastAttempt != 222 ||
+		got.MetaError != "kept error" {
+		t.Errorf("migration 7 fields changed across current reopen: %+v", got)
+	}
+	folder, err := second.FolderConfigByLabel("Photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if folder.DisplayName != "Family Photos" {
+		t.Errorf("DisplayName = %q, want Family Photos", folder.DisplayName)
+	}
+	var tagLinks int
+	if err := second.db.QueryRow(`SELECT COUNT(*) FROM file_tags ft
+		JOIN tags t ON t.id = ft.tag_id
+		WHERE ft.file_id = ? AND t.name_fold = 'trips/iceland'`, got.ID).Scan(&tagLinks); err != nil {
+		t.Fatal(err)
+	}
+	if tagLinks != 1 {
+		t.Errorf("preserved tag links = %d, want 1", tagLinks)
 	}
 }
 

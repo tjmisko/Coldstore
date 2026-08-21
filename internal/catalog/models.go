@@ -66,11 +66,29 @@ type FileRecord struct {
 	// claims. Empty means the scanner has not sniffed this row yet;
 	// filetype.TypeUnknown means it did and recognised nothing.
 	DetectedType string `json:"detected_type,omitempty"`
+
+	Description       string   `json:"description"`
+	CapturedLocal     string   `json:"captured_local"`
+	CapturedOffsetMin *int     `json:"captured_offset_minutes"`
+	CapturedSource    string   `json:"captured_source"`
+	GPSLat            *float64 `json:"gps_lat"`
+	GPSLon            *float64 `json:"gps_lon"`
+	GPSAltitudeM      *float64 `json:"gps_altitude_m,omitempty"`
+	GPSAccuracyM      *float64 `json:"gps_accuracy_m,omitempty"`
+	GPSSource         string   `json:"gps_source"`
+	PairKey           string   `json:"pair_key"`
+	PairSource        string   `json:"pair_source"`
+	MetaScannedAt     *int64   `json:"meta_scanned_at"`
+	MetaAttempts      int      `json:"meta_attempts"`
+	MetaLastAttempt   *int64   `json:"meta_last_attempt,omitempty"`
+	MetaError         string   `json:"meta_error,omitempty"`
+	Tags              []string `json:"tags"`
 }
 
 type FolderConfigRecord struct {
 	ID             int64  `json:"id"`
 	FolderLabel    string `json:"folder_label"`
+	DisplayName    string `json:"display_name"`
 	SyncthingID    string `json:"syncthing_id"`
 	SyncthingPath  string `json:"syncthing_path"`
 	BudgetBytes    int64  `json:"budget_bytes"`

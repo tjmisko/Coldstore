@@ -21,6 +21,18 @@ export function aFile(overrides: Partial<FileRecord> = {}): FileRecord {
     pinned_at: null,
     pin_source: "",
     thumb_attempts: 0,
+    description: "",
+    captured_local: "",
+    captured_offset_minutes: null,
+    captured_source: "",
+    gps_lat: null,
+    gps_lon: null,
+    gps_source: "",
+    pair_key: "",
+    pair_source: "",
+    meta_scanned_at: null,
+    meta_attempts: 0,
+    tags: [],
     ...overrides,
   };
 }
@@ -59,6 +71,7 @@ export function aFolderConfig(overrides: Partial<FolderConfig> = {}): FolderConf
   return {
     id: 1,
     folder_label: "CameraRoll",
+    display_name: "",
     syncthing_id: "abcde-fghij",
     syncthing_path: "/home/tjmisko/CameraRoll",
     budget_bytes: 20_000_000_000,

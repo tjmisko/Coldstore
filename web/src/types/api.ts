@@ -52,6 +52,26 @@ export interface FileRecord {
    *  extension -- a bookmark export called "reading" has an empty `extension`
    *  and an empty `mime_type`. */
   detected_type?: string;
+  description: string;
+  /** Naive camera-local wall clock; empty when the file recorded none. */
+  captured_local: string;
+  /** Recorded UTC offset in minutes, or null when the file did not carry one. */
+  captured_offset_minutes: number | null;
+  captured_source: string;
+  /** WGS84 coordinates. Zero is valid; null means unknown. */
+  gps_lat: number | null;
+  gps_lon: number | null;
+  gps_altitude_m?: number;
+  gps_accuracy_m?: number;
+  gps_source: string;
+  pair_key: string;
+  pair_source: string;
+  meta_scanned_at: number | null;
+  meta_attempts: number;
+  meta_last_attempt?: number;
+  meta_error?: string;
+  /** Hydrated by the catalog as an empty array until tags are applied. */
+  tags: string[];
 }
 
 /** One entry of an EPUB's reading order. `path` is the archive ENTRY NAME,
@@ -73,6 +93,7 @@ export interface EpubSpine {
 export interface FolderConfig {
   id: number;
   folder_label: string;
+  display_name: string;
   syncthing_id: string;
   syncthing_path: string;
   budget_bytes: number;

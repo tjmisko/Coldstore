@@ -24,12 +24,13 @@ var migrations = []migration{
 	{4, migration4Jobs},
 	{5, migration5ThumbnailFailures},
 	{6, migration6DetectedType},
+	{7, migration7TagsAndMetadata},
 }
 
 // schemaVersion is the version a freshly migrated database reports.
 // It equals the highest entry above and is bumped in the same commit as that
 // entry.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // SchemaVersion returns the schema version this binary writes.
 func SchemaVersion() int { return schemaVersion }
@@ -288,4 +289,53 @@ ALTER TABLE files ADD COLUMN detected_type TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX idx_files_detected_type_queue
 	ON files(detected_type, thumbnail_path, thumb_attempts, status);
+`
+
+// migration7TagsAndMetadata adds the normalised tag tables, owner description,
+// capture/location metadata, Live Photo pairing, extraction bookkeeping, and
+// the cosmetic folder display name. It is deliberately additive; widening the
+// jobs action constraint for rename is the separate migration 8.
+const migration7TagsAndMetadata = `
+CREATE TABLE tags (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	name       TEXT NOT NULL,
+	name_fold  TEXT NOT NULL UNIQUE,
+	created_at INTEGER NOT NULL
+);
+
+CREATE TABLE file_tags (
+	file_id    INTEGER NOT NULL,
+	tag_id     INTEGER NOT NULL,
+	applied_at INTEGER NOT NULL,
+	PRIMARY KEY (file_id, tag_id)
+) WITHOUT ROWID;
+
+CREATE INDEX idx_file_tags_tag ON file_tags(tag_id, file_id);
+
+ALTER TABLE files ADD COLUMN description TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN captured_local          TEXT NOT NULL DEFAULT '';
+ALTER TABLE files ADD COLUMN captured_offset_minutes INTEGER;
+ALTER TABLE files ADD COLUMN captured_source         TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN gps_lat        REAL;
+ALTER TABLE files ADD COLUMN gps_lon        REAL;
+ALTER TABLE files ADD COLUMN gps_altitude_m REAL;
+ALTER TABLE files ADD COLUMN gps_accuracy_m REAL;
+ALTER TABLE files ADD COLUMN gps_source     TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN pair_key    TEXT NOT NULL DEFAULT '';
+ALTER TABLE files ADD COLUMN pair_source TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN meta_scanned_at   INTEGER;
+ALTER TABLE files ADD COLUMN meta_attempts     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE files ADD COLUMN meta_last_attempt INTEGER;
+ALTER TABLE files ADD COLUMN meta_error        TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX idx_files_meta_queue ON files(meta_scanned_at, meta_attempts, status);
+CREATE INDEX idx_files_captured ON files(folder_label, captured_local, id);
+CREATE INDEX idx_files_gps ON files(gps_lat, gps_lon);
+CREATE INDEX idx_files_pair ON files(folder_label, pair_key);
+
+ALTER TABLE folder_configs ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
 `
