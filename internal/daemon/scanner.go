@@ -240,15 +240,24 @@ func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRec
 // into cold storage as files called "IMG_0031.jpg.coldstore-tmp".
 var (
 	scanSkipSuffixes = []string{
-		".tmp",           // conservative; a .tmp in a photo folder is not a photo
-		tmpSuffix,        // *.coldstore-tmp
-		supersededSuffix, // *.coldstore-superseded
+		".tmp",    // conservative; a .tmp in a photo folder is not a photo
+		tmpSuffix, // *.coldstore-tmp
 	}
 	scanSkipNames = []string{".stfolder", ".stignore", ".stversions"}
 )
 
 // skipScanEntry reports whether a file NAME must never be catalogued.
 func skipScanEntry(name string) bool {
+	// CONTAINS, not HasSuffix. asidePath appends ".2", ".3", ... to the
+	// suffix when an aside slot is already taken, so the second collision on
+	// one path produces "IMG_0031.jpg.coldstore-superseded.2" -- which a
+	// HasSuffix test does not match, and which was therefore catalogued as an
+	// ordinary photo, counted against the budget and eventually archived. The
+	// .stignore line the runbook asks for is `*.coldstore-superseded*` for
+	// exactly this reason; this is the same rule, applied here.
+	if strings.Contains(name, supersededSuffix) {
+		return true
+	}
 	for _, suffix := range scanSkipSuffixes {
 		if strings.HasSuffix(name, suffix) {
 			return true

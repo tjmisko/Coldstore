@@ -206,3 +206,64 @@ func TestScanShouldNotSweepAFileWhoseArchiveFailedDuringTheWalk(t *testing.T) {
 		t.Errorf("the sweep marked %d rows missing, want 0", swept)
 	}
 }
+
+// asidePath does not stop at one suffix: a second collision on the same path
+// produces "IMG.jpg.coldstore-superseded.2", a third ".3", and a pathological
+// one a nanosecond stamp. The skip table matched only the bare suffix, so
+// every aside after the first was walked, upserted, counted against the
+// budget, offered for download as a real photo and eventually archived -- the
+// precise outcome the skip table was written to prevent, reachable on the
+// second occurrence.
+//
+// This is also the rule the runbook already asks owners to put in .stignore
+// (`*.coldstore-superseded*`, trailing star deliberate). The scanner now
+// applies the same rule.
+func TestScanShouldNotCatalogueNumberedSupersededCopies(t *testing.T) {
+	s, cat, folder, dir := newHygieneScanner(t)
+
+	for _, name := range []string{
+		"photo.jpg",
+		"photo.jpg" + supersededSuffix,
+		"photo.jpg" + supersededSuffix + ".2",
+		"photo.jpg" + supersededSuffix + ".3",
+		"photo.jpg" + supersededSuffix + ".1782000000000000000",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, 128), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := s.ScanFolderContext(context.Background(), folder); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	files, err := cat.ListFiles(catalog.FileQuery{Folder: "TestFolder", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].RelativePath != "photo.jpg" {
+		got := make([]string, 0, len(files))
+		for _, f := range files {
+			got = append(got, f.RelativePath)
+		}
+		t.Errorf("catalogued %v, want only [photo.jpg]", got)
+	}
+}
+
+// The name asidePath actually generates, rather than a hand-written
+// approximation of it.
+func TestSkipScanEntryShouldMatchEveryNameAsidePathCanProduce(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "IMG_0031.jpg")
+
+	for i := 0; i < 4; i++ {
+		aside := asidePath(target)
+		if err := os.WriteFile(aside, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !skipScanEntry(filepath.Base(aside)) {
+			t.Errorf("aside %d: skipScanEntry(%q) = false, want true",
+				i, filepath.Base(aside))
+		}
+	}
+}
