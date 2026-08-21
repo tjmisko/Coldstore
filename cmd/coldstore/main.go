@@ -45,12 +45,16 @@ func main() {
 		logger.Warn("preflight", "detail", w)
 	}
 
+	dbPath := cfg.Storage.ColdStoragePath + "/catalog.db"
 	if *checkOnly {
+		if err := checkCatalogFolderIdentities(cfg, dbPath); err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+			os.Exit(1)
+		}
 		reportPreflight(os.Stdout, cfg, *configPath, warnings)
 		return
 	}
 
-	dbPath := cfg.Storage.ColdStoragePath + "/catalog.db"
 	cat, err := catalog.Open(dbPath)
 	if err != nil {
 		logger.Error("failed to open catalog", "error", err)
@@ -137,6 +141,17 @@ func main() {
 		logger.Error("daemon exited with error", "error", err)
 		os.Exit(1)
 	}
+}
+
+// checkCatalogFolderIdentities is the only catalog access performed by
+// --check. ReadFolderIdentities uses a read-only, query-only SQLite connection
+// and does not create or migrate a catalog.
+func checkCatalogFolderIdentities(cfg *config.Config, dbPath string) error {
+	identities, err := catalog.ReadFolderIdentities(dbPath)
+	if err != nil {
+		return fmt.Errorf("checking catalog folder identities: %w", err)
+	}
+	return daemon.ValidateFolderIdentityChanges(cfg, identities)
 }
 
 // reportPreflight prints what --check found. It exists so the owner can answer

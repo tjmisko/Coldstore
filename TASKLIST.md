@@ -111,15 +111,15 @@ deployment.
 
 ### 9. GitHub #13 — reject TOML folder-label changes
 
-- [ ] Before reconciliation writes anything, detect a declared path already catalogued under
+- [x] Before reconciliation writes anything, detect a declared path already catalogued under
       another label and refuse startup with a recovery-oriented error.
-- [ ] Make the read-only config/check path report the same problem without opening/migrating
+- [x] Make the read-only config/check path report the same problem without opening/migrating
       the catalog for writes.
-- [ ] Preserve legitimate path changes under an unchanged label and legitimate removal of a
+- [x] Preserve legitimate path changes under an unchanged label and legitimate removal of a
       folder from TOML.
-- [ ] Cover swapped labels, cleaned paths/trailing slashes and no-write-on-error behavior.
-- [ ] Document labels as permanent identifiers and `display_name` as the cosmetic alternative.
-- [ ] Run Go unit and in-process E2E suites.
+- [x] Cover swapped labels, cleaned paths/trailing slashes and no-write-on-error behavior.
+- [x] Document labels as permanent identifiers and `display_name` as the cosmetic alternative.
+- [x] Run Go unit and in-process E2E suites.
 
 ### 10. GitHub #6 — make Live Photos atomic
 

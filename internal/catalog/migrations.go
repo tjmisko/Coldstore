@@ -42,7 +42,7 @@ func DatabaseSchemaVersion(dbPath string) (int, error) {
 		}
 		return 0, fmt.Errorf("stating database: %w", err)
 	}
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	db, err := sql.Open("sqlite3", readOnlyDSN(dbPath))
 	if err != nil {
 		return 0, fmt.Errorf("opening database: %w", err)
 	}

@@ -684,6 +684,7 @@ volume rather than an empty mountpoint directory, and that the unit's
 | Folder labels are unique | `declared more than once` | yes |
 | Folder paths are absolute | `must be absolute` | yes |
 | No two folders share a path | `two policy rows over one directory would fight` | yes |
+| A catalogued path keeps its original label | `already catalogued under label ...; folder labels are permanent identifiers` | yes, including `--check` |
 | Cold storage and folders do not overlap | `coldstore would archive its own archive` | yes |
 | Each `budget` parses and is positive | `no recognized unit` / `is not positive` | yes |
 | Folder path exists | `does not exist yet` | **no -- warning** |
@@ -880,7 +881,7 @@ Each `[[folders]]` block defines a Syncthing folder to manage.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `label` | string | required | Human-readable folder name. Used as the top-level directory name inside the archive and thumbnails trees. Must be unique across all folders. |
+| `label` | string | required | Permanent folder identifier. Used by catalog rows and as the top-level directory name inside the archive and thumbnails trees. Must be unique; never change it after the folder has been catalogued. |
 | `syncthing_id` | string | required | The Syncthing folder ID (e.g., `xxxxx-xxxxx`). |
 | `path` | string | required | Absolute path to the Syncthing folder on disk. |
 | `budget` | string | required | **Seed value only.** Maximum size of synced files before offloading begins, written to the catalog the first time this folder is seen and ignored on every later start. See "Who owns which setting" below. |
@@ -940,12 +941,21 @@ hour) and skips the folder; the restore and archive endpoints answer `409`.
 
 | Setting | Owner | Edited where | Takes effect |
 |---|---|---|---|
-| `label`, `path`, `syncthing_id` | `coldstore.toml` | over SSH | on restart |
+| `label` | `coldstore.toml` | initial setup only | permanent once catalogued |
+| `path`, `syncthing_id` | `coldstore.toml` | over SSH | on restart |
 | budget | database | web UI | next enforcement tick, no restart |
 | grace period | database | web UI | next enforcement tick, no restart |
 | enabled/disabled | database | web UI | next enforcement tick, no restart |
 | persistent globs | database | web UI | next enforcement tick, no restart |
 | pins | database | web UI | immediately |
+
+The label is an identity, not a display string: file rows, folder policy and archive
+paths all use it as their key. Startup and `--check` reject a TOML declaration whose
+cleaned path (including equivalent trailing-slash forms) is already catalogued under a
+different label, even when the old folder was removed from TOML. Keep the label when a
+folder moves to a new path. `display_name` is the cosmetic alternative in the metadata
+schema/UI that introduces it; on a version that does not expose `display_name` yet,
+there is no supported cosmetic rename, so leave the label unchanged.
 
 **Pins (D2/D3).** A pinned file is never an offload candidate, whatever its age or the
 budget pressure, until the owner unpins it. Restoring a file pins it automatically, with

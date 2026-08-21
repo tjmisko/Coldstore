@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 )
 
@@ -61,5 +63,34 @@ func TestShouldListEveryWarningWhenPreflightReportsWarnings(t *testing.T) {
 	}
 	if !strings.Contains(got, "does not exist yet") {
 		t.Errorf("the warning text itself is missing:\n%s", got)
+	}
+}
+
+func TestCheckShouldReportACataloguedPathUnderAnotherLabel(t *testing.T) {
+	coldDir := t.TempDir()
+	dbPath := filepath.Join(coldDir, "catalog.db")
+	cat, err := catalog.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.ReconcileFolderFromTOML("Photos", "", "/srv/sync/Photos", 100, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{ColdStoragePath: coldDir},
+		Folders: []config.FolderConfig{{
+			Label: "Pictures", Path: "/srv/sync/Photos/", BudgetBytes: 100,
+		}},
+	}
+	err = checkCatalogFolderIdentities(cfg, dbPath)
+	if err == nil {
+		t.Fatal("--check identity validation accepted a label rename")
+	}
+	if !strings.Contains(err.Error(), "already catalogued under label \"Photos\"") {
+		t.Errorf("error = %q, want the catalog ownership conflict", err)
 	}
 }
