@@ -100,9 +100,10 @@ type SafeEvent struct {
 }
 
 type DerivedReport struct {
-	ThumbnailFailures int64  `json:"thumbnail_failures"`
-	DetectionBacklog  int64  `json:"detection_backlog"`
-	MetadataFailures  *int64 `json:"metadata_failures"`
+	ThumbnailFailures int64 `json:"thumbnail_failures"`
+	DetectionBacklog  int64 `json:"detection_backlog"`
+	MetadataFailures  int64 `json:"metadata_failures"`
+	MetadataBacklog   int64 `json:"metadata_backlog"`
 }
 
 type Report struct {
@@ -164,7 +165,6 @@ func (b *Builder) Build(ctx context.Context, cfg *config.Config, dbPath string) 
 			"daemon liveness/version is not probed; this report works without the HTTP listener",
 			"Syncthing folder mode and peer health require the Syncthing API and are not checked",
 			"storage and folder writability are not probed because status performs no writes; use --check and daemon preflight",
-			"metadata extraction failures are unavailable in catalog schema 6",
 			"btrfs device health is best-effort and may require privileges; verify unknown results with btrfs filesystem show",
 		},
 	}
@@ -363,11 +363,19 @@ func (b *Builder) inspectCatalog(cfg *config.Config, cat *catalog.Catalog, r *Re
 	}
 	r.Derived.ThumbnailFailures = derived.ThumbnailFailures
 	r.Derived.DetectionBacklog = derived.DetectionBacklog
+	r.Derived.MetadataFailures = derived.MetadataFailures
+	r.Derived.MetadataBacklog = derived.MetadataBacklog
 	if derived.ThumbnailFailures > 0 {
 		r.warning("thumbnail_failures", fmt.Sprintf("%d files have exhausted or recorded thumbnail failures", derived.ThumbnailFailures))
 	}
 	if derived.DetectionBacklog > 0 {
 		r.warning("detection_backlog", fmt.Sprintf("%d files still need content-type detection", derived.DetectionBacklog))
+	}
+	if derived.MetadataFailures > 0 {
+		r.warning("metadata_failures", fmt.Sprintf("%d files have recorded metadata-extraction failures", derived.MetadataFailures))
+	}
+	if derived.MetadataBacklog > 0 {
+		r.warning("metadata_backlog", fmt.Sprintf("%d files still need metadata extraction", derived.MetadataBacklog))
 	}
 
 	if err := b.inspectEvents(cfg, cat, r); err != nil {

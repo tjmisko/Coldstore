@@ -59,8 +59,9 @@ func WriteHuman(w io.Writer, r Report) error {
 			catalog.HumanSI(folder.PinnedBytes), wedgeSuffix(folder))
 	}
 	line("jobs              %d active, %d failed (retained recent jobs)", len(r.ActiveJobs), len(r.FailedJobs))
-	line("derived data      %d thumbnail failures; %d type-detection backlog; metadata unavailable",
-		r.Derived.ThumbnailFailures, r.Derived.DetectionBacklog)
+	line("derived data      %d thumbnail failures; %d type-detection backlog; %d metadata failures; %d metadata backlog",
+		r.Derived.ThumbnailFailures, r.Derived.DetectionBacklog,
+		r.Derived.MetadataFailures, r.Derived.MetadataBacklog)
 	line("last scan         %s", formatTime(r.LastScan))
 	line("last offload      %s", formatTime(r.LastOffload))
 	line("recent warnings   %d redacted event summaries", len(r.RecentEvents))

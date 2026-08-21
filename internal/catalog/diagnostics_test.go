@@ -26,12 +26,17 @@ func TestDerivedFailureCountsShouldSeparateFailuresFromDetectionBacklog(t *testi
 	if err := cat.SetDetectedType(failed.ID, "image/jpeg"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := cat.db.Exec(`UPDATE files SET meta_attempts = 3, meta_error = 'extractor failed'
+		WHERE id = ?`, failed.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	counts, err := cat.DerivedFailureCounts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts.ThumbnailFailures != 1 || counts.DetectionBacklog != 1 {
-		t.Errorf("counts = %+v, want one thumbnail failure and one detection backlog", counts)
+	if counts.ThumbnailFailures != 1 || counts.DetectionBacklog != 1 ||
+		counts.MetadataFailures != 1 || counts.MetadataBacklog != 1 {
+		t.Errorf("counts = %+v, want one failure and one pending row for each derived-data pass", counts)
 	}
 }

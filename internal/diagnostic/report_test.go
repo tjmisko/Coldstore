@@ -218,6 +218,18 @@ func TestReportShouldSurfaceStaleScanWedgeJobsFailuresAndSafeEvents(t *testing.T
 	if err := f.cat.RecordThumbnailFailure(stored.ID, "thumbnail-secret-detail", now.Unix()); err != nil {
 		t.Fatal(err)
 	}
+	raw, err := sql.Open("sqlite3", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`UPDATE files SET meta_attempts = 3,
+		meta_error = 'metadata-secret-detail' WHERE id = ?`, stored.ID); err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	active, err := f.cat.CreateJob(catalog.JobActionScan, "Photos", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +259,7 @@ func TestReportShouldSurfaceStaleScanWedgeJobsFailuresAndSafeEvents(t *testing.T
 	f.builder.now = func() time.Time { return time.Now().UTC().Add(2 * time.Hour) }
 
 	r := f.builder.Build(context.Background(), f.cfg, f.dbPath)
-	for _, code := range []string{"folder_wedged", "active_job", "failed_job", "thumbnail_failures", "scan_stale", "recent_scan_failed", "recent_conflict", "recent_source_vanished"} {
+	for _, code := range []string{"folder_wedged", "active_job", "failed_job", "thumbnail_failures", "metadata_failures", "scan_stale", "recent_scan_failed", "recent_conflict", "recent_source_vanished"} {
 		if !hasFinding(r, code) {
 			t.Errorf("report missing finding %q: %+v", code, r.Findings)
 		}
@@ -271,7 +283,8 @@ func TestReportShouldSurfaceStaleScanWedgeJobsFailuresAndSafeEvents(t *testing.T
 	for _, secret := range []string{
 		"server-user-secret", "server-password-secret", "api-key-secret", "private-device",
 		"syncthing-device-folder-id", "catalog-device-id", "thumbnail-secret-detail",
-		"job-secret-detail", "scan failure secret", "conflict secret", "private/path", "data safety secret",
+		"metadata-secret-detail", "job-secret-detail", "scan failure secret", "conflict secret",
+		"private/path", "data safety secret",
 	} {
 		if strings.Contains(combined, secret) {
 			t.Errorf("status output leaked %q:\n%s", secret, combined)

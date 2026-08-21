@@ -756,8 +756,6 @@ Checks the binary cannot make honestly:
   listener; the report identifies its own build and says daemon status was not probed;
 - Syncthing Send & Receive mode, peer health and propagation, because there is no
   Syncthing API client;
-- metadata-extraction failures in schema 6, because that subsystem/schema does not exist
-  yet;
 - authoritative btrfs device health when `btrfs filesystem show --raw` is absent or denied.
   An `unknown` result is a warning; run the btrfs command with the privileges appropriate
   to the host. Raw device output is never copied into the report.
