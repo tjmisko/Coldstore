@@ -165,18 +165,133 @@ no ranking, no FTS. So "fuzzy" is the part that does not exist yet, at either en
 ## H. Thumbnails and previews for documents
 
 Today `internal/thumbnail` covers images (imaging), HEIF/HEIC and video (ffmpeg). PDFs, EPUBs
-and extension-less bookmark files render as a grey tile with the filename.
+and extension-less bookmark files render as a grey tile with the filename. Four docs already
+say so on purpose (`docs/deployment.md:27, :239, :1414-1423`, `coldstore.toml.example:64-65`)
+-- all four need updating in the same change as the code.
 
-- [ ] H1. PDF thumbnail from the first page **with content** (blank-page skip heuristic).
-- [ ] H2. EPUB thumbnail: cover image from the OPF manifest, falling back to first content page.
-- [?] H3. Pick the rendering dependency -- pure Go vs an apt package (poppler / mupdf). This
-      decides whether the deploy runbook grows a dependency. (research: `preview-research`)
-- [ ] H4. Full in-browser PDF preview before download.
-- [ ] H5. Full in-browser EPUB preview (paginated reader).
-- [ ] H6. Plaintext preview, including files with **no extension** (bookmarks) -- needs
-      server-side text-vs-binary sniffing, since the extension carries no signal.
-- [ ] H7. Bundle budget: the frontend is embedded in the binary. Preview libraries must be
-      lazy-loaded chunks, not part of the initial payload.
+**Research conclusions:**
+
+| Need | Answer | Cost |
+|---|---|---|
+| PDF thumbnail | shell out to **`pdftocairo`** (poppler-utils) | 1 apt package, 716 kB |
+| EPUB thumbnail | **hand-rolled ~150-line extractor**, `archive/zip` + `encoding/xml` | zero deps |
+| first page *with content* | render up to 3 pages, **ink-coverage test** in Go | zero deps |
+| PDF preview | **pdf.js via react-pdf**, lazy-loaded | ~1.5 MB into the binary |
+| EPUB preview | **server-extracted chapters + sandboxed iframe** | 0 KB |
+| text preview | server-side sniff + `<pre>` behind a new inline endpoint | zero deps |
+
+Notes that decided those:
+- **`pdftoppm` cannot write to stdout** -- `pdftoppm ... -` creates a file named `-.jpg`.
+  Every snippet online that pipes it is wrong. `pdftocairo -jpeg -singlefile -scale-to 400
+  -f 1 -l 1 in.pdf -` does, and Debian bookworm's manpage documents exactly that form.
+- **Pure Go is not available.** pdfcpu cannot rasterize; ledongthuc/rsc.io are text-only;
+  UniPDF is commercial; go-fitz is AGPL. `go-pdfium` in wasm is the one real candidate and
+  is **rejected on this box**: a 5.6 MB `pdfium.wasm` embedded in the binary, "a lot slower
+  than native" on a 1.5 GHz K10, and wazero **never returns linear memory to the OS** --
+  the wrong shape for a long-lived daemon on 3.8 GB that `docs/deployment.md:1426` already
+  flags for OOM risk. A subprocess is bounded by process exit instead.
+- **ImageMagick is a non-starter**: Debian ships a policy denying the PDF coder over the
+  Ghostscript CVEs, so `convert` fails "not authorized" until someone hand-edits a system
+  security policy on a hardened box.
+- Preview rendering belongs **in the browser**, not on the N40L. Server-rendered preview
+  pages would put PDF rasterization on a 1.5 GHz 2011 core in the request path, competing
+  with Syncthing and the thumbnail pass. With pdf.js the daemon's job is `http.ServeFile`
+  with range requests, which it already does. Archived files are served straight from cold
+  storage, so **previewing does not trigger a restore** -- browsing the archive without
+  un-archiving it comes free.
+
+### Blockers that must be cleared first
+
+- [ ] H0a. **`thumbnailExts` (`daemon.go:73-78`) is a second hand-maintained copy of
+      `CanThumbnail` (`thumbnail.go:52`).** Nothing ties them together and nothing tests that
+      they agree; adding a format to one and not the other means the generator supports it
+      while the queue never selects it. Collapse into one exported
+      `thumbnail.SupportedExtensions()` **before** touching anything else here.
+- [ ] H0b. **Extension-less files cannot be reached at all by an extension-keyed change.**
+      `mime_type` comes from `mime.TypeByExtension` (`scanner.go:174-175`) and there is **no
+      content sniffing anywhere in the repo**; `FilesNeedingThumbnails` filters
+      `extension IN (...)` (`catalog.go:803`), which is `''` for exactly the bookmark files
+      this is for. Needs migration 6 adding `detected_type`, a 512-byte magic-number read in
+      the scanner gated on insert-or-mtime-change, and an `OR detected_type IN (...)` in the
+      queue predicate.
+- [ ] H0c. **`scripts/seed-demo` writes fake PDFs** -- `seedDocuments`
+      (`scripts/seed-demo/main.go:475-497`) fills six `.pdf` files with filler bytes. The
+      moment `.pdf` joins the allowlist all six fail three times and Documents fills with
+      failure glyphs; the Playwright suite asserts on gallery and glyph state, so
+      `make test-playwright` and CI go red. Fix the fixture **in the same commit**: a
+      minimal valid one-page PDF is ~700 bytes of literal text, a minimal EPUB is a dozen
+      lines of `archive/zip`. Keep one deliberately corrupt file so the failure path stays
+      covered.
+- [ ] H0d. **BUG-3 must be fixed before H1 ships, not after.** `Lightbox.tsx:128` treats
+      "has a thumbnail" as "is an image", so the first PDF thumbnail turns every PDF into a
+      broken `<img>` pointing at 20 MB of PDF bytes.
+- [ ] H0e. **`Content-Disposition: attachment` is unconditional**
+      (`handlers_files.go:229`). Preview needs a new inline route, and an explicit
+      `Content-Type` -- `ServeFile` sniffs from the extension and `.epub` is not in Go's
+      default MIME table.
+- [ ] H0f. **`db.SetMaxOpenConns(1)`** (`catalog.go:70`) -- every handler serialises against
+      the quota tick and the job worker. A synchronous render inside a request handler would
+      block the daemon; slow work goes on the job queue, which is the lesson
+      `handlers_status.go:38-45` already records from the old inline scan.
+- [ ] H0g. CI needs `poppler-utils` in the `e2e` and `playwright` jobs alongside ffmpeg, or
+      the new thumbnails silently do not generate there. `fresh-clone-build` does not need it.
+
+- [ ] H1. PDF thumbnail via `pdftocairo` to stdout, decoded and resized through the existing
+      `saveThumb` path so the 400px/q80 contract comes free. Mirror `generateHEIF`
+      (`thumbnail.go:199-231`) line for line, and reuse the subprocess harness verbatim --
+      `Setpgid`, process-group SIGKILL on cancel, `WaitDelay = 2s`, a 30s deadline
+      (`thumbnail.go:161-197`) -- plus a `SetPDFRenderer(binary, timeout)` seam mirroring
+      `SetFFmpeg` so the fake-binary test pattern in `ffmpeg_test.go` extends to it.
+- [ ] H2. EPUB thumbnail: five-branch cover lookup (EPUB3 `properties="cover-image"`; EPUB2
+      `<meta name="cover">` by id; the same by filename; a manifest id of
+      `cover`/`cover-image`/`coverimage`; `<guide type="cover">` then its first `<img>`),
+      falling back to a spine walk for the first document containing an image. Resolve every
+      href **relative to the OPF's own directory, not the zip root** -- that is the bug every
+      naive implementation ships. Cap the OPF read and the cover read, reject `..` in
+      resolved paths and absurd declared sizes. Also: **register `image/gif`**
+      (`thumbnail.go:12-20` does not), since some older covers are GIF. Return a clean
+      `thumb_error` for SVG covers rather than pulling in a rasterizer.
+- [ ] H3. "First page with content": render page 1 at thumbnail size, compute **ink
+      coverage** on a stride with a ~3% border margin ignored; below ~0.5% try page 2 then 3,
+      then keep page 1 regardless -- never fail a file over this. Cap at 3 renders on one
+      shared deadline. Coverage, not standard deviation: they disagree on gradient covers and
+      coverage is the one that behaves on scans.
+- [ ] H4. PDF preview via `react-pdf` (MIT, pins `pdfjs-dist` exactly). **Not** the native
+      `<embed>`/`<iframe>`: iOS Safari renders only the first page until tapped to full
+      screen, Samsung Internet and Opera Mobile hand off or download outright, and the
+      unconditional `Content-Disposition: attachment` turns a native embed into a download.
+      Wire the worker with `import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'`
+      so Vite emits it as a hashed asset the embedded FS serves -- no CDN. Ship
+      `standard_fonts/` (+780 kB, needed by older PDFs that rely on the standard-14 without
+      embedding); **skip `cmaps/`** (+1.2 MB, CJK only).
+- [ ] H5. EPUB preview: extend the H2 zip reader into
+      `GET /api/v1/files/{id}/epub/{resource...}` plus a spine/TOC endpoint, rendered in a
+      sandboxed iframe with rewritten resource URLs. **0 KB of bundle**, no unzipping 20 MB
+      in a phone browser, and it reuses a parser that will already be tested. Gives up
+      epub.js's paginated columns and CFI memory, which "look before downloading" does not
+      need. epub.js (224 kB, BSD-2) drops in behind the same lazy boundary later if wanted --
+      note it must be handed an `arrayBuffer` with `"binary"`, because it infers type from
+      the URL extension and the download route has none.
+      **New traversal surface**: the untrusted component is a zip entry name, so validate
+      resolved paths against the archive root explicitly rather than relying on mux cleaning.
+- [ ] H6. Plaintext preview, including files with **no extension** (bookmarks). Detect in Go,
+      never in the browser: magic numbers first, then git's heuristic -- a NUL byte in the
+      first 8000 bytes, or invalid UTF-8, means binary. `http.DetectContentType` is not
+      enough on its own; it returns `application/octet-stream` for anything without a magic
+      number. Serve from the new inline endpoint with an explicit
+      `text/plain; charset=utf-8`, `nosniff`, and a **hard byte cap** (256 KB-1 MB with a
+      `truncated` flag) so a 2 GB log cannot stream the box to death for a preview nobody
+      reads past screen one. Client side is `<pre class="whitespace-pre-wrap font-mono">`.
+      **Skip syntax highlighting** -- highlight.js core plus grammars is 80-150 kB for
+      content that is bookmarks and notes.
+- [ ] H7. Bundle budget. Note the counterintuitive part: **`React.lazy` does not shrink the
+      Go binary** -- `//go:embed all:dist` embeds every file whether split or not. Splitting
+      buys first paint, not size. Budget: dist 278 KB today -> ~2.6 MB, binary 14.4 -> ~17 MB.
+      One `React.lazy` boundary holding pdf.js, imported **on lightbox open for a previewable
+      file**, not on app mount, so the gallery grid never touches it. Embedded assets are
+      demand-paged from the executable's read-only segment, so they cost evictable page cache
+      rather than daemon RSS -- which is exactly why +2.6 MB of frontend and +5.6 MB of
+      `pdfium.wasm` are not comparable numbers.
 - [ ] H8. Preview must work for **archived** files too, or explicitly say "restore to preview".
 - [ ] H9. **Thumbnails exist at exactly one size** -- `maxEdge = 400`, JPEG q80,
       `.thumb.jpg` (`internal/thumbnail/thumbnail.go:25-28`). There is no larger derivative,
