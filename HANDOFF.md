@@ -21,7 +21,7 @@ documents and tagging-design branches are already integrated; do not merge them 
    migration 6 or rename migration 7. The landed plan uses 7 and 8; issue-body edits are the
    only unfinished part of `TASKLIST.md` item 8.
 4. Follow `docs/tagging-design.md` section 8 for implementation order. Metadata issues #1–#3
-   precede the Live Photo atomicity fix in #6.
+   are complete, so the Live Photo atomicity fix in #6 can now land.
 5. Leave ingress/session-auth work at its decision gate until the owner selects a domain,
    proxy and trust boundary. Do not expose the raw control-plane listener.
 6. Treat every production/deployment checkbox as owner-mediated. No host access or rollout

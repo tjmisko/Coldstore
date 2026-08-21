@@ -205,13 +205,13 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
       resident ExifTool probe, real fixtures and cancellation/deadline safety.
 - [x] #2 — migration 7: tags, descriptions, capture/location fields, pairing fields and
       `display_name`.
-- [ ] #3 — background metadata extraction pass with its own queue, attempt budget and
+- [x] #3 — background metadata extraction pass with its own queue, attempt budget and
       owner-edit preservation.
 - [ ] #6 — atomic Live Photo pairing and movement (P0 specification above).
-- [ ] #7 — normalized tag catalog primitives and CRUD API.
+- [x] #7 — normalized tag catalog primitives and CRUD API.
 - [ ] #4 — capture-date sorting/filtering/grouping with honest unknown-offset display.
 - [ ] #5 — location display/proximity filtering and location tagging without geocoding.
-- [ ] #8 — descriptions API/editor with keymap-safe text entry.
+- [x] #8 — descriptions API/editor with keymap-safe text entry.
 - [ ] #9 — extend search to path/description/tags and add tag/untagged filters. Benchmark
       `LIKE` on representative N40L-scale data before accepting the no-FTS5 claim.
 - [ ] #10 — mouse-first tagging UI, typeahead prompt and tag manager.

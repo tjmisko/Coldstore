@@ -107,8 +107,8 @@ already-offloaded archive rows.
 
 - GitHub #6: identify Live Photo groups by content identifier and expand them atomically at
   every archive, restore, rename and quota-accounting entry point.
-- Metadata package #1 and schema #2 (migration 7) are complete. Extraction pass #3 remains
-  the final prerequisite. Follow `docs/tagging-design.md` section 8 rather than skipping it.
+- Metadata package #1, schema #2 (migration 7) and extraction pass #3 are complete. The
+  prerequisite chain for #6 is now clear; follow `docs/tagging-design.md` section 8.
 
 ### Product and operations
 
