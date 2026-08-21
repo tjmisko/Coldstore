@@ -1,12 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveMotion, resolveRange, spanIndices, visualSpan, type Geometry } from "../keymap/motions";
-import type { Command, Mode, OperatorTarget, Scope } from "../keymap/types";
+import type { Command, Mode, MotionId, OperatorTarget, Scope } from "../keymap/types";
 import type { FileRecord } from "../types/api";
 import type { FileReveal } from "../types/navigation";
 import type { FileActions } from "./useFileWorkspace";
 import type { Selection } from "./useSelection";
 import type { BulkActions } from "./useBulkActions";
 import { useKeymapLayer } from "./useKeymapLayer";
+import { quickSlotFromAction } from "./useQuickSlots";
+import { resolveCaptureDayJump } from "../lib/capture";
+
+interface ContextMotionResult {
+  index: number;
+  complete: boolean;
+}
+
+type MotionCommand = Extract<Command, { kind: "motion" }>;
+type OperatorCommand = Extract<Command, { kind: "operator" }>;
+
+const noop = () => {};
+
+function isContextMotion(motion: MotionId): boolean {
+  return [
+    "capture-day-next", "capture-day-previous", "tag-next", "tag-previous",
+    "untagged-next", "untagged-previous", "pair-next", "pair-previous",
+  ].includes(motion);
+}
+
+function motionDirection(motion: MotionId): -1 | 1 {
+  return motion.endsWith("previous") ? -1 : 1;
+}
 
 interface Options {
   scope: Extract<Scope, "gallery" | "browser">;
@@ -24,7 +47,11 @@ interface Options {
   onContextMenu(index: number): void;
   onEditDescription(index: number): void;
   /** Resolve a capture-day jump against the ordering the gallery is showing. */
-  resolveCaptureDay?(index: number, direction: -1 | 1, count: number): number;
+  resolveCaptureDay?(index: number, direction: -1 | 1, count: number): ContextMotionResult;
+  hasMore?: boolean;
+  loading?: boolean;
+  loadMore?(): void;
+  onTagMode?(index: number): void;
   /** False while the lightbox is open: the cursor stops following the grid. */
   active?: boolean;
   /** A file the finder asked to be revealed, and a token that changes on every
@@ -52,6 +79,7 @@ export function useGridKeymap(options: Options): GridCursor {
   const {
     scope, files, columns, visibleRows, selection, actions, bulk,
     conflictMode, onOpen, onContextMenu, onEditDescription, resolveCaptureDay,
+    hasMore = false, loading = false, loadMore = noop, onTagMode = noop,
     active = true, reveal = null,
   } = options;
 
@@ -65,6 +93,11 @@ export function useGridKeymap(options: Options): GridCursor {
   const [focusToken, setFocusToken] = useState(0);
   const appliedFocus = useRef(0);
   const visual = useRef<{ anchor: number; mode: Mode; snapshot: ReadonlySet<number> } | null>(null);
+  const pendingContext = useRef<{
+    command: MotionCommand | OperatorCommand;
+    fromID: number;
+    loadedLength: number;
+  } | null>(null);
 
   // Adjusting state during render, the same pattern Shell uses to auto-select
   // the first folder: a filter change can shrink the list under the cursor, and
@@ -136,34 +169,108 @@ export function useGridKeymap(options: Options): GridCursor {
     [files],
   );
 
+  const expandPairIDs = useCallback((ids: number[]): number[] => {
+    const wanted = new Set(ids);
+    const pairKeys = new Set<string>();
+    for (const file of files) {
+      if (wanted.has(file.id) && file.pair_key) pairKeys.add(file.pair_key);
+    }
+    if (pairKeys.size === 0) return ids;
+    const result = [...ids];
+    for (const file of files) {
+      if (file.pair_key && pairKeys.has(file.pair_key) && !wanted.has(file.id)) {
+        wanted.add(file.id);
+        result.push(file.id);
+      }
+    }
+    return result;
+  }, [files]);
+
+  const resolveContext = useCallback((motion: MotionId, count: number, at: number): ContextMotionResult => {
+    const direction = motionDirection(motion);
+    if (motion === "capture-day-next" || motion === "capture-day-previous") {
+      const result = resolveCaptureDay?.(at, direction, count) ?? resolveCaptureDayJump(files, at, direction, count);
+      if (direction > 0 && !result.complete && !hasMore) {
+        return { index: Math.max(at, files.length - 1), complete: true };
+      }
+      return { ...result, complete: result.complete || direction < 0 || !hasMore };
+    }
+
+    const distance = count > 0 ? count : 1;
+    let current = at;
+    for (let step = 0; step < distance; step += 1) {
+      const source = files[current];
+      if (!source) return { index: at, complete: true };
+      let found = -1;
+      if (motion === "tag-next" || motion === "tag-previous") {
+        if (source.tags.length === 0) return { index: current, complete: true };
+        const sourceTags = new Set(source.tags.map((tag) => tag.toLocaleLowerCase()));
+        for (let index = current + direction; index >= 0 && index < files.length; index += direction) {
+          if (files[index].tags.some((tag) => sourceTags.has(tag.toLocaleLowerCase()))) {
+            found = index;
+            break;
+          }
+        }
+      } else if (motion === "untagged-next" || motion === "untagged-previous") {
+        for (let index = current + direction; index >= 0 && index < files.length; index += direction) {
+          if (files[index].tags.length === 0) {
+            found = index;
+            break;
+          }
+        }
+      } else {
+        const group = source.pair_key ? `pair:${source.pair_key}` : `file:${source.id}`;
+        for (let index = current + direction; index >= 0 && index < files.length; index += direction) {
+          const candidate = files[index];
+          const candidateGroup = candidate.pair_key ? `pair:${candidate.pair_key}` : `file:${candidate.id}`;
+          if (candidateGroup !== group) {
+            found = index;
+            break;
+          }
+        }
+      }
+      if (found < 0) {
+        return { index: current, complete: direction < 0 || !hasMore };
+      }
+      current = found;
+    }
+    return { index: current, complete: true };
+  }, [files, hasMore, resolveCaptureDay]);
+
   /** The ids an operator should act on.
    *
    *  A visual span wins, then a live selection, then the range the motion
    *  described. The order matters: `d` pressed with fifty files selected must
    *  not archive only the one under the cursor. */
   const targetIDs = useCallback(
-    (target: OperatorTarget): number[] => {
+    (target: OperatorTarget, at = clamped, resolvedTo?: number, keepPairs = false): number[] => {
       if (target.kind === "selection") {
         const live = visual.current;
         if (live) {
-          const span = visualSpan(live.anchor, clamped, live.mode === "visual-line", geometry());
-          return [...new Set([...live.snapshot, ...idsFor(spanIndices(span))])];
+          const span = visualSpan(live.anchor, at, live.mode === "visual-line", geometry(at));
+          const ids = [...new Set([...live.snapshot, ...idsFor(spanIndices(span))])];
+          return keepPairs ? expandPairIDs(ids) : ids;
         }
-        if (selection.count > 0) return selection.ids;
+        if (selection.count > 0) return keepPairs ? expandPairIDs(selection.ids) : selection.ids;
         // The rule the palette states in its own footer, applied in exactly one
         // place: the selection when there is one, the cursor file when there is
         // not.
-        const cursor = files[clamped];
-        return cursor ? [cursor.id] : [];
+        const cursor = files[at];
+        const ids = cursor ? [cursor.id] : [];
+        return keepPairs ? expandPairIDs(ids) : ids;
       }
       if (selection.count > 0 && target.kind === "line" && target.count <= 1) {
         // `dd` with a selection on screen means the selection, not the one file
         // the cursor happens to be over.
-        return selection.ids;
+        return keepPairs ? expandPairIDs(selection.ids) : selection.ids;
       }
-      return idsFor(spanIndices(resolveRange(target, geometry())));
+      const span = target.kind === "motion" && resolvedTo !== undefined
+        ? { from: Math.min(at, resolvedTo), to: Math.max(at, resolvedTo) }
+        : resolveRange(target, geometry(at));
+      const ids = idsFor(spanIndices(span));
+      return keepPairs ? expandPairIDs(ids) : ids;
     },
-    [clamped, files, geometry, idsFor, selection],
+    [clamped, expandPairIDs, files, geometry, idsFor, selection],
   );
 
   const applyVisual = useCallback(
@@ -187,22 +294,77 @@ export function useGridKeymap(options: Options): GridCursor {
     [files, clamped, conflictMode, actions],
   );
 
+  const queueContext = useCallback((command: MotionCommand | OperatorCommand, at: number) => {
+    const file = files[at];
+    if (!file || !hasMore) return;
+    pendingContext.current = { command, fromID: file.id, loadedLength: files.length };
+    loadMore();
+  }, [files, hasMore, loadMore]);
+
+  const executeMotion = useCallback((command: MotionCommand, at = clamped): boolean => {
+    let next: number;
+    if (isContextMotion(command.motion)) {
+      const result = resolveContext(command.motion, command.count, at);
+      if (!result.complete) {
+        queueContext(command, at);
+        return true;
+      }
+      next = result.index;
+    } else {
+      next = resolveMotion(command.motion, command.count, geometry(at));
+    }
+    moveCursor(next);
+    if (command.extend) applyVisual(next);
+    if (next >= files.length - 5 && hasMore && !loading) loadMore();
+    return true;
+  }, [applyVisual, clamped, files.length, geometry, hasMore, loadMore, loading, moveCursor, queueContext, resolveContext]);
+
+  const executeOperator = useCallback((command: OperatorCommand, at = clamped): boolean => {
+    const forceSelection = (command.operator === "tag" || command.operator === "untag") && selection.count > 0;
+    const keepPairs = command.operator === "tag" || command.operator === "untag";
+    if (forceSelection) {
+      bulk.perform(command.operator, targetIDs({ kind: "selection" }, at, undefined, keepPairs));
+      return true;
+    }
+    let resolvedTo: number | undefined;
+    if (command.target.kind === "motion" && isContextMotion(command.target.motion)) {
+      const result = resolveContext(command.target.motion, command.target.count, at);
+      if (!result.complete) {
+        queueContext(command, at);
+        return true;
+      }
+      resolvedTo = result.index;
+      if (command.target.motion === "capture-day-next" && resolvedTo > at) resolvedTo -= 1;
+    }
+    bulk.perform(command.operator, targetIDs(command.target, at, resolvedTo, keepPairs));
+    return true;
+  }, [bulk, clamped, queueContext, resolveContext, selection.count, targetIDs]);
+
+  useEffect(() => {
+    const pending = pendingContext.current;
+    if (!pending || loading) return;
+    if (files.length <= pending.loadedLength) {
+      pendingContext.current = null;
+      return;
+    }
+    const at = files.findIndex((file) => file.id === pending.fromID);
+    pendingContext.current = null;
+    if (at < 0) return;
+    if (pending.command.kind === "motion") executeMotion(pending.command, at);
+    else executeOperator(pending.command, at);
+  }, [executeMotion, executeOperator, files, loading]);
+
   const handle = useCallback(
     (command: Command): boolean => {
       if (files.length === 0 && command.kind !== "action") return false;
 
       switch (command.kind) {
         case "motion": {
-          const next = resolveMotion(command.motion, command.count, geometry());
-          moveCursor(next);
-          if (command.extend) applyVisual(next);
-          return true;
+          return executeMotion(command);
         }
 
         case "operator": {
-          const ids = targetIDs(command.target);
-          bulk.perform(command.operator, ids);
-          return true;
+          return executeOperator(command);
         }
 
         case "mode": {
@@ -218,7 +380,14 @@ export function useGridKeymap(options: Options): GridCursor {
           return true;
         }
 
-        case "action":
+        case "action": {
+          const slot = quickSlotFromAction(command.action);
+          if (slot !== null) {
+            const cursor = files[clamped];
+            const ids = expandPairIDs(selection.count > 0 ? selection.ids : cursor ? [cursor.id] : []);
+            void actions.applyQuickSlot(ids, slot);
+            return true;
+          }
           switch (command.action) {
             case "open":
               if (files[clamped]) onOpen(clamped);
@@ -243,11 +412,25 @@ export function useGridKeymap(options: Options): GridCursor {
             case "edit-description":
               if (files[clamped]) onEditDescription(clamped);
               return true;
-            case "previous-capture-day":
-            case "next-capture-day": {
-              if (!resolveCaptureDay || !files[clamped]) return false;
-              const direction = command.action === "previous-capture-day" ? -1 : 1;
-              moveCursor(resolveCaptureDay(clamped, direction, command.count));
+            case "repeat-tags": {
+              const cursor = files[clamped];
+              if (cursor) void actions.repeatTags(expandPairIDs([cursor.id]));
+              return true;
+            }
+            case "tag-undo":
+              void actions.undoTags();
+              return true;
+            case "tag-redo":
+              void actions.redoTags();
+              return true;
+            case "tag-mode":
+              if (files[clamped]) onTagMode(clamped);
+              return true;
+            case "tag-current":
+            case "untag-current": {
+              const cursor = files[clamped];
+              const ids = expandPairIDs(selection.count > 0 ? selection.ids : cursor ? [cursor.id] : []);
+              bulk.perform(command.action === "tag-current" ? "tag" : "untag", ids);
               return true;
             }
             case "resolve-device":
@@ -263,11 +446,12 @@ export function useGridKeymap(options: Options): GridCursor {
             default:
               return false;
           }
+        }
       }
     },
     [
-      files, clamped, geometry, moveCursor, applyVisual, targetIDs, bulk,
-      selection, onOpen, onContextMenu, onEditDescription, resolveCaptureDay, resolveConflict,
+      files, clamped, executeMotion, executeOperator, expandPairIDs, applyVisual, actions,
+      selection, bulk, onOpen, onContextMenu, onEditDescription, onTagMode, resolveConflict,
     ],
   );
 

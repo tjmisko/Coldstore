@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { api, type NearFilter } from "../lib/api";
 import { captureDayGroups, formatCaptureDay, resolveCaptureDayJump } from "../lib/capture";
 import { formatCount, formatSize } from "../lib/format";
@@ -16,6 +16,7 @@ import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
 import { TagChips } from "./TagChips";
+import { TagMode } from "./TagMode";
 import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 
 interface GalleryProps {
@@ -48,14 +49,13 @@ export function Gallery({
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
   const [locationIndex, setLocationIndex] = useState<number | null>(null);
-  const [tagPrompt, setTagPrompt] = useState<{ ids: number[]; mode: TagPromptMode } | null>(null);
-  const observer = useRef<IntersectionObserver | null>(null);
-  const pendingDayJump = useRef<{
-    fromID: number;
-    direction: -1 | 1;
-    count: number;
-    loadedLength: number;
+  const [tagPrompt, setTagPrompt] = useState<{
+    ids: number[];
+    mode: TagPromptMode;
+    initialTags?: string[];
   } | null>(null);
+  const [tagMode, setTagMode] = useState(false);
+  const observer = useRef<IntersectionObserver | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -80,7 +80,16 @@ export function Gallery({
     [refetchIds, onFolderChanged],
   );
 
-  const bulk = useBulkActions({ selection, filters, onFinished });
+  const openTagPrompt = useCallback((mode: TagPromptMode, ids: number[]) => {
+    const previous = workspace.lastTagOperation;
+    setTagPrompt({
+      ids,
+      mode,
+      initialTags: previous?.mode === mode ? previous.tags : undefined,
+    });
+  }, [workspace.lastTagOperation]);
+
+  const bulk = useBulkActions({ selection, filters, onFinished, onTag: openTagPrompt });
 
   const viewport = useViewport();
   const columns = galleryColumns(viewport.width);
@@ -114,48 +123,14 @@ export function Gallery({
     onContextMenu: (index) => openMenu(index, null),
     onEditDescription: setDescriptionIndex,
     resolveCaptureDay: effectiveSort === "captured"
-      ? (index, direction, count) => {
-          const jump = resolveCaptureDayJump(files, index, direction, count);
-          if (!jump.complete && hasMore) {
-            pendingDayJump.current = {
-              fromID: files[index].id,
-              direction,
-              count,
-              loadedLength: files.length,
-            };
-            loadMore();
-            return index;
-          }
-          return jump.index;
-        }
+      ? (index, direction, count) => resolveCaptureDayJump(files, index, direction, count)
       : undefined,
+    hasMore,
+    loading,
+    loadMore,
+    onTagMode: () => setTagMode(true),
     active: lightboxIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
   });
-  const moveCursorTo = cursor.moveTo;
-
-  useEffect(() => {
-    const pending = pendingDayJump.current;
-    if (!pending || loading) return;
-    // A failed page leaves hasMore true but adds no rows. Stop here rather
-    // than retrying forever; useFiles already exposes the request error.
-    if (files.length <= pending.loadedLength) {
-      pendingDayJump.current = null;
-      return;
-    }
-    const from = files.findIndex((file) => file.id === pending.fromID);
-    if (from < 0) {
-      pendingDayJump.current = null;
-      return;
-    }
-    const jump = resolveCaptureDayJump(files, from, pending.direction, pending.count);
-    if (!jump.complete && hasMore) {
-      pending.loadedLength = files.length;
-      loadMore();
-      return;
-    }
-    pendingDayJump.current = null;
-    moveCursorTo(jump.index);
-  }, [files, hasMore, loadMore, loading, moveCursorTo]);
 
   if (!folder) {
     return (
@@ -269,6 +244,7 @@ export function Gallery({
           hasMore={hasMore}
           actions={actions}
           bulk={bulk}
+          selection={selection}
           onFindNearby={setNear}
         />
       )}
@@ -316,8 +292,19 @@ export function Gallery({
           ids={tagPrompt.ids}
           mode={tagPrompt.mode}
           selectionNote={bulk.selectAllNote}
+          initialTags={tagPrompt.initialTags}
           onApply={(add, remove) => actions.tagFiles(tagPrompt.ids, add, remove)}
           onClose={() => setTagPrompt(null)}
+        />
+      )}
+
+      {tagMode && cursor.file && (
+        <TagMode
+          files={files}
+          index={cursor.index}
+          actions={actions}
+          lastOperation={workspace.lastTagOperation}
+          onClose={() => setTagMode(false)}
         />
       )}
 
@@ -379,6 +366,7 @@ function Tile({
       tabIndex={0}
       aria-label={file.filename}
       data-file-id={file.id}
+      data-pair-group={file.pair_key || undefined}
       data-selected={selected}
       data-cursor={cursor}
       data-cursor-scope="gallery"

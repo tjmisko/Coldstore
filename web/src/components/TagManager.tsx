@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTagManager } from "../hooks/useTags";
+import { QUICK_SLOT_COUNT, useQuickSlots } from "../hooks/useQuickSlots";
 import { errorMessage } from "../lib/api";
 import { formatCount } from "../lib/format";
 import { useToast } from "../lib/toast";
@@ -8,6 +9,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 
 export function TagManager({ folder }: { folder: string }) {
   const manager = useTagManager(folder);
+  const quick = useQuickSlots(folder);
   const toast = useToast();
   const [editing, setEditing] = useState<Tag | null>(null);
   const [draft, setDraft] = useState("");
@@ -81,6 +83,35 @@ export function TagManager({ folder }: { folder: string }) {
       <p className="mb-3 mt-2 text-meta text-ink-muted">
         Counts are catalog-wide: exact assignments beside the tag and all assignments below it. Renaming onto an existing tag merges them without losing file assignments.
       </p>
+
+      <div className="mb-5 rounded-lg border border-line bg-ground/35 p-3">
+        <h4 className="text-meta font-medium text-ink">Quick tags for {folder}</h4>
+        <p className="mt-1 text-meta text-ink-faint">
+          Apply these with Space then 1–9. Bare digits remain motion counts.
+        </p>
+        <datalist id={`quick-tags-${folder}`}>
+          {tags.map((tag) => <option key={tag.id} value={tag.name} />)}
+        </datalist>
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {Array.from({ length: QUICK_SLOT_COUNT }, (_, index) => {
+            const slot = index + 1;
+            return (
+              <label key={slot} className="flex items-center gap-2 text-meta text-ink-muted">
+                <span className="w-4 text-right font-mono">{slot}</span>
+                <input
+                  data-quick-slot={slot}
+                  aria-label={`Quick tag ${slot}`}
+                  list={`quick-tags-${folder}`}
+                  value={quick.slots[index] ?? ""}
+                  onChange={(event) => quick.setSlot(slot, event.target.value)}
+                  placeholder="unassigned"
+                  className="min-w-0 flex-1 rounded-md border border-line-strong bg-raised px-2 py-1 text-meta text-ink outline-none focus:ring-2 focus:ring-cursor"
+                />
+              </label>
+            );
+          })}
+        </div>
+      </div>
 
       {manager.error && <p className="mb-2 text-base text-alarm" role="alert">{manager.error}</p>}
       {manager.loading && tags.length === 0 && <p className="text-base text-ink-faint">Loading tags…</p>}

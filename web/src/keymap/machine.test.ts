@@ -71,17 +71,16 @@ describe("counts", () => {
 
   it("should carry counts into capture-day navigation without changing digit motions", () => {
     expect(run("3}").commands).toEqual([
-      { kind: "action", action: "next-capture-day", count: 3 },
+      { kind: "motion", motion: "capture-day-next", count: 3, extend: false },
     ]);
     expect(run("3j").commands).toEqual([
       { kind: "motion", motion: "down", count: 3, extend: false },
     ]);
   });
 
-  it("should keep capture-day navigation in gallery scope", () => {
-    expect(run("}", { chain: ["browser", "global"] }).commands).toEqual([]);
-    expect(run("}", { chain: ["gallery", "global"] }).commands).toEqual([
-      { kind: "action", action: "next-capture-day", count: 0 },
+  it("should expose capture-day navigation as an ordinary navigable motion", () => {
+    for (const scope of ["browser", "gallery", "lightbox"] as const) expect(run("}", { chain: [scope, "global"] }).commands).toEqual([
+      { kind: "motion", motion: "capture-day-next", count: 0, extend: false },
     ]);
   });
 });
@@ -114,6 +113,35 @@ describe("operators", () => {
         { kind: "operator", operator, target: { kind: "motion", motion: "last", count: 0 } },
       ]);
     }
+  });
+
+  it("should compose tag and untag with doubled, counted, and contextual motions", () => {
+    expect(run("tt").commands).toEqual([
+      { kind: "operator", operator: "tag", target: { kind: "line", count: 0 } },
+    ]);
+    expect(run("2t3j").commands).toEqual([
+      { kind: "operator", operator: "tag", target: { kind: "motion", motion: "down", count: 6 } },
+    ]);
+    expect(run("T]u").commands).toEqual([
+      { kind: "operator", operator: "untag", target: { kind: "motion", motion: "untagged-next", count: 0 } },
+    ]);
+  });
+
+  it("should make t and T implicit-current actions only inside Tag mode", () => {
+    expect(run("t", { chain: ["tagging", "gallery", "global"] }).commands).toEqual([
+      { kind: "action", action: "tag-current", count: 0 },
+    ]);
+    expect(run("T", { chain: ["tagging", "gallery", "global"] }).commands).toEqual([
+      { kind: "action", action: "untag-current", count: 0 },
+    ]);
+  });
+
+  it("emits resolved repeat, exact history, and leader quick-slot actions", () => {
+    expect(run(".").commands).toEqual([{ kind: "action", action: "repeat-tags", count: 0 }]);
+    expect(run("U").commands).toEqual([{ kind: "action", action: "tag-undo", count: 0 }]);
+    expect(run("<C-r>").commands).toEqual([{ kind: "action", action: "tag-redo", count: 0 }]);
+    expect(run("<Space>3").commands).toEqual([{ kind: "action", action: "quick-tag-3", count: 0 }]);
+    expect(run("3j").commands).toEqual([{ kind: "motion", motion: "down", count: 3, extend: false }]);
   });
 
   it("should reach a multi-key motion from operator-pending when gg is typed", () => {
@@ -186,6 +214,13 @@ describe("visual mode", () => {
     const { commands } = run("v3jd");
     expect(commands.slice(2)).toEqual([
       { kind: "operator", operator: "archive", target: { kind: "selection" } },
+      { kind: "mode", mode: "normal", from: "visual" },
+    ]);
+  });
+
+  it("should hand a visual span straight to the tag operator", () => {
+    expect(run("v3jt").commands.slice(2)).toEqual([
+      { kind: "operator", operator: "tag", target: { kind: "selection" } },
       { kind: "mode", mode: "normal", from: "visual" },
     ]);
   });

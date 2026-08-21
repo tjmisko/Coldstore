@@ -1,14 +1,16 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDateTime, formatSize } from "../lib/format";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useKeymapLayer } from "../hooks/useKeymapLayer";
 import { useScrollLock } from "../hooks/useScrollLock";
 import { resolveMotion, resolveRange, spanIndices } from "../keymap/motions";
-import type { Command } from "../keymap/types";
+import type { Command, MotionId } from "../keymap/types";
 import { resolvePreview } from "../lib/preview";
 import { Z } from "../lib/zLayers";
 import type { BulkActions } from "../hooks/useBulkActions";
 import type { FileActions } from "../hooks/useFileWorkspace";
+import type { Selection } from "../hooks/useSelection";
+import { quickSlotFromAction } from "../hooks/useQuickSlots";
 import type { FileRecord } from "../types/api";
 import type { NearFilter } from "../lib/api";
 import { PinToggle } from "./PinToggle";
@@ -33,6 +35,7 @@ interface LightboxProps {
   /** The same bulk path, so `d3j` in the lightbox queues the same job the
    *  selection bar would. */
   bulk: BulkActions;
+  selection: Selection;
   onFindNearby(near: NearFilter): void;
 }
 
@@ -55,6 +58,44 @@ function statusColor(status: FileRecord["status"]): string {
   }
 }
 
+function pairIDs(files: FileRecord[], ids: number[]): number[] {
+  const result = new Set(ids);
+  const keys = new Set(files.filter((file) => result.has(file.id) && file.pair_key).map((file) => file.pair_key));
+  for (const file of files) if (file.pair_key && keys.has(file.pair_key)) result.add(file.id);
+  return [...result];
+}
+
+function contextMotion(files: FileRecord[], at: number, motion: MotionId, count: number): number {
+  const direction = motion.endsWith("previous") ? -1 : 1;
+  const distance = count > 0 ? count : 1;
+  let current = at;
+  for (let step = 0; step < distance; step += 1) {
+    const source = files[current];
+    if (!source) return at;
+    let found = -1;
+    const day = source.captured_local.slice(0, 10);
+    const tags = new Set(source.tags.map((tag) => tag.toLocaleLowerCase()));
+    const group = source.pair_key ? `pair:${source.pair_key}` : `file:${source.id}`;
+    for (let candidate = current + direction; candidate >= 0 && candidate < files.length; candidate += direction) {
+      const file = files[candidate];
+      const matches = motion.startsWith("capture-day-")
+        ? file.captured_local.slice(0, 10) !== day
+        : motion.startsWith("tag-")
+          ? file.tags.some((tag) => tags.has(tag.toLocaleLowerCase()))
+          : motion.startsWith("untagged-")
+            ? file.tags.length === 0
+            : (file.pair_key ? `pair:${file.pair_key}` : `file:${file.id}`) !== group;
+      if (matches) {
+        found = candidate;
+        break;
+      }
+    }
+    if (found < 0) return current;
+    current = found;
+  }
+  return current;
+}
+
 export function Lightbox({
   files,
   initialIndex,
@@ -63,6 +104,7 @@ export function Lightbox({
   hasMore,
   actions,
   bulk,
+  selection,
   onFindNearby,
 }: LightboxProps) {
   const [index, setIndex] = useState(initialIndex);
@@ -72,6 +114,7 @@ export function Lightbox({
   const [locationOpen, setLocationOpen] = useState(false);
   const [tagPrompt, setTagPrompt] = useState<TagPromptMode | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingContext = useRef<{ command: Command; loadedLength: number } | null>(null);
   const containerRef = useFocusTrap(true);
   useScrollLock(true);
 
@@ -116,23 +159,52 @@ export function Lightbox({
       const geometry = { index, total: files.length, columns: 1, rows: 10 };
 
       switch (command.kind) {
-        case "motion":
-          goTo(resolveMotion(command.motion, command.count, geometry));
+        case "motion": {
+          const contextual = ["capture-day-next", "capture-day-previous", "tag-next", "tag-previous", "untagged-next", "untagged-previous", "pair-next", "pair-previous"].includes(command.motion);
+          const next = contextual
+            ? contextMotion(files, index, command.motion, command.count)
+            : resolveMotion(command.motion, command.count, geometry);
+          if (contextual && next === index && command.motion.endsWith("next") && hasMore) {
+            pendingContext.current = { command, loadedLength: files.length };
+            onLoadMore();
+            return true;
+          }
+          goTo(next);
           return true;
+        }
 
         case "operator": {
-          const span =
-            command.target.kind === "selection"
+          const selectionWins = (command.operator === "tag" || command.operator === "untag") && selection.count > 0;
+          const contextual = command.target.kind === "motion" && ["capture-day-next", "capture-day-previous", "tag-next", "tag-previous", "untagged-next", "untagged-previous", "pair-next", "pair-previous"].includes(command.target.motion);
+          const contextTarget = contextual && command.target.kind === "motion"
+            ? contextMotion(files, index, command.target.motion, command.target.count)
+            : index;
+          if (contextual && command.target.kind === "motion" && contextTarget === index && command.target.motion.endsWith("next") && hasMore) {
+            pendingContext.current = { command, loadedLength: files.length };
+            onLoadMore();
+            return true;
+          }
+          const span = selectionWins || command.target.kind === "selection"
               ? { from: index, to: index }
-              : resolveRange(command.target, geometry);
-          const ids = spanIndices(span)
+              : contextual && command.target.kind === "motion"
+                ? { from: Math.min(index, contextTarget), to: Math.max(index, contextTarget) }
+                : resolveRange(command.target, geometry);
+          const resolved = selectionWins
+            ? selection.ids
+            : spanIndices(span)
             .map((at) => files[at]?.id)
             .filter((id): id is number => id !== undefined);
+          const ids = command.operator === "tag" || command.operator === "untag" ? pairIDs(files, resolved) : resolved;
           bulk.perform(command.operator, ids);
           return true;
         }
 
-        case "action":
+        case "action": {
+          const slot = quickSlotFromAction(command.action);
+          if (slot !== null) {
+            void actions.applyQuickSlot(pairIDs(files, selection.count > 0 ? selection.ids : [file.id]), slot);
+            return true;
+          }
           switch (command.action) {
             case "close":
             case "cancel":
@@ -144,17 +216,34 @@ export function Lightbox({
             case "edit-description":
               setDescriptionOpen(true);
               return true;
+            case "repeat-tags":
+              void actions.repeatTags(pairIDs(files, [file.id]));
+              return true;
+            case "tag-undo":
+              void actions.undoTags();
+              return true;
+            case "tag-redo":
+              void actions.redoTags();
+              return true;
             default:
               return false;
           }
+        }
 
         default:
           return false;
       }
     },
-    [bulk, files, goTo, index, onClose],
+    [actions, bulk, file.id, files, goTo, hasMore, index, onClose, onLoadMore, selection],
   );
   useKeymapLayer("lightbox", handle);
+
+  useEffect(() => {
+    const pending = pendingContext.current;
+    if (!pending || files.length <= pending.loadedLength) return;
+    pendingContext.current = null;
+    handle(pending.command);
+  }, [files.length, handle]);
 
   // Touch/swipe support
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -193,6 +282,7 @@ export function Lightbox({
         aria-label={file.filename}
         tabIndex={-1}
         data-lightbox={file.id}
+        data-keyscope="lightbox"
         style={{ zIndex: Z.lightbox }}
         className="fixed inset-0 bg-ground/95 flex items-center justify-center outline-none"
         onTouchStart={handleTouchStart}

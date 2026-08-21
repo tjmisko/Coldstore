@@ -50,6 +50,9 @@ interface Options {
   filters: FileFilters;
   /** Called with the ids a completed job touched. */
   onFinished(ids: number[]): void | Promise<void>;
+  /** Tag operators resolve ranges here, then the owning surface opens the
+   * exclusive picker. No write happens until that picker commits. */
+  onTag?(mode: "add" | "remove", ids: number[]): void;
 }
 
 /** useBulkActions is every operation that acts on more than one file.
@@ -59,7 +62,7 @@ interface Options {
  *  second path without the budget pre-flight, without the progress readout and
  *  without the post-job repaint -- which is exactly how one of the two restore
  *  implementations ended up without its res.ok check. */
-export function useBulkActions({ selection, filters, onFinished }: Options): BulkActions {
+export function useBulkActions({ selection, filters, onFinished, onTag = () => {} }: Options): BulkActions {
   const runner = useJobRunner();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -150,16 +153,22 @@ export function useBulkActions({ selection, filters, onFinished }: Options): Bul
         case "download":
           download(ids);
           return;
+        case "tag":
+          onTag("add", ids);
+          return;
+        case "untag":
+          onTag("remove", ids);
+          return;
       }
     },
-    [runJob, setPinned, download],
+    [runJob, setPinned, download, onTag],
   );
 
   const perform = useCallback(
     (operator: OperatorId, ids: number[]) => {
       if (ids.length === 0) return;
       // Download is capped rather than confirmed: it changes nothing.
-      if (ids.length > CONFIRM_ABOVE && operator !== "download") {
+      if (ids.length > CONFIRM_ABOVE && !["download", "tag", "untag"].includes(operator)) {
         setConfirm({ operator, ids });
         return;
       }
@@ -239,5 +248,9 @@ export function describeBulk(operator: OperatorId, count: number): { title: stri
       };
     case "download":
       return { title: `Download ${files}?`, body: `Your browser will be asked for ${files}.` };
+    case "tag":
+      return { title: `Tag ${files}?`, body: `Choose one or more tags for ${files}.` };
+    case "untag":
+      return { title: `Remove tags from ${files}?`, body: `Choose tags currently present on ${files}.` };
   }
 }

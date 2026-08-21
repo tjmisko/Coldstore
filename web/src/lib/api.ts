@@ -163,8 +163,8 @@ export const api = {
   /** filesByIDs backs post-job reconciliation. The server caps `ids` at 500,
    *  so callers chunk; it ignores every other filter, and returns exactly the
    *  ids that still exist. */
-  filesByIDs: (ids: number[]) =>
-    apiFetch<FileRecord[]>(`/api/v1/files?ids=${ids.join(",")}`),
+  filesByIDs: (ids: number[], init?: RequestInit) =>
+    apiFetch<FileRecord[]>(`/api/v1/files?ids=${ids.join(",")}`, init),
 
   fileIDs: (filters: FileFilters) =>
     apiFetch<FileIDsResponse>(`/api/v1/files/ids?${fileFilterParams(filters)}`),

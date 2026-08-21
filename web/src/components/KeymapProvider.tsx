@@ -37,6 +37,11 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
       state.mode === "visual" ? "-- VISUAL --" : state.mode === "visual-line" ? "-- VISUAL LINE --" : "";
     el.setAttribute("data-keymap-pending", label);
     el.setAttribute("data-keymap-mode", state.mode);
+    el.setAttribute("data-keymode", state.mode);
+    const top = [...layers.current].sort(
+      (a, b) => SCOPE_PRIORITY[a.scope] - SCOPE_PRIORITY[b.scope] || a.id - b.id,
+    ).at(-1)?.scope ?? "global";
+    el.setAttribute("data-keyscope", top);
     el.textContent = [mode, label].filter(Boolean).join("  ");
     el.hidden = label === "" && mode === "";
   }, []);
@@ -146,6 +151,8 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
         aria-live="off"
         data-keymap-pending=""
         data-keymap-mode="normal"
+        data-keymode="normal"
+        data-keyscope="global"
         style={{ zIndex: Z.keymapStatus }}
         className="fixed bottom-2 left-2 rounded border border-cursor/30 bg-cursor-dim/95 px-2 py-0.5 font-mono text-meta text-cursor pointer-events-none"
       />

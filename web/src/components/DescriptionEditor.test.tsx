@@ -17,6 +17,10 @@ function fileActions(): FileActions {
     setCaptureDate: vi.fn(async () => true),
     setLocation: vi.fn(async () => true),
     tagFiles: vi.fn(async () => true),
+    repeatTags: vi.fn(async () => true),
+    undoTags: vi.fn(async () => true),
+    redoTags: vi.fn(async () => true),
+    applyQuickSlot: vi.fn(async () => true),
   };
 }
 
@@ -59,6 +63,23 @@ describe("DescriptionEditor", () => {
     await act(async () => {});
     expect(actions.setDescription).toHaveBeenCalledWith(files[0], "jellyfish");
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("opens the tag prompt with Ctrl-T and restores the description cursor", async () => {
+    renderEditor();
+    const textarea = screen.getByRole("textbox", { name: "Description for one.jpg" }) as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.setSelectionRange(1, 3);
+
+    fireEvent.keyDown(textarea, { key: "t", ctrlKey: true });
+    const prompt = await screen.findByLabelText("Tags to add");
+    expect(prompt).toHaveFocus();
+    fireEvent.keyDown(prompt, { key: "Escape" });
+
+    await act(async () => {});
+    expect(textarea).toHaveFocus();
+    expect(textarea.selectionStart).toBe(1);
+    expect(textarea.selectionEnd).toBe(3);
   });
 
   it("should discard only the uncommitted draft on Ctrl-C", () => {

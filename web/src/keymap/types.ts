@@ -14,14 +14,31 @@ export type MotionId =
   | "half-page-down"
   | "half-page-up"
   | "page-down"
-  | "page-up";
+  | "page-up"
+  | "next-file"
+  | "previous-file"
+  | "capture-day-next"
+  | "capture-day-previous"
+  | "tag-next"
+  | "tag-previous"
+  | "untagged-next"
+  | "untagged-previous"
+  | "pair-next"
+  | "pair-previous";
 
 /** Operators take a range and produce ONE request. `d` is archive because
  *  archiving is the delete here -- it removes the file from every device
  *  Syncthing talks to -- and because the muscle memory is real. `u` is unpin,
  *  not undo: there is no undo model in this app, and a `u` that sometimes means
- *  one and sometimes the other is worse than not having undo. */
-export type OperatorId = "archive" | "restore" | "pin" | "unpin" | "download";
+ *  one and sometimes the other is worse than keeping tag undo on `U`. */
+export type OperatorId =
+  | "archive"
+  | "restore"
+  | "pin"
+  | "unpin"
+  | "download"
+  | "tag"
+  | "untag";
 
 export type ActionId =
   | "open"
@@ -46,15 +63,38 @@ export type ActionId =
   | "close"
   | "info"
   | "edit-description"
-  | "previous-capture-day"
-  | "next-capture-day"
+  | "repeat-tags"
+  | "tag-undo"
+  | "tag-redo"
+  | "tag-mode"
+  | "tag-current"
+  | "untag-current"
+  | "toggle-tag-carry"
+  | "accept-tag-carry"
+  | "quick-tag-1"
+  | "quick-tag-2"
+  | "quick-tag-3"
+  | "quick-tag-4"
+  | "quick-tag-5"
+  | "quick-tag-6"
+  | "quick-tag-7"
+  | "quick-tag-8"
+  | "quick-tag-9"
   | "rescan"
   | "resolve-device"
   | "resolve-archive";
 
 export type Mode = "normal" | "visual" | "visual-line";
 
-export type Scope = "global" | "gallery" | "browser" | "lightbox" | "overlay" | "description";
+export type Scope =
+  | "global"
+  | "gallery"
+  | "browser"
+  | "lightbox"
+  | "tagging"
+  | "overlay"
+  | "description"
+  | "tag-prompt";
 
 /** What an operator is waiting for.
  *

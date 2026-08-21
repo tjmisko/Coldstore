@@ -15,6 +15,7 @@ import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
 import { TagChips } from "./TagChips";
+import { TagMode } from "./TagMode";
 import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 
 interface FileBrowserProps {
@@ -108,7 +109,12 @@ export function FileBrowser({
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
   const [locationIndex, setLocationIndex] = useState<number | null>(null);
-  const [tagPrompt, setTagPrompt] = useState<{ ids: number[]; mode: TagPromptMode } | null>(null);
+  const [tagPrompt, setTagPrompt] = useState<{
+    ids: number[];
+    mode: TagPromptMode;
+    initialTags?: string[];
+  } | null>(null);
+  const [tagMode, setTagMode] = useState(false);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -145,7 +151,16 @@ export function FileBrowser({
     [refetchIds, onFolderChanged],
   );
 
-  const bulk = useBulkActions({ selection, filters, onFinished });
+  const openTagPrompt = useCallback((mode: TagPromptMode, ids: number[]) => {
+    const previous = workspace.lastTagOperation;
+    setTagPrompt({
+      ids,
+      mode,
+      initialTags: previous?.mode === mode ? previous.tags : undefined,
+    });
+  }, [workspace.lastTagOperation]);
+
+  const bulk = useBulkActions({ selection, filters, onFinished, onTag: openTagPrompt });
   const viewport = useViewport();
 
   const openMenu = useCallback(
@@ -172,6 +187,10 @@ export function FileBrowser({
     onOpen: setPreviewIndex,
     onContextMenu: (index) => openMenu(index, null),
     onEditDescription: setDescriptionIndex,
+    hasMore,
+    loading,
+    loadMore,
+    onTagMode: () => setTagMode(true),
     active: previewIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
     reveal,
   });
@@ -311,6 +330,7 @@ export function FileBrowser({
           hasMore={hasMore}
           actions={actions}
           bulk={bulk}
+          selection={selection}
           onFindNearby={setNear}
         />
       )}
@@ -358,8 +378,19 @@ export function FileBrowser({
           ids={tagPrompt.ids}
           mode={tagPrompt.mode}
           selectionNote={bulk.selectAllNote}
+          initialTags={tagPrompt.initialTags}
           onApply={(add, remove) => actions.tagFiles(tagPrompt.ids, add, remove)}
           onClose={() => setTagPrompt(null)}
+        />
+      )}
+
+      {tagMode && cursor.file && (
+        <TagMode
+          files={files}
+          index={cursor.index}
+          actions={actions}
+          lastOperation={workspace.lastTagOperation}
+          onClose={() => setTagMode(false)}
         />
       )}
 
@@ -408,6 +439,7 @@ function Row({
       // Tab still walks the controls inside it.
       tabIndex={-1}
       data-file-id={file.id}
+      data-pair-group={file.pair_key || undefined}
       data-selected={selected}
       data-cursor={cursor}
       data-cursor-scope="browser"

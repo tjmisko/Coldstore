@@ -3,7 +3,7 @@ import type { Binding, Scope } from "./types";
 
 /** Scopes that stop the chain. While one of these is on top of the stack, `d`
  *  types a `d` and archives nothing. */
-export const EXCLUSIVE_SCOPES: Scope[] = ["overlay", "description"];
+export const EXCLUSIVE_SCOPES: Scope[] = ["overlay", "description", "tag-prompt"];
 
 const GRID: Scope[] = ["gallery", "browser"];
 const NAVIGABLE: Scope[] = ["gallery", "browser", "lightbox"];
@@ -14,6 +14,7 @@ const GROUP_FILES = "Files";
 const GROUP_NAV = "Navigation";
 const GROUP_OVERLAY = "Overlays";
 const GROUP_CONFLICT = "Conflicts";
+const GROUP_TAGS = "Tags";
 
 const SPECS: BindingSpec[] = [
   // -- motions ------------------------------------------------------------
@@ -40,8 +41,18 @@ const SPECS: BindingSpec[] = [
   { id: "motion.pageUp.key", keys: "<PageUp>", command: { kind: "motion", motion: "page-up" }, scopes: NAVIGABLE, title: "A screen up", group: GROUP_MOTION, alias: true },
   { id: "motion.first.home", keys: "<Home>", command: { kind: "motion", motion: "first" }, scopes: NAVIGABLE, title: "First file", group: GROUP_MOTION, alias: true },
   { id: "motion.last.end", keys: "<End>", command: { kind: "motion", motion: "last" }, scopes: NAVIGABLE, title: "Last file", group: GROUP_MOTION, alias: true },
-  { id: "motion.captureDayPrevious", keys: "{", command: { kind: "action", action: "previous-capture-day" }, scopes: ["gallery"], title: "Previous capture day", group: GROUP_MOTION },
-  { id: "motion.captureDayNext", keys: "}", command: { kind: "action", action: "next-capture-day" }, scopes: ["gallery"], title: "Next capture day", group: GROUP_MOTION },
+  { id: "motion.captureDayPrevious", keys: "{", command: { kind: "motion", motion: "capture-day-previous" }, scopes: NAVIGABLE, title: "Previous capture day", group: GROUP_MOTION },
+  { id: "motion.captureDayNext", keys: "}", command: { kind: "motion", motion: "capture-day-next" }, scopes: NAVIGABLE, title: "Next capture day", group: GROUP_MOTION },
+  { id: "motion.tagNext", keys: "]t", command: { kind: "motion", motion: "tag-next" }, scopes: NAVIGABLE, title: "Next file sharing a tag", group: GROUP_MOTION },
+  { id: "motion.tagPrevious", keys: "[t", command: { kind: "motion", motion: "tag-previous" }, scopes: NAVIGABLE, title: "Previous file sharing a tag", group: GROUP_MOTION },
+  { id: "motion.untaggedNext", keys: "]u", command: { kind: "motion", motion: "untagged-next" }, scopes: NAVIGABLE, title: "Next untagged file", group: GROUP_MOTION },
+  { id: "motion.untaggedPrevious", keys: "[u", command: { kind: "motion", motion: "untagged-previous" }, scopes: NAVIGABLE, title: "Previous untagged file", group: GROUP_MOTION },
+  { id: "motion.pairNext", keys: "]p", command: { kind: "motion", motion: "pair-next" }, scopes: NAVIGABLE, title: "Next file group", group: GROUP_MOTION },
+  { id: "motion.pairPrevious", keys: "[p", command: { kind: "motion", motion: "pair-previous" }, scopes: NAVIGABLE, title: "Previous file group", group: GROUP_MOTION },
+  { id: "tagMode.next", keys: "j", command: { kind: "motion", motion: "next-file" }, scopes: ["tagging"], title: "Next file", group: GROUP_MOTION, alias: true },
+  { id: "tagMode.previous", keys: "k", command: { kind: "motion", motion: "previous-file" }, scopes: ["tagging"], title: "Previous file", group: GROUP_MOTION, alias: true },
+  { id: "tagMode.nextUntagged", keys: "J", command: { kind: "motion", motion: "untagged-next" }, scopes: ["tagging"], title: "Next untagged file", group: GROUP_MOTION, alias: true },
+  { id: "tagMode.previousUntagged", keys: "K", command: { kind: "motion", motion: "untagged-previous" }, scopes: ["tagging"], title: "Previous untagged file", group: GROUP_MOTION, alias: true },
 
   // -- operators ----------------------------------------------------------
   { id: "op.archive", keys: "d", command: { kind: "operator", operator: "archive" }, scopes: NAVIGABLE, title: "Archive (dd, d3j, dG) - removes it from every synced device", group: GROUP_FILES },
@@ -49,6 +60,27 @@ const SPECS: BindingSpec[] = [
   { id: "op.pin", keys: "p", command: { kind: "operator", operator: "pin" }, scopes: NAVIGABLE, title: "Pin (pp, p3j) - never archive these", group: GROUP_FILES },
   { id: "op.unpin", keys: "u", command: { kind: "operator", operator: "unpin" }, scopes: NAVIGABLE, title: "Unpin (uu, u3j)", group: GROUP_FILES },
   { id: "op.download", keys: "y", command: { kind: "operator", operator: "download" }, scopes: NAVIGABLE, title: "Download (yy, y3j)", group: GROUP_FILES },
+  { id: "op.tag", keys: "t", command: { kind: "operator", operator: "tag" }, scopes: NAVIGABLE, title: "Tag (tt, t3j, tG)", group: GROUP_TAGS },
+  { id: "op.untag", keys: "T", command: { kind: "operator", operator: "untag" }, scopes: NAVIGABLE, title: "Remove tags (TT, T3j, TG)", group: GROUP_TAGS },
+
+  // -- tagging ------------------------------------------------------------
+  { id: "tagMode.tagCurrent", keys: "t", command: { kind: "action", action: "tag-current" }, scopes: ["tagging"], title: "Tag current file", group: GROUP_TAGS, alias: true },
+  { id: "tagMode.untagCurrent", keys: "T", command: { kind: "action", action: "untag-current" }, scopes: ["tagging"], title: "Remove tags from current file", group: GROUP_TAGS, alias: true },
+  { id: "tag.repeat", keys: ".", command: { kind: "action", action: "repeat-tags" }, scopes: NAVIGABLE, title: "Repeat the last tag operation", group: GROUP_TAGS },
+  { id: "tag.undo", keys: "U", command: { kind: "action", action: "tag-undo" }, scopes: NAVIGABLE, title: "Undo the last tag write", group: GROUP_TAGS },
+  { id: "tag.redo", keys: "<C-r>", command: { kind: "action", action: "tag-redo" }, scopes: NAVIGABLE, title: "Redo the last undone tag write", group: GROUP_TAGS },
+  { id: "tag.mode", keys: "<Space>e", command: { kind: "action", action: "tag-mode" }, scopes: GRID, title: "Enter Tag mode", group: GROUP_TAGS },
+  { id: "tag.carry", keys: ",", command: { kind: "action", action: "toggle-tag-carry" }, scopes: ["tagging"], title: "Toggle tag carry-forward", group: GROUP_TAGS },
+  { id: "tag.carryAccept", keys: "<CR>", command: { kind: "action", action: "accept-tag-carry" }, scopes: ["tagging"], title: "Accept carried tags", group: GROUP_TAGS, alias: true },
+  { id: "tag.quick1", keys: "<Space>1", command: { kind: "action", action: "quick-tag-1" }, scopes: NAVIGABLE, title: "Apply quick tag 1", group: GROUP_TAGS },
+  { id: "tag.quick2", keys: "<Space>2", command: { kind: "action", action: "quick-tag-2" }, scopes: NAVIGABLE, title: "Apply quick tag 2", group: GROUP_TAGS },
+  { id: "tag.quick3", keys: "<Space>3", command: { kind: "action", action: "quick-tag-3" }, scopes: NAVIGABLE, title: "Apply quick tag 3", group: GROUP_TAGS },
+  { id: "tag.quick4", keys: "<Space>4", command: { kind: "action", action: "quick-tag-4" }, scopes: NAVIGABLE, title: "Apply quick tag 4", group: GROUP_TAGS },
+  { id: "tag.quick5", keys: "<Space>5", command: { kind: "action", action: "quick-tag-5" }, scopes: NAVIGABLE, title: "Apply quick tag 5", group: GROUP_TAGS },
+  { id: "tag.quick6", keys: "<Space>6", command: { kind: "action", action: "quick-tag-6" }, scopes: NAVIGABLE, title: "Apply quick tag 6", group: GROUP_TAGS },
+  { id: "tag.quick7", keys: "<Space>7", command: { kind: "action", action: "quick-tag-7" }, scopes: NAVIGABLE, title: "Apply quick tag 7", group: GROUP_TAGS },
+  { id: "tag.quick8", keys: "<Space>8", command: { kind: "action", action: "quick-tag-8" }, scopes: NAVIGABLE, title: "Apply quick tag 8", group: GROUP_TAGS },
+  { id: "tag.quick9", keys: "<Space>9", command: { kind: "action", action: "quick-tag-9" }, scopes: NAVIGABLE, title: "Apply quick tag 9", group: GROUP_TAGS },
 
   // -- selection ----------------------------------------------------------
   { id: "select.toggle", keys: "x", command: { kind: "action", action: "toggle-select" }, scopes: GRID, title: "Select or deselect this file", group: GROUP_SELECT },
@@ -107,7 +139,7 @@ export const registry: KeymapRegistry = createRegistry(BINDINGS);
  *  the same array the engine dispatches on, so it cannot describe a binding
  *  that does not exist. */
 export function cheatsheetGroups(): { group: string; bindings: Binding[] }[] {
-  const order = [GROUP_MOTION, GROUP_SELECT, GROUP_FILES, GROUP_CONFLICT, GROUP_NAV, GROUP_OVERLAY];
+  const order = [GROUP_MOTION, GROUP_SELECT, GROUP_FILES, GROUP_TAGS, GROUP_CONFLICT, GROUP_NAV, GROUP_OVERLAY];
   const byGroup = new Map<string, Binding[]>();
   for (const binding of BINDINGS) {
     if (binding.alias) continue;

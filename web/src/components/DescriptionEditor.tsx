@@ -6,6 +6,7 @@ import { useToast } from "../lib/toast";
 import type { FileRecord } from "../types/api";
 import { Overlay } from "./Overlay";
 import { CaptureMeta } from "./CaptureMeta";
+import { TagPrompt } from "./TagPrompt";
 
 interface DescriptionEditorProps {
   files: FileRecord[];
@@ -40,6 +41,8 @@ export function DescriptionEditor({
   const pending = useRef<{ key: string; promise: Promise<boolean> } | null>(null);
   const discard = useRef(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const restoreSelection = useRef<{ start: number; end: number } | null>(null);
+  const [tagPrompt, setTagPrompt] = useState(false);
   const toast = useToast();
 
   // Registering the scope is load-bearing even though ordinary textarea keys
@@ -53,6 +56,14 @@ export function DescriptionEditor({
     node?.focus();
     if (node) node.setSelectionRange(node.value.length, node.value.length);
   }, [index]);
+
+  useEffect(() => {
+    if (tagPrompt || !restoreSelection.current) return;
+    const selection = restoreSelection.current;
+    restoreSelection.current = null;
+    textarea.current?.focus();
+    textarea.current?.setSelectionRange(selection.start, selection.end);
+  }, [tagPrompt]);
 
   const commitDescription = useCallback(async (): Promise<boolean> => {
     if (!file || draft === saved.current) {
@@ -124,6 +135,16 @@ export function DescriptionEditor({
     if (await commit()) onClose();
   }, [commit, onClose]);
 
+  const openTagPrompt = useCallback(async () => {
+    const node = textarea.current;
+    restoreSelection.current = {
+      start: node?.selectionStart ?? 0,
+      end: node?.selectionEnd ?? 0,
+    };
+    if (await commit()) setTagPrompt(true);
+    else restoreSelection.current = null;
+  }, [commit]);
+
   const move = useCallback(
     async (delta: number) => {
       if (!(await commit())) return;
@@ -147,7 +168,8 @@ export function DescriptionEditor({
   if (!file) return null;
 
   return (
-    <Overlay
+    <>
+      <Overlay
       label={`Description for ${file.filename}`}
       onClose={() => void closeAndSave()}
       className="max-w-2xl"
@@ -191,7 +213,10 @@ export function DescriptionEditor({
               return;
             }
             if (!event.ctrlKey && !event.metaKey) return;
-            if (event.key.toLowerCase() === "c") {
+            if (event.key.toLowerCase() === "t") {
+              event.preventDefault();
+              void openTagPrompt();
+            } else if (event.key.toLowerCase() === "c") {
               event.preventDefault();
               discard.current = true;
               toast.show("info", `Discarded uncommitted description for ${file.filename}`);
@@ -243,7 +268,7 @@ export function DescriptionEditor({
 
         <footer className="mt-3 flex flex-wrap items-center justify-between gap-3 text-meta text-ink-faint">
           <span>{[...draft].length} / {descriptionLimit}</span>
-          <span className="hidden sm:inline">Esc saves · Ctrl-C discards · Ctrl-J/K saves and moves</span>
+          <span className="hidden sm:inline">Esc saves · Ctrl-T tags · Ctrl-C discards · Ctrl-J/K saves and moves</span>
           <div className="flex gap-2">
             <button
               type="button"
@@ -271,6 +296,16 @@ export function DescriptionEditor({
           </div>
         </footer>
       </section>
-    </Overlay>
+      </Overlay>
+      {tagPrompt && (
+        <TagPrompt
+          folder={file.folder_label}
+          ids={[file.id]}
+          mode="add"
+          onApply={(add, remove) => actions.tagFiles([file.id], add, remove)}
+          onClose={() => setTagPrompt(false)}
+        />
+      )}
+    </>
   );
 }

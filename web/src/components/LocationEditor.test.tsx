@@ -18,6 +18,10 @@ function locationActions(): FileActions {
     setCaptureDate: vi.fn(async () => true),
     setLocation: vi.fn(async () => true),
     tagFiles: vi.fn(async () => true),
+    repeatTags: vi.fn(async () => true),
+    undoTags: vi.fn(async () => true),
+    redoTags: vi.fn(async () => true),
+    applyQuickSlot: vi.fn(async () => true),
   };
 }
 

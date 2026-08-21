@@ -9,6 +9,7 @@ let stub: ReturnType<typeof stubFetch> | null = null;
 afterEach(() => {
   stub?.restore();
   stub = null;
+  localStorage.clear();
 });
 
 const TAGS = [
@@ -22,6 +23,18 @@ function row(name: string): HTMLElement {
 }
 
 describe("TagManager", () => {
+  it("configures quick slots per folder and preserves them across remounts", async () => {
+    stub = stubFetch([{ url: "/api/v1/tags", body: TAGS }]);
+    const first = renderWithToasts(<TagManager folder="CameraRoll" />);
+    const slot = await screen.findByLabelText("Quick tag 1");
+    await userEvent.type(slot, "Trips/Iceland");
+    first.unmount();
+
+    renderWithToasts(<TagManager folder="CameraRoll" />);
+    expect(await screen.findByLabelText("Quick tag 1")).toHaveValue("Trips/Iceland");
+    expect(JSON.parse(localStorage.getItem("coldstore.quick-tags.CameraRoll") ?? "[]")[0]).toBe("Trips/Iceland");
+  });
+
   it("makes an existing-name rename an explicit merge and reports affected files", async () => {
     stub = stubFetch([
       { url: "/api/v1/tags", body: TAGS },

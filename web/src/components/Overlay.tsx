@@ -2,7 +2,7 @@ import { useCallback, type ReactNode } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useKeymapLayer } from "../hooks/useKeymapLayer";
 import { useScrollLock } from "../hooks/useScrollLock";
-import type { Command } from "../keymap/types";
+import type { Command, Scope } from "../keymap/types";
 import { Z } from "../lib/zLayers";
 import { Portal } from "./Portal";
 
@@ -12,12 +12,15 @@ interface OverlayProps {
   children: ReactNode;
   /** Where the panel sits. "top" is the palette and the finder, which want to
    *  be near the top of the screen the way an ex-line is. */
-  align?: "top" | "center";
+  align?: "top" | "center" | "bottom";
   zIndex?: number;
   /** Skip the modal role. The context menu is not a dialog. */
   role?: "dialog" | "none";
   className?: string;
   testAttribute?: string;
+  /** Most overlays use the generic exclusive scope. The tag picker has its
+   * own exclusive scope so browser tests and programmatic dispatch can name it. */
+  scope?: Scope;
 }
 
 /** One overlay primitive: portal, focus trap, scroll lock, backdrop, z-index,
@@ -35,6 +38,7 @@ export function Overlay({
   role = "dialog",
   className = "",
   testAttribute,
+  scope = "overlay",
 }: OverlayProps) {
   const containerRef = useFocusTrap(true);
   useScrollLock(true);
@@ -52,7 +56,7 @@ export function Overlay({
     },
     [onClose],
   );
-  useKeymapLayer("overlay", handle);
+  useKeymapLayer(scope, handle);
 
   const dialogProps =
     role === "dialog" ? ({ role: "dialog", "aria-modal": true } as const) : ({} as const);
@@ -62,7 +66,7 @@ export function Overlay({
       <div
         style={{ zIndex }}
         className={`fixed inset-0 flex ${
-          align === "top" ? "items-start pt-[10vh]" : "items-center"
+          align === "top" ? "items-start pt-[10vh]" : align === "bottom" ? "items-end pb-[3vh]" : "items-center"
         } justify-center bg-black/70 p-4`}
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) onClose();
@@ -76,6 +80,7 @@ export function Overlay({
           aria-label={label}
           tabIndex={-1}
           data-overlay={testAttribute ?? label}
+          data-keyscope={scope}
           className={`w-full outline-none ${className}`}
         >
           {children}

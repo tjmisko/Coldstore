@@ -86,6 +86,20 @@ export function resolveMotion(motion: MotionId, count: number, geometry: Geometr
       return moveRows(rows * n, geo);
     case "page-up":
       return moveRows(-rows * n, geo);
+    case "next-file":
+      return Math.min(index + n, total - 1);
+    case "previous-file":
+      return Math.max(index - n, 0);
+    case "capture-day-next":
+    case "capture-day-previous":
+    case "tag-next":
+    case "tag-previous":
+    case "untagged-next":
+    case "untagged-previous":
+    case "pair-next":
+    case "pair-previous":
+      // These need file metadata and are resolved by the active file layer.
+      return index;
   }
 }
 

@@ -4,6 +4,12 @@ import { useToast } from "../lib/toast";
 import { useFiles, type UseFiles } from "./useFiles";
 import { useSelection, type Selection } from "./useSelection";
 import type { FileRecord, FileSort, TagUndo } from "../types/api";
+import { useQuickSlots } from "./useQuickSlots";
+
+export interface TagOperation {
+  mode: "add" | "remove";
+  tags: string[];
+}
 
 /** The file-review filters, including the capture-date queue from tagging design 3.2.
  *
@@ -83,6 +89,10 @@ export interface FileActions {
   setCaptureDate(file: FileRecord, capturedLocal: string): Promise<boolean>;
   setLocation(file: FileRecord, lat: number, lon: number): Promise<boolean>;
   tagFiles(ids: number[], add: string[], remove: string[]): Promise<boolean>;
+  repeatTags(ids: number[]): Promise<boolean>;
+  undoTags(): Promise<boolean>;
+  redoTags(): Promise<boolean>;
+  applyQuickSlot(ids: number[], slot: number): Promise<boolean>;
 }
 
 export interface FileWorkspace {
@@ -92,8 +102,10 @@ export interface FileWorkspace {
   actions: FileActions;
   /** The filters currently in force, for "select all in folder". */
   filters: FileFilters;
-  /** Held for the keyboard undo slice. This UI deliberately does not bind U. */
+  /** The exact one-level tag history returned by the bulk endpoint. */
   lastTagUndo: TagUndo | null;
+  tagRedo: TagUndo | null;
+  lastTagOperation: TagOperation | null;
 }
 
 interface Options {
@@ -116,6 +128,9 @@ export function useFileWorkspace(options: Options): FileWorkspace {
   const preset = filterPreset(filterKey);
   const toast = useToast();
   const [lastTagUndo, setLastTagUndo] = useState<TagUndo | null>(null);
+  const [tagRedo, setTagRedo] = useState<TagUndo | null>(null);
+  const [lastTagOperation, setLastTagOperation] = useState<TagOperation | null>(null);
+  const quick = useQuickSlots(folder);
 
   const files = useFiles({
     folder,
@@ -245,28 +260,37 @@ export function useFileWorkspace(options: Options): FileWorkspace {
     [near, patchFile, refetch, toast],
   );
 
+  const refetchAfterTagMutation = useCallback(
+    async (ids: number[]) => {
+      // Tags participate in q, tag= and untagged= membership. Repainting by
+      // id deliberately bypasses filters and would leave a newly-tagged row
+      // sitting in the Untagged work queue, so membership-sensitive views
+      // must resolve their complete first page again.
+      const changesMembership =
+        preset.filters.untagged !== undefined ||
+        (preset.filters.tags?.length ?? 0) > 0 ||
+        !!preset.filters.search;
+      if (changesMembership) await refetch();
+      else await refetchIds(ids);
+    },
+    [preset.filters.search, preset.filters.tags, preset.filters.untagged, refetch, refetchIds],
+  );
+
   const tagFiles = useCallback(
     async (ids: number[], add: string[], remove: string[]): Promise<boolean> => {
       try {
         const result = await api.bulkTags({ ids, add, remove });
-        setLastTagUndo(result.undo);
-        // Tags participate in q, tag= and untagged= membership. Repainting by
-        // id deliberately bypasses filters and would leave a newly-tagged row
-        // sitting in the Untagged work queue, so membership-sensitive views
-        // must resolve their complete first page again.
-        const tagMutationChangesMembership =
-          preset.filters.untagged !== undefined ||
-          (preset.filters.tags?.length ?? 0) > 0 ||
-          !!preset.filters.search;
-        if (tagMutationChangesMembership) await refetch();
-        else await refetchIds(ids);
+        setLastTagUndo(result.undo.changes.length > 0 ? result.undo : null);
+        setTagRedo(null);
+        setLastTagOperation({ mode: add.length > 0 ? "add" : "remove", tags: [...(add.length > 0 ? add : remove)] });
+        await refetchAfterTagMutation(ids);
         const verb = add.length > 0 ? "Tagged" : "Removed tags from";
         const created = result.created.length > 0
           ? ` · created ${result.created.join(", ")}`
           : "";
         toast.show(
           "success",
-          `${verb} ${result.updated.toLocaleString()} file${result.updated === 1 ? "" : "s"}${created}`,
+          `${verb} ${result.updated.toLocaleString()} file${result.updated === 1 ? "" : "s"}${created}${result.undo.changes.length > 0 ? " · U to undo" : ""}`,
         );
         return true;
       } catch (err) {
@@ -274,8 +298,60 @@ export function useFileWorkspace(options: Options): FileWorkspace {
         return false;
       }
     },
-    [preset.filters.search, preset.filters.tags, preset.filters.untagged, refetch, refetchIds, toast],
+    [refetchAfterTagMutation, toast],
   );
+
+  const replayExact = useCallback(
+    async (change: TagUndo | null, direction: "undo" | "redo"): Promise<boolean> => {
+      if (!change || change.changes.length === 0) {
+        toast.show("info", direction === "undo" ? "No tag write to undo" : "No tag write to redo");
+        return false;
+      }
+      try {
+        const result = await api.bulkTags(change);
+        const ids = [...new Set(change.changes.flatMap((item) => item.ids))];
+        await refetchAfterTagMutation(ids);
+        if (direction === "undo") {
+          setLastTagUndo(null);
+          setTagRedo(result.undo.changes.length > 0 ? result.undo : null);
+          toast.show("success", `Undid tag changes on ${result.updated.toLocaleString()} file${result.updated === 1 ? "" : "s"}`);
+        } else {
+          setTagRedo(null);
+          setLastTagUndo(result.undo.changes.length > 0 ? result.undo : null);
+          toast.show("success", `Redid tag changes on ${result.updated.toLocaleString()} file${result.updated === 1 ? "" : "s"}`);
+        }
+        return true;
+      } catch (err) {
+        toast.show("error", `${direction === "undo" ? "Undo" : "Redo"}: ${errorMessage(err)}`);
+        return false;
+      }
+    },
+    [refetchAfterTagMutation, toast],
+  );
+
+  const undoTags = useCallback(() => replayExact(lastTagUndo, "undo"), [lastTagUndo, replayExact]);
+  const redoTags = useCallback(() => replayExact(tagRedo, "redo"), [replayExact, tagRedo]);
+
+  const repeatTags = useCallback(async (ids: number[]): Promise<boolean> => {
+    if (!lastTagOperation) {
+      toast.show("info", "No tag operation to repeat");
+      return false;
+    }
+    return tagFiles(
+      ids,
+      lastTagOperation.mode === "add" ? lastTagOperation.tags : [],
+      lastTagOperation.mode === "remove" ? lastTagOperation.tags : [],
+    );
+  }, [lastTagOperation, tagFiles, toast]);
+
+  const applyQuickSlot = useCallback(async (ids: number[], slot: number): Promise<boolean> => {
+    const name = quick.slots[slot - 1] ?? "";
+    if (!name) {
+      toast.show("info", `Quick tag ${slot} is unassigned for ${folder}`);
+      return false;
+    }
+    return tagFiles(ids, [name], []);
+  }, [folder, quick.slots, tagFiles, toast]);
 
   return {
     preset,
@@ -284,8 +360,11 @@ export function useFileWorkspace(options: Options): FileWorkspace {
     actions: {
       setPinned, restore, archive, resolve, download, setDescription, setCaptureDate, setLocation,
       tagFiles,
+      repeatTags, undoTags, redoTags, applyQuickSlot,
     },
     filters: { folder, ...preset.filters, near },
     lastTagUndo,
+    tagRedo,
+    lastTagOperation,
   };
 }

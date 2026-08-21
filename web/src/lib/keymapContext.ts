@@ -47,6 +47,8 @@ export const SCOPE_PRIORITY: Record<Scope, number> = {
   gallery: 10,
   browser: 10,
   lightbox: 20,
-  overlay: 30,
-  description: 40,
+  tagging: 30,
+  overlay: 40,
+  description: 50,
+  "tag-prompt": 60,
 };

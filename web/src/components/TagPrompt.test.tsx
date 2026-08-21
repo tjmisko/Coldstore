@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithToasts, stubFetch } from "../test/harness";
+import { aFile } from "../test/fixtures";
 import { TagPrompt } from "./TagPrompt";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
@@ -13,6 +14,28 @@ afterEach(() => {
 });
 
 describe("TagPrompt", () => {
+  it("commits a pre-seeded repeat with Enter and replaces the seed on typing", async () => {
+    stub = stubFetch([{ url: "/api/v1/tags", body: [] }]);
+    const repeat = vi.fn(async () => true);
+    const first = renderWithToasts(
+      <TagPrompt folder="CameraRoll" ids={[1]} mode="add" initialTags={["Trips/Iceland"]} onApply={repeat} onClose={() => {}} />,
+    );
+
+    fireEvent.keyDown(screen.getByLabelText("Tags to add"), { key: "Enter" });
+    await waitFor(() => expect(repeat).toHaveBeenCalledWith(["Trips/Iceland"], []));
+    first.unmount();
+
+    const replaced = vi.fn(async () => true);
+    renderWithToasts(
+      <TagPrompt folder="CameraRoll" ids={[2]} mode="add" initialTags={["Trips/Iceland"]} onApply={replaced} onClose={() => {}} />,
+    );
+    await userEvent.type(screen.getByLabelText("Tags to add"), "Favorites");
+    expect(screen.queryByText("Trips/Iceland")).toBeNull();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Apply tags" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Apply tags" }));
+    await waitFor(() => expect(replaced).toHaveBeenCalledWith(["Favorites"], []));
+  });
+
   it("tokenizes with commas and semicolons and writes once only after pointer apply", async () => {
     stub = stubFetch([{ url: "/api/v1/tags", body: [] }]);
     const apply = vi.fn(async () => true);
@@ -31,7 +54,7 @@ describe("TagPrompt", () => {
   });
 
   it("cancels the entire locally-tokenized operation without a write", async () => {
-    stub = stubFetch([{ url: "/api/v1/tags", body: [] }]);
+    stub = stubFetch([{ url: "/api/v1/files?ids=7", body: [aFile({ id: 7, tags: ["Trips", "Favorites"] })] }]);
     const apply = vi.fn(async () => true);
     const close = vi.fn();
     renderWithToasts(
@@ -75,7 +98,13 @@ describe("TagPrompt", () => {
   });
 
   it("applies a removal with the pointer through the remove side of the bulk contract", async () => {
-    stub = stubFetch([{ url: "/api/v1/tags", body: [] }]);
+    stub = stubFetch([{
+      url: "/api/v1/files?ids=7,8",
+      body: [
+        aFile({ id: 7, tags: ["Trips/Iceland"] }),
+        aFile({ id: 8, tags: ["Trips/Iceland"] }),
+      ],
+    }]);
     const apply = vi.fn(async () => true);
     renderWithToasts(
       <TagPrompt folder="CameraRoll" ids={[7, 8]} mode="remove" onApply={apply} onClose={() => {}} />,
@@ -124,6 +153,31 @@ describe("TagPrompt", () => {
       await Promise.resolve();
     });
     expect(screen.queryByText("A stale")).toBeNull();
+  });
+
+  it("cycles completions with Tab and Ctrl-N/P and preserves command-line editing keys", async () => {
+    stub = stubFetch([{
+      url: "/api/v1/tags",
+      body: [
+        { id: 1, name: "Trips/Iceland", count: 4, descendant_count: 4 },
+        { id: 2, name: "Trips/Italy", count: 2, descendant_count: 2 },
+      ],
+    }]);
+    renderWithToasts(
+      <TagPrompt folder="CameraRoll" ids={[1]} mode="add" onApply={async () => true} onClose={() => {}} />,
+    );
+    const input = screen.getByLabelText("Tags to add");
+    await userEvent.type(input, "Trips/I");
+    const first = await screen.findByRole("button", { name: /Trips\/Iceland/ });
+    const second = screen.getByRole("button", { name: /Trips\/Italy/ });
+    expect(first).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(second).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "p", ctrlKey: true });
+    expect(first).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "u", ctrlKey: true });
+    expect(input).toHaveValue("");
   });
 
   it("states the full count and refuses to truncate an over-cap selection", async () => {
