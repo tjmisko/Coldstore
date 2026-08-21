@@ -9,6 +9,7 @@ import { useToast } from "../lib/toast";
 import { Z } from "../lib/zLayers";
 import type { FileRecord } from "../types/api";
 import { Portal } from "./Portal";
+import type { TagPromptMode } from "./TagPrompt";
 
 export interface ContextMenuTarget {
   file: FileRecord;
@@ -28,6 +29,7 @@ interface ContextMenuProps {
   onOpen(): void;
   onEditDescription(): void;
   onEditLocation(): void;
+  onEditTags(mode: TagPromptMode): void;
   onShowInFiles(): void;
   onClose(): void;
 }
@@ -47,6 +49,7 @@ export function ContextMenu({
   onOpen,
   onEditDescription,
   onEditLocation,
+  onEditTags,
   onShowInFiles,
   onClose,
 }: ContextMenuProps) {
@@ -79,6 +82,8 @@ export function ContextMenu({
     items.push({ id: "location", label: "Location and nearby files", run: onEditLocation });
     items.push({ id: "show-in-files", label: "Show in Files view", run: onShowInFiles });
   }
+  items.push({ id: "add-tags", label: `Add tags${suffix}`, run: () => onEditTags("add") });
+  items.push({ id: "remove-tags", label: `Remove tags${suffix}`, run: () => onEditTags("remove") });
   items.push({ id: "download", label: `Download${suffix}`, run: () => bulk.download(ids) });
   if (file.status === "archived" || many) {
     items.push({ id: "restore", label: `Restore${suffix}`, run: () => bulk.perform("restore", ids) });

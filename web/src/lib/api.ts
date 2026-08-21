@@ -16,6 +16,9 @@ import type {
   PinResponse,
   PinSource,
   StatusResponse,
+  Tag,
+  TagDeleteResponse,
+  TagRenameResponse,
   UpdateFolderRequest,
   UpdateFileRequest,
 } from "../types/api";
@@ -204,6 +207,30 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
     }),
+
+  tags: (
+    params: { folder?: string; prefix?: string; limit?: number },
+    init?: RequestInit,
+  ) => {
+    const search = new URLSearchParams();
+    if (params.folder) search.set("folder", params.folder);
+    if (params.prefix) search.set("prefix", params.prefix);
+    if (params.limit) search.set("limit", String(params.limit));
+    return apiFetch<Tag[]>(`/api/v1/tags?${search}`, init);
+  },
+
+  renameTag: (name: string, nextName: string) =>
+    apiFetch<TagRenameResponse>(`/api/v1/tags/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nextName }),
+    }),
+
+  deleteTag: (name: string, cascade = false) =>
+    apiFetch<TagDeleteResponse>(
+      `/api/v1/tags/${encodeURIComponent(name)}${cascade ? "?cascade=1" : ""}`,
+      { method: "DELETE" },
+    ),
 
   restore: (id: number) =>
     apiFetch<FileRecord>(`/api/v1/files/${id}/restore`, { method: "POST" }),

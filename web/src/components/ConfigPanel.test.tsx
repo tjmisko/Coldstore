@@ -18,6 +18,7 @@ function baseRoutes(folder = aFolderConfig()) {
     { url: "/api/v1/folders", body: [folder] },
     { url: `/api/v1/folders/${folder.folder_label}/persistent`, body: [] },
     { url: "/api/v1/events", body: [] },
+    { url: "/api/v1/tags", body: [] },
   ];
 }
 

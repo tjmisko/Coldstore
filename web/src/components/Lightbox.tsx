@@ -18,6 +18,8 @@ import { DescriptionEditor } from "./DescriptionEditor";
 import { CaptureMeta } from "./CaptureMeta";
 import { LocationEditor } from "./LocationEditor";
 import { LocationMeta } from "./LocationMeta";
+import { TagChips } from "./TagChips";
+import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 
 interface LightboxProps {
   files: FileRecord[];
@@ -68,6 +70,7 @@ export function Lightbox({
   const [busy, setBusy] = useState(false);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [locationOpen, setLocationOpen] = useState(false);
+  const [tagPrompt, setTagPrompt] = useState<TagPromptMode | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const containerRef = useFocusTrap(true);
   useScrollLock(true);
@@ -281,6 +284,20 @@ export function Lightbox({
                 Location
               </button>
               <button
+                onClick={() => setTagPrompt("add")}
+                className={ACTION_BUTTON}
+              >
+                Add tags
+              </button>
+              {file.tags.length > 0 && (
+                <button
+                  onClick={() => setTagPrompt("remove")}
+                  className={ACTION_BUTTON}
+                >
+                  Remove tags
+                </button>
+              )}
+              <button
                 onClick={() => actions.download(file)}
                 className={ACTION_BUTTON}
               >
@@ -337,6 +354,10 @@ export function Lightbox({
               <div className="col-span-2 md:col-span-4">
                 <span className="text-ink-faint">Location:</span> <LocationMeta file={file} />
               </div>
+              <div className="col-span-2 md:col-span-4 flex items-center gap-2">
+                <span className="text-ink-faint">Tags:</span>
+                {file.tags.length > 0 ? <TagChips tags={file.tags} max={file.tags.length} /> : <span>None</span>}
+              </div>
               {file.description && (
                 <div className="col-span-2 md:col-span-4 whitespace-pre-wrap text-ink-muted">
                   <span className="text-ink-faint">Description:</span> {file.description}
@@ -365,6 +386,15 @@ export function Lightbox({
             onClose();
           }}
           onClose={() => setLocationOpen(false)}
+        />
+      )}
+      {tagPrompt && (
+        <TagPrompt
+          folder={file.folder_label}
+          ids={[file.id]}
+          mode={tagPrompt}
+          onApply={(add, remove) => actions.tagFiles([file.id], add, remove)}
+          onClose={() => setTagPrompt(null)}
         />
       )}
     </Portal>

@@ -1,9 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { api, errorMessage, type FileFilters, type NearFilter } from "../lib/api";
 import { useToast } from "../lib/toast";
 import { useFiles, type UseFiles } from "./useFiles";
 import { useSelection, type Selection } from "./useSelection";
-import type { FileRecord, FileSort } from "../types/api";
+import type { FileRecord, FileSort, TagUndo } from "../types/api";
 
 /** The file-review filters, including the capture-date queue from tagging design 3.2.
  *
@@ -20,6 +20,7 @@ export type FilterKey =
   | "archived"
   | "pinned-user"
   | "pinned-auto"
+  | "untagged"
   | "undated"
   | "conflicts";
 
@@ -35,6 +36,12 @@ export const FILTER_PRESETS: FilterPreset[] = [
   { key: "all", label: "All", filters: {} },
   { key: "synced", label: "Synced", filters: { status: "synced" } },
   { key: "archived", label: "Archived", filters: { status: "archived" } },
+  {
+    key: "untagged",
+    label: "Untagged",
+    hint: "Files with no tags yet — the starting queue for a tagging pass.",
+    filters: { untagged: true },
+  },
   {
     key: "pinned-user",
     label: "Pinned by me",
@@ -75,6 +82,7 @@ export interface FileActions {
   setDescription(file: FileRecord, description: string): Promise<boolean>;
   setCaptureDate(file: FileRecord, capturedLocal: string): Promise<boolean>;
   setLocation(file: FileRecord, lat: number, lon: number): Promise<boolean>;
+  tagFiles(ids: number[], add: string[], remove: string[]): Promise<boolean>;
 }
 
 export interface FileWorkspace {
@@ -84,6 +92,8 @@ export interface FileWorkspace {
   actions: FileActions;
   /** The filters currently in force, for "select all in folder". */
   filters: FileFilters;
+  /** Held for the keyboard undo slice. This UI deliberately does not bind U. */
+  lastTagUndo: TagUndo | null;
 }
 
 interface Options {
@@ -105,6 +115,7 @@ export function useFileWorkspace(options: Options): FileWorkspace {
   const { folder, filterKey, sort, limit, near, onFolderChanged } = options;
   const preset = filterPreset(filterKey);
   const toast = useToast();
+  const [lastTagUndo, setLastTagUndo] = useState<TagUndo | null>(null);
 
   const files = useFiles({
     folder,
@@ -115,7 +126,7 @@ export function useFileWorkspace(options: Options): FileWorkspace {
   });
   const selection = useSelection(files.files.map((f) => f.id));
 
-  const { patchFile, refetch } = files;
+  const { patchFile, refetch, refetchIds } = files;
 
   const setPinned = useCallback(
     async (file: FileRecord, pinned: boolean) => {
@@ -234,13 +245,38 @@ export function useFileWorkspace(options: Options): FileWorkspace {
     [near, patchFile, refetch, toast],
   );
 
+  const tagFiles = useCallback(
+    async (ids: number[], add: string[], remove: string[]): Promise<boolean> => {
+      try {
+        const result = await api.bulkTags({ ids, add, remove });
+        setLastTagUndo(result.undo);
+        await refetchIds(ids);
+        const verb = add.length > 0 ? "Tagged" : "Removed tags from";
+        const created = result.created.length > 0
+          ? ` · created ${result.created.join(", ")}`
+          : "";
+        toast.show(
+          "success",
+          `${verb} ${result.updated.toLocaleString()} file${result.updated === 1 ? "" : "s"}${created}`,
+        );
+        return true;
+      } catch (err) {
+        toast.show("error", `Tags: ${errorMessage(err)}`);
+        return false;
+      }
+    },
+    [refetchIds, toast],
+  );
+
   return {
     preset,
     files,
     selection,
     actions: {
       setPinned, restore, archive, resolve, download, setDescription, setCaptureDate, setLocation,
+      tagFiles,
     },
     filters: { folder, ...preset.filters, near },
+    lastTagUndo,
   };
 }

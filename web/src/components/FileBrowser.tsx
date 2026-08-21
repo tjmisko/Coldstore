@@ -14,6 +14,8 @@ import { Lightbox } from "./Lightbox";
 import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
+import { TagChips } from "./TagChips";
+import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 
 interface FileBrowserProps {
   folder: string;
@@ -104,6 +106,7 @@ export function FileBrowser({
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
   const [locationIndex, setLocationIndex] = useState<number | null>(null);
+  const [tagPrompt, setTagPrompt] = useState<{ ids: number[]; mode: TagPromptMode } | null>(null);
 
   const sentinelRef = useCallback(
     (node: HTMLDivElement | null) => {
@@ -167,7 +170,7 @@ export function FileBrowser({
     onOpen: setPreviewIndex,
     onContextMenu: (index) => openMenu(index, null),
     onEditDescription: setDescriptionIndex,
-    active: previewIndex === null && menu === null && descriptionIndex === null && locationIndex === null,
+    active: previewIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
     reveal,
   });
 
@@ -235,6 +238,7 @@ export function FileBrowser({
                 Pin
               </th>
               <th className="pb-2 pr-4 font-medium">Name</th>
+              <th className="pb-2 pr-4 font-medium hidden lg:table-cell">Tags</th>
               <th className="pb-2 pr-4 font-medium hidden md:table-cell">
                 Path
               </th>
@@ -318,6 +322,7 @@ export function FileBrowser({
           onOpen={() => setPreviewIndex(files.findIndex((file) => file.id === menu.file.id))}
           onEditDescription={() => setDescriptionIndex(files.findIndex((file) => file.id === menu.file.id))}
           onEditLocation={() => setLocationIndex(files.findIndex((file) => file.id === menu.file.id))}
+          onEditTags={(mode) => setTagPrompt({ ids: menu.ids, mode })}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
         />
@@ -342,6 +347,17 @@ export function FileBrowser({
             setLocationIndex(null);
           }}
           onClose={() => setLocationIndex(null)}
+        />
+      )}
+
+      {tagPrompt && (
+        <TagPrompt
+          folder={folder}
+          ids={tagPrompt.ids}
+          mode={tagPrompt.mode}
+          selectionNote={bulk.selectAllNote}
+          onApply={(add, remove) => actions.tagFiles(tagPrompt.ids, add, remove)}
+          onClose={() => setTagPrompt(null)}
         />
       )}
 
@@ -464,6 +480,9 @@ function Row({
             &#9888;
           </span>
         )}
+      </td>
+      <td className="py-2.5 pr-4 hidden lg:table-cell">
+        <TagChips tags={file.tags} />
       </td>
       <td className="py-2.5 pr-4 text-ink-faint hidden md:table-cell text-meta font-mono">
         {file.relative_path}

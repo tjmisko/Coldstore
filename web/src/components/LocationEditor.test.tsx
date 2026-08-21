@@ -17,6 +17,7 @@ function locationActions(): FileActions {
     setDescription: vi.fn(async () => true),
     setCaptureDate: vi.fn(async () => true),
     setLocation: vi.fn(async () => true),
+    tagFiles: vi.fn(async () => true),
   };
 }
 

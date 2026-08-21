@@ -118,6 +118,41 @@ describe("Gallery", () => {
     );
   });
 
+  it("should apply tags by mouse to the selection through one exact bulk request", async () => {
+    renderGallery();
+    await screen.findByLabelText("one.jpg");
+    fireEvent.click(tile(1), { ctrlKey: true });
+    fireEvent.click(tile(2), { ctrlKey: true });
+    stub!.route({ url: "/api/v1/tags", body: [] });
+    stub!.route({
+      method: "POST",
+      url: "/api/v1/files/tags",
+      body: {
+        updated: 2,
+        created: ["Trips/Iceland"],
+        undo: { changes: [{ ids: [1, 2], remove: ["Trips/Iceland"] }] },
+      },
+    });
+
+    fireEvent.contextMenu(tile(1), { clientX: 40, clientY: 40 });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add tags (2 files)" }));
+    expect(screen.getByText("Tag 2 files")).toHaveAttribute("data-tag-prompt-count");
+    await userEvent.type(screen.getByLabelText("Tags to add"), "Trips/Iceland");
+    await screen.findByRole("button", { name: /new tag “Trips\/Iceland”/i });
+    await userEvent.click(screen.getByRole("button", { name: "Apply tags" }));
+
+    await waitFor(() => expect(stub!.calls.find((call) => call.method === "POST" && call.url === "/api/v1/files/tags")?.body)
+      .toEqual({ ids: [1, 2], add: ["Trips/Iceland"], remove: [] }));
+  });
+
+  it("should expose the untagged work queue as a mouse filter", async () => {
+    const { onFilterChange } = renderGallery();
+    await screen.findByLabelText("one.jpg");
+
+    await userEvent.click(screen.getByRole("tab", { name: "Untagged" }));
+    expect(onFilterChange).toHaveBeenCalledWith("untagged");
+  });
+
   it("should offer both resolutions on a conflicted file and post the owner's choice", async () => {
     const conflicted = [aFile({ id: 9, filename: "recovered.jpg", status: "archived" })];
     renderGallery(conflicted, "conflicts");

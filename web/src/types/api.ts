@@ -213,6 +213,25 @@ export interface BulkTagResponse {
   undo: TagUndo;
 }
 
+/** GET /api/v1/tags. `count` is exact assignments; `descendant_count`
+ * includes assignments anywhere below this materialised-path node. */
+export interface Tag {
+  id: number;
+  name: string;
+  count: number;
+  descendant_count: number;
+}
+
+export interface TagRenameResponse {
+  merged: boolean;
+  files_affected: number;
+}
+
+export interface TagDeleteResponse {
+  deleted: number;
+  files_affected: number;
+}
+
 export interface JobFailure {
   id: number;
   error: string;

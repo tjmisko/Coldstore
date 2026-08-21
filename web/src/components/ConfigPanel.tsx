@@ -4,6 +4,7 @@ import { formatAgo, formatCount, formatSize, parseSize } from "../lib/format";
 import { useEvents, useFolders, usePersistentPaths } from "../hooks/useConfig";
 import { useToast } from "../lib/toast";
 import type { FolderConfig, FolderStatus, StatusResponse, UpdateFolderRequest } from "../types/api";
+import { TagManager } from "./TagManager";
 
 interface ConfigPanelProps {
   status: StatusResponse | null;
@@ -72,6 +73,7 @@ export function ConfigPanel({
       {selectedFolder && (
         <>
           <PersistentPathsEditor folder={selectedFolder} />
+          <TagManager folder={selectedFolder} />
           <ActivityList folder={selectedFolder} />
         </>
       )}

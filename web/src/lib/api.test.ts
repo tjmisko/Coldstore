@@ -86,6 +86,12 @@ describe("file query building", () => {
       .toContain("sort=captured");
   });
 
+  it("should serialize the untagged work queue without changing other presets", () => {
+    expect(fileFilterParams({ folder: "CameraRoll", untagged: true }).toString())
+      .toBe("folder=CameraRoll&untagged=1");
+    expect(fileFilterParams({ folder: "CameraRoll" }).has("untagged")).toBe(false);
+  });
+
   it("should distinguish pinned=0 from no pin filter at all", () => {
     expect(fileFilterParams({ pinned: false }).get("pinned")).toBe("0");
     expect(fileFilterParams({}).has("pinned")).toBe(false);

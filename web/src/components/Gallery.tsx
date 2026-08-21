@@ -15,6 +15,8 @@ import { Lightbox } from "./Lightbox";
 import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
+import { TagChips } from "./TagChips";
+import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 
 interface GalleryProps {
   folder: string;
@@ -44,6 +46,7 @@ export function Gallery({
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
   const [locationIndex, setLocationIndex] = useState<number | null>(null);
+  const [tagPrompt, setTagPrompt] = useState<{ ids: number[]; mode: TagPromptMode } | null>(null);
   const observer = useRef<IntersectionObserver | null>(null);
   const pendingDayJump = useRef<{
     fromID: number;
@@ -124,7 +127,7 @@ export function Gallery({
           return jump.index;
         }
       : undefined,
-    active: lightboxIndex === null && menu === null && descriptionIndex === null && locationIndex === null,
+    active: lightboxIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
   });
   const moveCursorTo = cursor.moveTo;
 
@@ -277,6 +280,7 @@ export function Gallery({
           onOpen={() => setLightboxIndex(files.findIndex((f) => f.id === menu.file.id))}
           onEditDescription={() => setDescriptionIndex(files.findIndex((f) => f.id === menu.file.id))}
           onEditLocation={() => setLocationIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onEditTags={(mode) => setTagPrompt({ ids: menu.ids, mode })}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
         />
@@ -301,6 +305,17 @@ export function Gallery({
             setLocationIndex(null);
           }}
           onClose={() => setLocationIndex(null)}
+        />
+      )}
+
+      {tagPrompt && (
+        <TagPrompt
+          folder={folder}
+          ids={tagPrompt.ids}
+          mode={tagPrompt.mode}
+          selectionNote={bulk.selectAllNote}
+          onApply={(add, remove) => actions.tagFiles(tagPrompt.ids, add, remove)}
+          onClose={() => setTagPrompt(null)}
         />
       )}
 
@@ -434,6 +449,10 @@ function Tile({
 
       <div className="absolute top-1 right-1" onClick={(e) => e.stopPropagation()}>
         <PinToggle file={file} onPin={onPin} compact />
+      </div>
+
+      <div className="pointer-events-none absolute bottom-1.5 left-1.5 max-w-[70%] overflow-hidden">
+        <TagChips tags={file.tags} />
       </div>
 
       <div className="absolute bottom-1.5 right-1.5 flex gap-1">
