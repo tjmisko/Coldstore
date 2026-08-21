@@ -78,7 +78,7 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
 
   if (!folder) {
     return (
-      <div className="flex items-center justify-center h-full text-neutral-500">
+      <div className="flex items-center justify-center h-full text-ink-muted">
         Select a folder from the sidebar
       </div>
     );
@@ -88,16 +88,16 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
     <div className="p-4 md:p-6 pb-24">
       {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
           top of the first few characters of the folder name at 390px. */}
-      <h2 className="text-xl font-semibold mb-3 ml-11 md:ml-0">{folder}</h2>
+      <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{folder}</h2>
       <FilterBar active={filterKey} onChange={onFilterChange} />
 
       {error && (
-        <p className="mb-3 text-sm text-red-400" role="alert">
+        <p className="mb-3 text-meta text-alarm" role="alert">
           {error}
         </p>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 select-none">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 select-none">
         {files.map((file, index) => (
           <Tile
             key={file.id}
@@ -116,16 +116,16 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
 
       <div ref={sentinelRef} className="h-8" />
 
-      {loading && <div className="text-center text-neutral-500 py-4">Loading...</div>}
+      {loading && <div className="text-center text-ink-faint py-4 text-meta">Loading...</div>}
 
       {!loading && files.length === 0 && (
-        <div className="text-center text-neutral-500 py-10 text-sm">
+        <div className="text-center text-ink-muted py-12 text-meta">
           No files match this filter.
         </div>
       )}
 
       {!hasMore && files.length > 0 && (
-        <div className="text-center text-neutral-600 py-4 text-sm">
+        <div className="text-center text-ink-faint py-4 text-meta tabular">
           {formatCount(files.length)} files
         </div>
       )}
@@ -208,8 +208,8 @@ function Tile({
           onOpen();
         }
       }}
-      className={`relative aspect-square bg-neutral-800 rounded-lg overflow-hidden group cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-        selected ? "ring-2 ring-blue-500" : ""
+      className={`relative aspect-square bg-raised rounded-lg overflow-hidden group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-ground ${
+        selected ? "ring-2 ring-ink" : ""
       }`}
     >
       {thumbnail ? (
@@ -220,19 +220,33 @@ function Tile({
           loading="lazy"
         />
       ) : (
-        <div className="w-full h-full flex flex-col items-center justify-center text-neutral-500 text-xs gap-1 p-2 text-center">
+        <div className="w-full h-full flex flex-col items-center justify-center text-ink-faint text-meta gap-1.5 p-2 text-center">
           {thumbFailed ? (
-            <span title={file.thumb_error || "thumbnail generation failed"} aria-label="thumbnail failed">
+            <span
+              className="text-alarm"
+              title={file.thumb_error || "thumbnail generation failed"}
+              aria-label="thumbnail failed"
+            >
               &#9888;
             </span>
           ) : null}
-          <span className="truncate w-full">{file.extension || file.filename}</span>
+          <span className="truncate w-full font-mono">{file.extension || file.filename}</span>
         </div>
       )}
 
+      {/* The checkbox is ALWAYS rendered and always hittable.
+       *
+       *  It used to be `opacity-0 group-hover:opacity-100`, which meant a phone
+       *  -- where there is no hover -- could never reveal it, and the
+       *  `anySelected` escape hatch was unreachable because nothing could be
+       *  selected first. The gallery's whole multi-select feature was dead on
+       *  the device the photos are actually browsed from. It now sits at 60%
+       *  until hovered or selected, which is legible on a photo without
+       *  shouting, and the padding gives it a 36px touch target rather than the
+       *  13px of a native box. */}
       <label
-        className={`absolute top-1 left-1 p-1 rounded bg-black/50 transition-opacity ${
-          selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+        className={`absolute top-0 left-0 p-2 cursor-pointer transition-opacity ${
+          selected || anySelected ? "opacity-100" : "opacity-60 group-hover:opacity-100 focus-within:opacity-100"
         }`}
         onClick={(e) => e.stopPropagation()}
       >
@@ -251,27 +265,54 @@ function Tile({
             if (e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey) return;
             onToggle();
           }}
-          className="accent-blue-500"
+          className="peer sr-only"
         />
+        <span
+          aria-hidden="true"
+          className="block size-5 rounded-[5px] border-2 border-ink/70 bg-ground/55 shadow-[0_1px_3px_rgba(0,0,0,0.6)] backdrop-blur-[2px] transition-colors peer-checked:border-ink peer-checked:bg-ink peer-checked:[&_svg]:opacity-100 peer-focus-visible:ring-2 peer-focus-visible:ring-cursor peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-ground"
+        >
+          <svg viewBox="0 0 20 20" className="size-full text-ground opacity-0">
+            <path
+              d="M5 10.5l3.2 3.2L15 7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
       </label>
 
       <div className="absolute top-1 right-1" onClick={(e) => e.stopPropagation()}>
         <PinToggle file={file} onPin={onPin} compact />
       </div>
 
-      <div className="absolute bottom-1 right-1 flex gap-1">
+      {/* Badges carry the state hues. Dim ground plus a coloured hairline and
+          coloured text, rather than a saturated fill -- on a photograph a solid
+          chip is a hole punched in the image, and there are up to three of them. */}
+      <div className="absolute bottom-1.5 right-1.5 flex gap-1">
         {file.pinned && (
-          <span className="bg-indigo-600/85 text-[10px] px-1.5 py-0.5 rounded-full" data-badge="pinned">
+          <span
+            className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-held-dim/90 text-held ring-1 ring-held/40 backdrop-blur-[2px]"
+            data-badge="pinned"
+          >
             pinned
           </span>
         )}
         {file.status === "archived" && (
-          <span className="bg-amber-600/85 text-[10px] px-1.5 py-0.5 rounded-full" data-badge="archived">
+          <span
+            className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-cold-dim/90 text-cold ring-1 ring-cold/40 backdrop-blur-[2px]"
+            data-badge="archived"
+          >
             archived
           </span>
         )}
         {file.status === "missing" && (
-          <span className="bg-red-700/85 text-[10px] px-1.5 py-0.5 rounded-full" data-badge="missing">
+          <span
+            className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-alarm-dim/90 text-alarm ring-1 ring-alarm/40 backdrop-blur-[2px]"
+            data-badge="missing"
+          >
             missing
           </span>
         )}
@@ -279,25 +320,28 @@ function Tile({
 
       {conflictMode && (
         <div
-          className="absolute inset-x-0 bottom-0 bg-black/80 p-1.5 flex gap-1 text-[11px]"
+          className="absolute inset-x-0 bottom-0 bg-ground/85 backdrop-blur-sm p-1.5 flex gap-1.5 text-micro"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* The two outcomes are not symmetrical, so they do not look alike:
+              keeping the archived copy is the cold-side choice and wears the
+              cold hue; keeping what is on the device is the neutral default. */}
           <button
             onClick={() => onResolve("device")}
-            className="flex-1 px-1 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600"
+            className="flex-1 px-1.5 py-1 rounded-md bg-raised text-ink ring-1 ring-line-strong hover:bg-raised-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
           >
             Keep device
           </button>
           <button
             onClick={() => onResolve("archive")}
-            className="flex-1 px-1 py-0.5 rounded bg-amber-700 hover:bg-amber-600"
+            className="flex-1 px-1.5 py-1 rounded-md bg-cold-dim text-cold ring-1 ring-cold/40 hover:bg-cold/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
           >
             Keep archived
           </button>
         </div>
       )}
 
-      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors pointer-events-none" />
+      <div className="absolute inset-0 bg-ground/0 group-hover:bg-ground/25 transition-colors pointer-events-none" />
       <span className="sr-only">{formatSize(file.size_bytes)}</span>
     </div>
   );

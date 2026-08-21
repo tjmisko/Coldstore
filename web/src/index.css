@@ -1,10 +1,133 @@
 @import "tailwindcss";
 
+/* IBM Plex, latin subset only, served from the embedded bundle.
+ *
+ * The daemon runs on a LAN with no egress, so a webfont has to ship inside the
+ * binary -- there is no CDN to fall back to. These three files are committed
+ * under web/public/fonts/ rather than pulled from npm at build time, so a fresh
+ * clone builds a correctly-typeset UI with no network. 75 kB for all three.
+ *
+ * Plex is here for its mono: filenames, paths, sizes and dates all want tabular
+ * alignment, and taking the sans from the same family means the table and the
+ * metadata panel share a skeleton instead of merely coexisting. */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-sans-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
+/* The design system.
+ *
+ * One rule governs the palette: **colour means where a file lives, never what a
+ * button does.** Before this, every row carried a blue Download and an orange
+ * Archive -- the same two colours fifteen times down the page, carrying no
+ * information and drowning out the amber word that actually said "archived".
+ * Actions are now monochrome. The hues below are spent exclusively on state,
+ * and only on states that are a departure from normal: a folder full of synced
+ * files shows almost no colour at all, and an archived one is unmissable.
+ *
+ * The axis is thermal, which is what this product is about -- warm is held on
+ * the device, cold is out on the array. */
+@theme {
+  /* Ground. Near-black with a faint cool cast so the warm state colour reads as
+     warm against it, and so photo edges do not float the way they do on #000. */
+  --color-ground: #0b0d0f;
+  --color-surface: #131619;
+  --color-raised: #1b2024;
+  --color-raised-hover: #232a2f;
+  --color-line: #262c31;
+  --color-line-strong: #39424a;
+
+  /* Ink. Every step is lighter than the Tailwind neutral it replaces: the owner
+     reported the UI was hard to read, and the old secondary text sat at
+     neutral-500/600, which is below comfortable on a dark ground. */
+  --color-ink: #e8ecef;
+  --color-ink-muted: #9aa6b0;
+  --color-ink-faint: #6b7780;
+
+  /* State. Four hues, each with exactly one meaning. */
+  --color-cold: #6ba8d6; /* archived -- out on the array */
+  --color-cold-dim: #21313e;
+  --color-held: #d9a05b; /* pinned -- deliberately held out of the cold */
+  --color-held-dim: #35281a;
+  --color-alarm: #d9615b; /* missing, conflicted, over budget */
+  --color-alarm-dim: #3a1f1e;
+
+  /* The keyboard's position, and nothing else ever.
+     This product is meant to be driven without touching a mouse, which makes
+     "where is the cursor" the single most important thing on screen. Reserving
+     a hue that no state and no control may use is what keeps it findable. */
+  --color-cursor: #7dd3c0;
+  --color-cursor-dim: #14332e;
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Type scale, one step up from where it was. The old UI set almost everything
+     at 12-14px; this starts at 13 and puts the table at 15. */
+  --text-micro: 0.6875rem; /* 11px -- badges only, uppercase and tracked out */
+  --text-micro--line-height: 1rem;
+  --text-meta: 0.8125rem; /* 13px -- secondary text, was 12 */
+  --text-meta--line-height: 1.15rem;
+  --text-base: 0.9375rem; /* 15px -- table and body, was 14 */
+  --text-base--line-height: 1.4rem;
+  --text-title: 1.5rem; /* 24px -- the folder name */
+  --text-title--line-height: 1.9rem;
+
+  /* A single z ladder. The old one was six hand-picked numbers scattered across
+     six files, two of which collided at 50. */
+  --z-sidebar: 40;
+  --z-scrim: 30;
+  --z-bar: 45;
+  --z-overlay: 50;
+  --z-toast: 60;
+  --z-dialog: 70;
+}
+
 body {
-  @apply bg-neutral-950 text-neutral-100 m-0 min-h-screen;
-  font-family: system-ui, -apple-system, sans-serif;
+  @apply bg-ground text-ink m-0 min-h-screen font-sans text-base antialiased;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Numerals line up in every column that is a measurement. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

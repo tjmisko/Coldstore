@@ -242,4 +242,40 @@ test.describe("on a phone-sized viewport", () => {
     expect(headingBox).not.toBeNull();
     expect(headingBox!.x).toBeGreaterThanOrEqual(toggleBox!.x + toggleBox!.width);
   });
+
+  test("should let a touch device select a photo when nothing is selected yet", async ({ page }) => {
+    // The tile checkbox used to be `opacity-0 group-hover:opacity-100`. A phone
+    // has no hover, so it never appeared -- and the `anySelected` escape hatch
+    // that also reveals it could not be reached, because reaching it required
+    // selecting something first. The gallery's entire multi-select feature was
+    // dead on the device the photos are browsed from.
+    await page.locator('[data-folder-nav="CameraRoll"]').click();
+    const tile = page.locator("[data-file-id]").first();
+    await expect(tile).toBeVisible();
+
+    const box = tile.locator('input[type="checkbox"]');
+    const opacity = await box.evaluate((el) => {
+      const label = el.closest("label")!;
+      return window.getComputedStyle(label).opacity;
+    });
+    expect(Number(opacity)).toBeGreaterThan(0.25);
+
+    // And it actually selects, with no hover anywhere in this test. The tap
+    // lands on the label, which is what a thumb hits -- the input itself is
+    // sr-only so that the box can be drawn at a size a thumb can find.
+    await tile.locator("label").first().click();
+    await expect(box).toBeChecked();
+    await expect(page.locator("[data-selection-count]")).toContainText("1 selected");
+  });
+
+  test("should give the tile checkbox a touch-sized hit target", async ({ page }) => {
+    await page.locator('[data-folder-nav="CameraRoll"]').click();
+    const label = page.locator("[data-file-id]").first().locator("label").first();
+
+    // The native 13px box was unhittable with a thumb. 36px is the padded label.
+    const box = await label.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(32);
+    expect(box!.height).toBeGreaterThanOrEqual(32);
+  });
 });
