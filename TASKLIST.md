@@ -18,23 +18,23 @@ deployment.
 
 ### 1. Stabilize the keyboard layer
 
-- [ ] Replace the passive-effect stale-handler window in `useKeymapLayer` with a lifecycle
+- [x] Replace the passive-effect stale-handler window in `useKeymapLayer` with a lifecycle
       that exposes the current committed handler before a visible fetched row can receive
       keyboard input.
-- [ ] Add a regression test that fails when a key is sent immediately after the first fetched
+- [x] Add a regression test that fails when a key is sent immediately after the first fetched
       rows commit.
-- [ ] Run `keyboard.test.tsx` repeatedly, not once. Require at least 20 consecutive clean
+- [x] Run `keyboard.test.tsx` repeatedly, not once. Require at least 20 consecutive clean
       runs plus one clean full `make test-web`.
-- [ ] Preserve the single `window` keydown listener, scope stack, text-entry suspension and
+- [x] Preserve the single `window` keydown listener, scope stack, text-entry suspension and
       generated binding/cheatsheet source of truth.
 
 ### 2. Repair the z-index contract before adding more overlays
 
-- [ ] Make `ToastProvider` use the central `Z.toast` value so action failures remain visible
+- [x] Make `ToastProvider` use the central `Z.toast` value so action failures remain visible
       above palettes, preview surfaces and dialogs.
-- [ ] Reconcile `web/src/index.css`, `docs/interface-refresh.md` and `docs/keymap-design.md`
+- [x] Reconcile `web/src/index.css`, `docs/interface-refresh.md` and `docs/keymap-design.md`
       with `web/src/lib/zLayers.ts`; remove obsolete literal-ladder guidance.
-- [ ] Add or extend an overlay/toast test that holds the intended ordering.
+- [x] Add or extend an overlay/toast test that holds the intended ordering.
 
 ### 3. Merge `feat/documents` onto `feat/interface-refresh`
 

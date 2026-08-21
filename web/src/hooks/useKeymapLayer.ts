@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { useKeymap } from "../lib/keymapContext";
 import type { Command, Scope } from "../keymap/types";
 
@@ -15,10 +15,12 @@ export function useKeymapLayer(
   const keymap = useKeymap();
   const handlerRef = useRef<((command: Command) => boolean) | null>(null);
 
-  // No dependency array: the ref must hold the CURRENT closure, and this effect
-  // is declared first so it has already run by the time the registration
-  // effect below fires.
-  useEffect(() => {
+  // Publish the handler in the layout phase. A passive effect leaves a window
+  // after a commit where newly visible fetched rows are paired with the
+  // previous render's closure, so an immediate key can be handled as though
+  // the list were still empty. Writing during render would have the opposite
+  // concurrency bug: an abandoned render could leak an uncommitted closure.
+  useLayoutEffect(() => {
     handlerRef.current = handler;
   });
 

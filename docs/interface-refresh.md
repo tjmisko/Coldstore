@@ -93,11 +93,11 @@ v4 `@theme` block *and* sweeping every one of those files -- there is no interme
 abstraction to change instead. That is the bulk of the work in C, and it should happen
 before D/E/G, which will otherwise be written against colours that are about to move.
 
-Also missing and needed by E and G: **no React portal anywhere** (`createPortal` appears
-zero times -- every overlay is an inline `fixed inset-0` div), **no focus trap**, **no
-scroll lock**, and **no z-index scale** (the ladder is hand-rolled: sidebar 40, backdrop
-30, hamburger 50, lightbox 50, toasts 60, dialog 70). `ConfirmDialog.tsx` is the only
-dialog primitive and it is 69 lines.
+Also missing at the start and needed by E and G: a React portal, focus trap, scroll
+lock and central z-index scale. Those now live in `components/Portal.tsx`,
+`hooks/useFocusTrap.ts`, `hooks/useScrollLock.ts` and `lib/zLayers.ts`. Components use
+inline `Z` values from that single source of truth; toasts are explicitly above every
+overlay so action failures cannot be hidden by a palette, preview or dialog.
 
 Constraint for every task in this section: the `data-*` attributes are the selector
 contract both test tiers are written against (`data-file-id`, `data-selected`,
@@ -441,10 +441,10 @@ them will need a follow-up pass rather than a clean merge.
 3. **Both `37ad497` branches are missing six commits of main** -- the deploy runbook
    rewrite, `[storage] require_mountpoint`, the node-lockfile build fix. All docs and
    config; rebase or merge main into them before review rather than after.
-4. **The z ladder is now literals, not tokens.** Tailwind v4 has no `--z-*` theme
-   namespace, so `z-sidebar` and friends silently produced class names that did not
-   exist. Any new overlay from the keyboard branch must use the documented literal
-   ladder in `web/src/index.css`, not invent a token.
+4. **The z ladder is centralized in `web/src/lib/zLayers.ts`.** Tailwind v4 has no
+   `--z-*` theme namespace, so `z-sidebar` and friends silently produced class names
+   that did not exist. New layers must add or reuse a `Z` value there and apply it as
+   an inline `style`; do not introduce a numeric z-index class at the call site.
 5. **The table's native checkbox is `sr-only`** with a styled span over it, so anything
    that clicks `input[type=checkbox]` directly will hang on Playwright's actionability
    check. Use the `selectRow` helper in `web/e2e/helpers.ts`, or click the label.

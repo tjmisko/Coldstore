@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ToastContext, type Toast, type ToastKind } from "../lib/toast";
+import { Z } from "../lib/zLayers";
 
 const DISMISS_MS: Record<ToastKind, number> = {
   success: 4000,
@@ -46,7 +47,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext value={api}>
       {children}
       <div
-        className="fixed bottom-4 right-4 z-60 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]"
+        style={{ zIndex: Z.toast }}
+        className="fixed bottom-4 right-4 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]"
         aria-live="polite"
       >
         {toasts.map((toast) => (

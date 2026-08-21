@@ -121,6 +121,29 @@ function postedJob() {
 }
 
 describe("motions", () => {
+  it("should handle a key sent as soon as the first fetched rows commit", async () => {
+    renderBrowser();
+
+    const body = screen.getByRole("table").querySelector("tbody");
+    expect(body).not.toBeNull();
+
+    // MutationObserver runs after React commits the rows but before passive
+    // effects. This is the browser-visible interval in which the old keymap
+    // lifecycle still exposed the handler from the empty-list render.
+    await new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (row(1) === null) return;
+        observer.disconnect();
+        type("j");
+        resolve();
+      });
+      observer.observe(body!, { childList: true });
+    });
+
+    expect(row(2).dataset.cursor).toBe("true");
+    expect(row(1).dataset.cursor).toBe("false");
+  });
+
   it("should move the cursor one row down when j is pressed in the table", async () => {
     renderBrowser();
     await browserReady();

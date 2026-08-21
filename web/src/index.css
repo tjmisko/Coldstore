@@ -108,12 +108,9 @@ body {
   box-sizing: border-box;
 }
 
-/* The z ladder, written down because Tailwind has no theme namespace for it and
- * the numbers therefore have to be literals at each call site:
- *   30 mobile scrim · 40 sidebar · 45 selection bar
- *   50 overlays (lightbox, mobile toggle) · 60 toasts · 70 dialogs
- * Before this they were six hand-picked numbers across six files, two colliding
- * at 50. Keep new layers on this ladder rather than inventing a number. */
+/* Tailwind has no theme namespace for z-index. The shared layer contract lives
+ * in lib/zLayers.ts instead; components apply its Z values as inline styles so
+ * no literal ladder can drift between CSS classes and overlay call sites. */
 
 /* Numerals line up in every column that is a measurement. */
 .tabular {

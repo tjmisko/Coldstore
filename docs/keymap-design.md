@@ -315,11 +315,12 @@ are built once, in `components/Portal.tsx`, `hooks/useFocusTrap.ts`,
 `hooks/useScrollLock.ts` and `lib/zLayers.ts`, and `ConfirmDialog` and `Lightbox`
 are migrated onto them rather than left as a second implementation.
 
-`lib/zLayers.ts` is applied as an inline `style={{ zIndex: ... }}`, not a Tailwind
-class. The ladder was hand-rolled (sidebar 40, backdrop 30, hamburger 50, lightbox
-50, toasts 60, dialog 70) and lightbox-vs-hamburger was already a tie; a numeric
-constant in one file is the only form in which the order can be read at a glance,
-and it is one line to change when the design refresh lands.
+`lib/zLayers.ts` is the single source of truth for every application layer.
+Components apply its `Z` values as inline `style={{ zIndex: ... }}`, not Tailwind
+classes: Tailwind has no z-index theme namespace, and duplicating numeric values at
+call sites would let the documented order drift. Toasts sit above every overlay so
+an action failure remains visible while a palette, preview, context menu or dialog is
+open.
 
 The focus trap restores focus to whatever was focused when the overlay opened,
 which is what lets `:` -> Escape put the cursor back on the tile it was on.
