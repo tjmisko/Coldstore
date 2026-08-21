@@ -18,3 +18,10 @@ internal/api/dist/*
 
 # Demo config
 coldstore-demo.toml
+
+# Worktrees live here (gh worktree create)
+.worktrees/
+
+# Deployment survey for this specific installation: LAN addresses, Syncthing
+# device and folder IDs, backup locations. This repo is public -- keep it local.
+docs/first-deploy.md
