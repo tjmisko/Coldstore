@@ -15,6 +15,7 @@ import (
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
+	"github.com/tjmisko/coldstore/internal/metadata"
 	"github.com/tjmisko/coldstore/internal/thumbnail"
 )
 
@@ -90,13 +91,14 @@ type Daemon struct {
 	mover               *Mover
 	worker              *Worker
 	thumbGen            *thumbnail.Generator
+	metadataExtractor   metadata.Extractor
 	initialScanComplete bool
 
-	// Thumbnail generation runs off the select loop so a long pass cannot
-	// delay SIGTERM. thumbRunning admits one pass at a time; thumbWG lets
-	// shutdown wait for the running pass to notice the cancelled context.
-	thumbRunning atomic.Bool
-	thumbWG      sync.WaitGroup
+	// Derived-data work runs off the select loop so a long pass cannot delay
+	// SIGTERM. One guard covers metadata followed by thumbnails, preserving
+	// that order while preventing overlapping passes.
+	derivedRunning atomic.Bool
+	derivedWG      sync.WaitGroup
 }
 
 // New builds the daemon around an existing Mover. The mover is a parameter
@@ -112,13 +114,14 @@ func New(cfg *config.Config, cat *catalog.Catalog, mover *Mover, logger *slog.Lo
 	// wake channel that POST /jobs would poke while the running one sleeps.
 	scanner := NewScanner(cfg, cat, logger)
 	return &Daemon{
-		cfg:      cfg,
-		cat:      cat,
-		logger:   logger,
-		scanner:  scanner,
-		mover:    mover,
-		worker:   NewWorker(cat, mover, scanner, logger),
-		thumbGen: thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger),
+		cfg:               cfg,
+		cat:               cat,
+		logger:            logger,
+		scanner:           scanner,
+		mover:             mover,
+		worker:            NewWorker(cat, mover, scanner, logger),
+		thumbGen:          thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger),
+		metadataExtractor: metadata.New(),
 	}
 }
 
@@ -148,9 +151,9 @@ func (d *Daemon) Run() error {
 // cancellation is honoured mid-work rather than only between ticks. It returns
 // once every in-flight unit of work has stopped.
 func (d *Daemon) RunContext(ctx context.Context) error {
-	// A background thumbnail pass may outlive the loop below by the length of
-	// one file; do not return until it has stopped.
-	defer d.thumbWG.Wait()
+	// A background derived-data pass may outlive the loop below by the length
+	// of one file; do not return until it has stopped.
+	defer d.derivedWG.Wait()
 
 	// Retry initial scan up to 3 times before entering the main loop.
 	// Quota enforcement is gated on a successful initial scan.
@@ -193,7 +196,7 @@ func (d *Daemon) RunContext(ctx context.Context) error {
 	}()
 	defer workerWG.Wait()
 
-	d.startThumbnailPass(ctx)
+	d.startDerivedDataPass(ctx)
 
 	scanTicker := time.NewTicker(time.Duration(d.cfg.Daemon.ScanIntervalMinutes) * time.Minute)
 	defer scanTicker.Stop()
@@ -224,7 +227,7 @@ func (d *Daemon) RunContext(ctx context.Context) error {
 				d.initialScanComplete = true
 				d.logger.Info("initial scan completed on catalog sync tick")
 			}
-			d.startThumbnailPass(ctx)
+			d.startDerivedDataPass(ctx)
 			d.purgeOldJobs()
 		}
 	}
@@ -571,18 +574,22 @@ func (d *Daemon) enforceEpilogue(label string) {
 	}
 }
 
-// startThumbnailPass runs one thumbnail pass in the background. At most one
-// pass runs at a time: a tick that arrives while the previous pass is still
-// working is dropped rather than queued.
-func (d *Daemon) startThumbnailPass(ctx context.Context) {
-	if !d.thumbRunning.CompareAndSwap(false, true) {
-		d.logger.Debug("thumbnail pass already running, skipping this tick")
+// startDerivedDataPass runs metadata and then thumbnails in one background
+// goroutine. A tick that arrives while either phase is active is dropped rather
+// than queued.
+func (d *Daemon) startDerivedDataPass(ctx context.Context) {
+	if !d.derivedRunning.CompareAndSwap(false, true) {
+		d.logger.Debug("derived-data pass already running, skipping this tick")
 		return
 	}
-	d.thumbWG.Add(1)
+	d.derivedWG.Add(1)
 	go func() {
-		defer d.thumbWG.Done()
-		defer d.thumbRunning.Store(false)
+		defer d.derivedWG.Done()
+		defer d.derivedRunning.Store(false)
+		d.extractMetadata(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		d.generateThumbnails(ctx)
 	}()
 }

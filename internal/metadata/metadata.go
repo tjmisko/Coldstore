@@ -33,6 +33,19 @@ type Extractor interface {
 	Extract(ctx context.Context, path, ext string) (Extracted, error)
 }
 
+var supportedExtensions = []string{
+	".jpg", ".jpeg", ".heic", ".heif", ".png", ".webp", ".avif",
+	".tif", ".tiff", ".dng", ".cr2", ".nef", ".arw", ".pef",
+	".mov", ".mp4",
+}
+
+// SupportedExtensions returns the extension allowlist for the background
+// extraction queue. Return a copy so a caller cannot silently change which
+// files HybridExtractor accepts.
+func SupportedExtensions() []string {
+	return append([]string(nil), supportedExtensions...)
+}
+
 // ErrUnsupportedExtension reports a file outside the metadata queue's
 // extension allowlist.
 var ErrUnsupportedExtension = errors.New("metadata: unsupported extension")

@@ -167,13 +167,10 @@ func (w *Worker) runScanJob(ctx context.Context, job *catalog.Job) error {
 
 func (w *Worker) scan(ctx context.Context, folderLabel string) error {
 	// A scan JOB is the owner pressing Rescan; the periodic catalog tick does
-	// not come through here. That distinction is what makes this the right
-	// place to clear the three-strikes thumbnail cap: a file whose thumbnail
-	// failed three times is otherwise excluded from the queue forever, so a
-	// repaired file, or an ffmpeg that has since been installed, could never
-	// produce a thumbnail again for the life of the database. Resetting on the
-	// periodic tick instead would retry the genuinely unreadable files every
-	// fifteen minutes, which is what the cap exists to stop.
+	// not come through here. That distinction makes this the right place to
+	// clear both derived-data failure caps: a repaired file, or a decoder that
+	// has since been installed, must be retryable on request without making the
+	// periodic tick retry genuinely unreadable files forever.
 	reset, err := w.cat.ResetThumbnailFailures(folderLabel)
 	if err != nil {
 		w.logger.Warn("cannot clear thumbnail failures before a manual scan",
@@ -181,6 +178,14 @@ func (w *Worker) scan(ctx context.Context, folderLabel string) error {
 	} else if reset > 0 {
 		w.logger.Info("cleared thumbnail failures for a manual scan",
 			"folder", folderLabel, "files", reset)
+	}
+	metadataReset, err := w.cat.ResetMetadataFailures(folderLabel)
+	if err != nil {
+		w.logger.Warn("cannot clear metadata failures before a manual scan",
+			"folder", folderLabel, "error", err)
+	} else if metadataReset > 0 {
+		w.logger.Info("cleared metadata failures for a manual scan",
+			"folder", folderLabel, "files", metadataReset)
 	}
 
 	if folderLabel == "" {
