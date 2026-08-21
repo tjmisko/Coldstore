@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"mime"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -313,13 +314,60 @@ func verifyFolderRoot(path string) error {
 	return nil
 }
 
-// IsPersistent checks if a relative path matches any persistent glob pattern.
-// Uses filepath.Match semantics: "*" matches a single path segment, not "/".
+// IsPersistent reports whether relPath is protected by any pattern. relPath is
+// slash-separated and relative to the folder root.
+//
+// Semantics, tried in this order for each pattern (design section 4.1a):
+//
+//  1. A pattern ending in "/" or "/*" protects the ENTIRE SUBTREE beneath it.
+//     "Albums/Starred/" and "Albums/Starred/*" both protect
+//     "Albums/Starred/2019/IMG_1.jpg".
+//  2. Otherwise filepath.Match against the full relative path.
+//     "Albums/*.raw" matches "Albums/a.raw" and not "Albums/x/a.raw".
+//  3. Otherwise, if the pattern contains no "/", filepath.Match against the
+//     BASE NAME, so "*.raw" protects "Albums/2019/a.raw".
+//
+// Rule 1 is not a convenience. filepath.Match's "*" does not cross a path
+// separator, so under the old matcher the shipped example "Albums/Starred/*"
+// protected exactly the loose files directly inside that directory and nothing
+// nested: an owner whose starred albums are organised by year watched the
+// folder they had explicitly marked never-archive empty off their phone one
+// year-subfolder at a time, while two loose files at its root stayed put.
+//
+// A malformed pattern is skipped, never treated as a match-all. The
+// match_count the persistent-paths endpoint returns is what makes that
+// visible: a pattern protecting nothing reads "protects 0 files".
 func IsPersistent(relPath string, patterns []string) bool {
 	for _, pattern := range patterns {
-		if matched, err := filepath.Match(pattern, relPath); err == nil && matched {
+		if matchesPersistent(relPath, pattern) {
 			return true
 		}
 	}
 	return false
+}
+
+func matchesPersistent(relPath, pattern string) bool {
+	if pattern == "" || relPath == "" {
+		return false
+	}
+
+	subtree := ""
+	switch {
+	case strings.HasSuffix(pattern, "/*"):
+		subtree = strings.TrimSuffix(pattern, "*")
+	case strings.HasSuffix(pattern, "/"):
+		subtree = pattern
+	}
+	if subtree != "" {
+		return strings.HasPrefix(relPath, subtree)
+	}
+
+	if matched, err := filepath.Match(pattern, relPath); err == nil && matched {
+		return true
+	}
+	if strings.Contains(pattern, "/") {
+		return false
+	}
+	matched, err := filepath.Match(pattern, path.Base(relPath))
+	return err == nil && matched
 }

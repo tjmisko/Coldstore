@@ -125,16 +125,26 @@ api_key = ""
 # with EROFS. `coldstore --check` prints the exact ReadWritePaths= line to use
 # (it cannot verify the one in your unit -- it does not run inside the sandbox).
 
+# `persistent` marks files coldstore must never archive. A pattern ending in "/"
+# or "/*" protects the WHOLE SUBTREE beneath it; a pattern containing "/" is
+# otherwise matched against the full relative path; a pattern without one is
+# also matched against bare filenames, so "*.raw" protects every raw file in the
+# folder. See docs/deployment.md, "Persistent glob semantics".
+#
+# These are seed values too: they are copied into the catalog the first time the
+# folder is seen, and edited in the web UI thereafter, which also reports how
+# many files each pattern currently protects.
+
 [[folders]]
 label = "CameraRoll"
 syncthing_id = "xxxxx-xxxxx"
 path = "/home/tjmisko/CameraRoll"
 budget = "20GB"
-persistent = ["Albums/Starred/*"]
+persistent = ["Albums/Starred/"]
 
 [[folders]]
 label = "Books"
 syncthing_id = "yyyyy-yyyyy"
 path = "/home/tjmisko/Books"
 budget = "20GB"
-persistent = ["Favorites/*"]
+persistent = ["Favorites/"]
