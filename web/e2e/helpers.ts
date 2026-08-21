@@ -33,3 +33,17 @@ export async function fileByName(page: Page, folder: string, filename: string) {
   expect(match, `no file named ${filename} in ${folder}`).toBeTruthy();
   return match!;
 }
+
+/** Ticks a row's selection box.
+ *
+ *  The native input is sr-only -- the visible box is a styled span, so that it
+ *  can be drawn at a size a thumb can hit rather than at the browser default's
+ *  13px. Playwright will not click a visually-hidden element, and neither can a
+ *  person: both go for the label. Everything else about the input is unchanged,
+ *  so getByRole, toBeChecked and the tab order all still work on it. */
+export async function selectRow(page: Page, fileID: number) {
+  await page.locator(`tr[data-file-id="${fileID}"] label`).first().click();
+  await expect(
+    page.locator(`tr[data-file-id="${fileID}"] input[type=checkbox]`),
+  ).toBeChecked();
+}

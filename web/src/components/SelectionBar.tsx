@@ -95,10 +95,10 @@ export function SelectionBar({ selection, filters, files, onFinished }: Selectio
   return (
     <>
       <div
-        className="fixed bottom-0 left-0 right-0 z-40 border-t border-neutral-700 bg-neutral-900/95 backdrop-blur px-4 py-2"
+        className="fixed bottom-0 left-0 right-0 z-45 border-t border-line-strong bg-surface/95 backdrop-blur px-4 py-2.5"
         data-selection-bar
       >
-        <div className="mx-auto max-w-5xl flex flex-wrap items-center gap-2 text-sm">
+        <div className="mx-auto max-w-5xl flex flex-wrap items-center gap-2 text-base">
           {runner.running && job ? (
             <span className="font-medium" data-job-progress>
               {job.action === "restore" ? "Restoring" : "Archiving"} {formatCount(job.total)} files
@@ -115,7 +115,7 @@ export function SelectionBar({ selection, filters, files, onFinished }: Selectio
               <button
                 onClick={() => void selectAll()}
                 disabled={disabled}
-                className="px-2 py-1 rounded bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50"
+                className="px-2.5 py-1 rounded-md text-ink-muted ring-1 ring-line-strong hover:bg-raised-hover hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
               >
                 Select all in folder
               </button>
@@ -123,28 +123,28 @@ export function SelectionBar({ selection, filters, files, onFinished }: Selectio
               <button
                 onClick={() => runJob("restore")}
                 disabled={disabled || selection.count === 0}
-                className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+                className="px-3 py-1 rounded-md bg-ink text-ground font-medium hover:brightness-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
               >
                 Restore
               </button>
               <button
                 onClick={() => runJob("archive")}
                 disabled={disabled || selection.count === 0}
-                className="px-3 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50"
+                className="px-3 py-1 rounded-md bg-cold-dim text-cold ring-1 ring-cold/40 hover:bg-cold/25 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
               >
                 Archive
               </button>
               <button
                 onClick={() => void setPinned(true)}
                 disabled={disabled || selection.count === 0}
-                className="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50"
+                className="px-3 py-1 rounded-md bg-held-dim text-held ring-1 ring-held/40 hover:bg-held/25 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
               >
                 Pin
               </button>
               <button
                 onClick={() => void setPinned(false)}
                 disabled={disabled || selection.count === 0}
-                className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50"
+                className="px-2.5 py-1 rounded-md text-ink-muted ring-1 ring-line-strong hover:bg-raised-hover hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
               >
                 Unpin
               </button>
@@ -154,7 +154,7 @@ export function SelectionBar({ selection, filters, files, onFinished }: Selectio
                   setSelectAllNote(null);
                   runner.dismiss();
                 }}
-                className="px-2 py-1 rounded text-neutral-400 hover:text-white"
+                className="px-2 py-1 rounded-md text-ink-faint hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
               >
                 Clear
               </button>
@@ -163,25 +163,25 @@ export function SelectionBar({ selection, filters, files, onFinished }: Selectio
         </div>
 
         {selectAllNote && (
-          <p className="mx-auto max-w-5xl text-xs text-neutral-400 pt-1">{selectAllNote}</p>
+          <p className="mx-auto max-w-5xl text-meta text-ink-muted pt-1.5">{selectAllNote}</p>
         )}
 
         {runner.error && (
-          <p className="mx-auto max-w-5xl text-xs text-red-400 pt-1" role="alert">
+          <p className="mx-auto max-w-5xl text-meta text-alarm pt-1.5" role="alert">
             {runner.error}
           </p>
         )}
 
         {finished && job && (
-          <div className="mx-auto max-w-5xl text-xs pt-1" data-job-summary>
-            <p className={job.failed_count > 0 ? "text-amber-300" : "text-emerald-300"}>
+          <div className="mx-auto max-w-5xl text-meta pt-1.5" data-job-summary>
+            <p className={job.failed_count > 0 ? "text-alarm" : "text-ink-muted"}>
               {job.action === "restore" ? "Restored" : "Archived"} {formatCount(job.done)} of{" "}
               {formatCount(job.total)}
               {job.failed_count > 0 && `, ${formatCount(job.failed_count)} failed`}
               {job.error !== "" && ` -- ${job.error}`}
             </p>
             {job.failed.length > 0 && (
-              <ul className="mt-1 space-y-0.5 text-neutral-400">
+              <ul className="mt-1 space-y-0.5 text-ink-faint font-mono">
                 {job.failed.slice(0, 5).map((failure) => (
                   <li key={failure.id}>
                     {files.find((f) => f.id === failure.id)?.filename ?? `file ${failure.id}`}:{" "}

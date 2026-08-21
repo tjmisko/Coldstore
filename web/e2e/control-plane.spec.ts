@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { applyFilter, fileByName, openFolder, openView } from "./helpers";
+import { applyFilter, fileByName, openFolder, openView, selectRow } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -99,7 +99,7 @@ test("restores a selection as a job and repaints the rows as synced and pinned",
   expect(first.status).toBe("archived");
 
   for (const file of [first, second]) {
-    await page.locator(`tr[data-file-id="${file.id}"] input[type=checkbox]`).click();
+    await selectRow(page, file.id);
   }
   await expect(page.locator("[data-selection-count]")).toHaveText("2 selected");
 
@@ -124,7 +124,7 @@ test("refuses a restore that would blow the budget and says what it would cost",
   const rows = page.locator("tr[data-file-id]");
   await expect(rows.first()).toBeVisible();
 
-  await rows.first().locator("input[type=checkbox]").click();
+  await rows.first().locator("label").first().click();
   await page.locator("[data-selection-bar]").getByRole("button", { name: "Restore", exact: true }).click();
 
   const dialog = page.getByRole("dialog");

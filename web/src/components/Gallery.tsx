@@ -269,7 +269,7 @@ function Tile({
         />
         <span
           aria-hidden="true"
-          className="block size-5 rounded-[5px] border-2 border-ink/70 bg-ground/55 shadow-[0_1px_3px_rgba(0,0,0,0.6)] backdrop-blur-[2px] transition-colors peer-checked:border-ink peer-checked:bg-ink peer-checked:[&_svg]:opacity-100 peer-focus-visible:ring-2 peer-focus-visible:ring-cursor peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-ground"
+          className="block size-5 rounded-[5px] border-2 border-white/90 bg-ground/45 shadow-[0_0_0_1px_rgba(0,0,0,0.55),0_1px_4px_rgba(0,0,0,0.75)] backdrop-blur-[2px] transition-colors peer-checked:border-ink peer-checked:bg-ink peer-checked:[&_svg]:opacity-100 peer-focus-visible:ring-2 peer-focus-visible:ring-cursor peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-ground"
         >
           <svg viewBox="0 0 20 20" className="size-full text-ground opacity-0">
             <path

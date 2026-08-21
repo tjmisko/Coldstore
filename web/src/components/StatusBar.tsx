@@ -27,17 +27,17 @@ export function StatusBar({ status, error, onReview, onRefresh }: StatusBarProps
   }, [scan.job, onRefresh]);
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-3 border-t border-neutral-800 text-xs text-neutral-400 space-y-3">
+    <div className="flex-1 min-h-0 overflow-y-auto p-3 border-t border-line text-meta text-ink-muted space-y-3">
       {error && (
         // Never `return null` on an error. A 401 and an empty install used to
         // render identically: nothing at all.
-        <p className="text-red-400" role="status">
+        <p className="text-alarm" role="status">
           status unavailable &mdash; {error}
         </p>
       )}
 
       {status && (
-        <div className="flex justify-between text-neutral-500">
+        <div className="flex justify-between text-ink-muted tabular">
           <span>{formatCount(status.synced_files)} synced</span>
           <span>{formatCount(status.archived_files)} archived</span>
         </div>
@@ -49,21 +49,21 @@ export function StatusBar({ status, error, onReview, onRefresh }: StatusBarProps
 
       <BulkEvictionStrip />
 
-      <div className="flex justify-between items-center pt-1 border-t border-neutral-800/60">
-        <span className="text-neutral-500">
+      <div className="flex justify-between items-center pt-1 border-t border-line/70">
+        <span className="text-ink-faint">
           {status ? `Cold: ${formatSize(status.cold_storage_free_bytes)} free` : "Cold: -"}
         </span>
         <button
           onClick={() => void scan.start({ action: "scan" })}
           disabled={scanning}
-          className="text-blue-400 hover:text-blue-300 disabled:text-neutral-600"
+          className="text-ink-muted hover:text-ink disabled:text-ink-faint underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
         >
           {scanning
             ? `scanning ${scan.job ? `${scan.job.done}/${scan.job.total}` : ""}`
             : "rescan"}
         </button>
       </div>
-      {scan.error && <p className="text-red-400">scan failed: {scan.error}</p>}
+      {scan.error && <p className="text-alarm">scan failed: {scan.error}</p>}
     </div>
   );
 }
@@ -83,26 +83,33 @@ function FolderMeter({
   const pinnedPct = budget > 0 ? Math.min(folder.pinned_bytes / budget, 1) * 100 : 0;
   const unpinnedPct = Math.max(totalPct - pinnedPct, 0);
 
-  const fillColor =
-    totalPct > 90 ? "bg-red-500" : totalPct > 70 ? "bg-amber-500" : "bg-emerald-500";
+  // The old bar went green under 70%, amber under 90%, red above -- the generic
+  // dashboard gradient. Two problems: green restated "normal", which by this
+  // system's rule should carry no hue at all, and amber is the pinned colour, so
+  // a nearly-full folder and a heavily-pinned one turned the same shade for two
+  // unrelated reasons. Neutral until it needs attention, then alarm.
+  const pressured = totalPct > 90 || folder.over_budget;
 
   return (
-    <div className="space-y-1">
-      <div className="flex justify-between gap-2">
-        <span className={folder.enabled && folder.present_in_toml ? "" : "text-neutral-600"}>
+    <div className="space-y-1.5">
+      <div className="flex justify-between gap-2 text-meta">
+        <span className={folder.enabled && folder.present_in_toml ? "text-ink" : "text-ink-faint"}>
           {folder.label}
-          {!folder.enabled && <span className="ml-1 text-neutral-600">(disabled)</span>}
+          {!folder.enabled && <span className="ml-1 text-ink-faint">(disabled)</span>}
           {!folder.present_in_toml && (
-            <span className="ml-1 text-neutral-600">(not in coldstore.toml)</span>
+            <span className="ml-1 text-ink-faint">(not in coldstore.toml)</span>
           )}
         </span>
-        <span className="whitespace-nowrap text-neutral-500">
+        {/* Mono and tabular so the figures line up down the folder list; that
+            column is the one place the owner compares folders against each
+            other rather than reading a single number. */}
+        <span className="whitespace-nowrap text-ink-muted font-mono tabular">
           {formatSize(folder.synced_size_bytes)} / {formatSize(budget)}
         </span>
       </div>
 
       <div
-        className="relative h-1.5 bg-neutral-800 rounded-full overflow-hidden flex"
+        className="relative h-2 bg-raised rounded-full overflow-hidden flex ring-1 ring-inset ring-line"
         role="meter"
         aria-label={`${folder.label} budget`}
         aria-valuenow={Math.round(totalPct)}
@@ -111,13 +118,11 @@ function FolderMeter({
         data-total-pct={totalPct.toFixed(2)}
         data-pinned-pct={pinnedPct.toFixed(2)}
       >
+        {/* Held out of the cold, so it wears the held hue -- the same one the
+            pin and the pinned badge use. */}
+        <div className="h-full bg-held" style={{ width: `${pinnedPct}%` }} data-segment="pinned" />
         <div
-          className="h-full bg-indigo-500"
-          style={{ width: `${pinnedPct}%` }}
-          data-segment="pinned"
-        />
-        <div
-          className={`h-full ${fillColor}`}
+          className={`h-full ${pressured ? "bg-alarm" : "bg-ink-muted"}`}
           style={{ width: `${unpinnedPct}%` }}
           data-segment="unpinned"
         />
@@ -125,7 +130,7 @@ function FolderMeter({
           // At budget and over budget both clamp to 100% width, so without
           // this they look identical.
           <div
-            className="absolute right-0 top-0 h-full w-1 bg-red-400"
+            className="absolute right-0 top-0 h-full w-1 bg-alarm brightness-125"
             data-segment="overflow"
             title="over budget"
           />
@@ -133,27 +138,27 @@ function FolderMeter({
       </div>
 
       {folder.pinned_bytes > 0 && (
-        <p className="text-[11px] text-indigo-300/80">
+        <p className="text-micro text-held/85 tabular">
           {formatSize(folder.pinned_bytes)} pinned ({formatCount(folder.counts.pinned)} files)
         </p>
       )}
 
       {folder.wedged && (
         <div
-          className="rounded-md border border-amber-700 bg-amber-950/60 p-2 space-y-1"
+          className="rounded-md border border-alarm/45 bg-alarm-dim p-2.5 space-y-1"
           role="alert"
           data-wedge-banner={folder.label}
         >
-          <p className="text-amber-200 font-medium leading-snug">
+          <p className="text-ink font-medium leading-snug">
             {formatSize(folder.pinned_bytes)} pinned exceeds {formatSize(budget)} budget &mdash;
             nothing left to offload.
           </p>
-          <p className="text-amber-300/80">
+          <p className="text-ink-muted">
             Unpin or archive some files to let coldstore free space.
           </p>
           <button
             onClick={() => onReview(folder.label, "pinned-auto")}
-            className="text-amber-300 hover:text-amber-100 underline underline-offset-2"
+            className="text-alarm hover:brightness-125 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
           >
             Review auto-pinned files &rarr;
           </button>
@@ -161,18 +166,18 @@ function FolderMeter({
       )}
 
       {folder.syncthing_type !== "" && folder.syncthing_type !== "sendreceive" && (
-        <div className="rounded-md border border-red-800 bg-red-950/60 p-2" role="alert">
-          <p className="text-red-200 leading-snug">
+        <div className="rounded-md border border-alarm/45 bg-alarm-dim p-2.5" role="alert">
+          <p className="text-ink leading-snug">
             {folder.label} is a {folder.syncthing_type} Syncthing folder &mdash; coldstore cannot
             free space on your devices.
           </p>
-          <p className="text-red-300/80">
+          <p className="text-ink-muted">
             Change it to Send &amp; Receive in Syncthing, then re-enable the folder here.
           </p>
         </div>
       )}
 
-      <p className="text-[11px] text-neutral-600">
+      <p className="text-micro text-ink-faint">
         checked {formatAgo(folder.last_enforced_at)}
       </p>
     </div>
@@ -191,20 +196,20 @@ function BulkEvictionStrip() {
 
   return (
     <div
-      className="rounded-md border border-amber-800 bg-amber-950/40 p-2 flex gap-2"
+      className="rounded-md border border-alarm/40 bg-alarm-dim/70 p-2.5 flex gap-2"
       role="status"
       data-bulk-eviction
     >
       <div className="flex-1">
-        <p className="text-amber-200 leading-snug">
+        <p className="text-ink leading-snug">
           {latest.folder}: {latest.details}
         </p>
-        <p className="text-amber-300/70">and removed from your synced devices.</p>
+        <p className="text-ink-muted">and removed from your synced devices.</p>
       </div>
       <button
         onClick={() => setDismissed((prev) => [...prev, latest.id])}
         aria-label="Dismiss"
-        className="text-amber-500 hover:text-amber-200 leading-none"
+        className="text-ink-faint hover:text-ink leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
       >
         &times;
       </button>

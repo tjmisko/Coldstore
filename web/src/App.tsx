@@ -58,7 +58,7 @@ function Shell() {
   return (
     <div className="flex h-screen overflow-hidden">
       <button
-        className="fixed top-3 left-3 z-50 md:hidden bg-neutral-800 p-2 rounded-lg"
+        className="fixed top-3 left-3 z-50 md:hidden bg-raised ring-1 ring-line-strong text-ink p-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
         onClick={() => setSidebarOpen(!sidebarOpen)}
         aria-label="Toggle sidebar"
       >
@@ -70,9 +70,9 @@ function Shell() {
       <aside
         className={`${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        } fixed md:static md:translate-x-0 z-40 w-72 h-full bg-neutral-900 border-r border-neutral-800 flex flex-col transition-transform`}
+        } fixed md:static md:translate-x-0 z-40 w-72 h-full bg-surface border-r border-line flex flex-col transition-transform`}
       >
-        <div className="p-4 border-b border-neutral-800">
+        <div className="p-4 border-b border-line">
           <h1 className="text-lg font-semibold tracking-tight">Coldstore</h1>
         </div>
 
@@ -81,7 +81,7 @@ function Shell() {
             wedge banner appearing underneath it. The cap is for an install
             with more folders than fit; then this scrolls too. */}
         <nav className="shrink-0 max-h-[45%] overflow-y-auto p-2 space-y-1">
-          <p className="text-xs uppercase text-neutral-500 px-2 pt-2 pb-1">Folders</p>
+          <p className="text-micro uppercase tracking-wider text-ink-faint px-2 pt-2 pb-1.5">Folders</p>
           {folders.map((folder) => (
             <button
               key={folder.label}
@@ -90,26 +90,26 @@ function Shell() {
                 selectFolder(folder.label);
                 if (window.innerWidth < 768) setSidebarOpen(false);
               }}
-              className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+              className={`w-full text-left px-3 py-2 rounded-md text-base transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
                 selectedFolder === folder.label
-                  ? "bg-neutral-700 text-white"
-                  : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+                  ? "bg-raised-hover text-ink"
+                  : "text-ink-muted hover:bg-raised hover:text-ink"
               }`}
             >
               <span className={folder.enabled && folder.present_in_toml ? "" : "opacity-60"}>
                 {folder.label}
               </span>
-              {!folder.enabled && <span className="ml-1 text-xs text-neutral-500">disabled</span>}
+              {!folder.enabled && <span className="ml-1 text-meta text-ink-faint">disabled</span>}
               {!folder.present_in_toml && (
-                <span className="ml-1 text-xs text-neutral-500">not in coldstore.toml</span>
+                <span className="ml-1 text-meta text-ink-faint">not in coldstore.toml</span>
               )}
             </button>
           ))}
           {folders.length === 0 && !error && (
-            <p className="px-3 py-2 text-sm text-neutral-600">No folders yet.</p>
+            <p className="px-3 py-2 text-base text-ink-faint">No folders yet.</p>
           )}
 
-          <p className="text-xs uppercase text-neutral-500 px-2 pt-4 pb-1">Views</p>
+          <p className="text-micro uppercase tracking-wider text-ink-faint px-2 pt-4 pb-1.5">Views</p>
           {(["gallery", "files", "config"] as View[]).map((option) => (
             <button
               key={option}
@@ -118,10 +118,10 @@ function Shell() {
                 setView(option);
                 if (window.innerWidth < 768) setSidebarOpen(false);
               }}
-              className={`w-full text-left px-3 py-2 rounded-md text-sm capitalize transition-colors ${
+              className={`w-full text-left px-3 py-2 rounded-md text-base capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
                 view === option
-                  ? "bg-neutral-700 text-white"
-                  : "text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200"
+                  ? "bg-raised-hover text-ink"
+                  : "text-ink-muted hover:bg-raised hover:text-ink"
               }`}
             >
               {view === option && <span className="mr-1.5">&#10003;</span>}
@@ -140,7 +140,7 @@ function Shell() {
 
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-30 md:hidden"
+          className="fixed inset-0 bg-ground/60 z-30 md:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}

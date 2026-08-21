@@ -17,12 +17,12 @@ export function ErrorBanner({ message, status }: ErrorBannerProps) {
         : "The daemon answered, but not with what the control plane expected.";
 
   return (
-    <div role="alert" className="bg-red-950 border-b border-red-800 px-4 py-2 text-sm">
-      <p className="font-medium text-red-100">
+    <div role="alert" className="bg-alarm-dim border-b border-alarm/45 px-4 py-2.5 text-base">
+      <p className="font-medium text-ink">
         {status === 401 ? "Not authorised" : "Cannot reach coldstore"}
-        <span className="font-normal text-red-200"> &mdash; {message}</span>
+        <span className="font-normal text-alarm"> &mdash; {message}</span>
       </p>
-      <p className="text-red-300/80 text-xs mt-0.5">{explanation}</p>
+      <p className="text-ink-muted text-meta mt-1">{explanation}</p>
     </div>
   );
 }
