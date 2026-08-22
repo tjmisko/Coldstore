@@ -84,18 +84,18 @@ deployment.
 - [x] `go test ./...`
 - [x] `go test -race ./internal/...`
 - [x] `make test-e2e`
-- [ ] `make test-playwright` against an isolated root and unused port
+- [x] `make test-playwright` against an isolated root and unused port
 - [x] fresh-checkout `make build` with no preceding `npm ci`
-- [ ] `make test-e2e-live` with the `e2e_live` tag alone
+- [x] `make test-e2e-live` with the `e2e_live` tag alone
 - [x] Measure and record final frontend distribution and binary sizes: 3,624 KiB and
       21,483,024 bytes respectively after the final `0ed5572` code integration.
 
-The two browser/network tiers remain open because this execution environment refuses
-loopback binds even after scoped escalation. Playwright failed before its server could
-listen, and the live harness rejected three alternate ports before Docker startup. The
-fresh-checkout target installed its own dependencies and built successfully with
-`npm_config_ignore_scripts=true`; npm's esbuild postinstall self-check is likewise denied
-by the execution sandbox.
+The local execution environment refused loopback binds even after scoped escalation, so the
+browser/network tiers could not run here. GitHub Actions subsequently ran both against PR
+#16: the embedded-UI Playwright job and the two-device containerized Syncthing E2E job passed
+on `b7f8910`. The fresh-checkout target installed its own dependencies and built successfully
+with `npm_config_ignore_scripts=true`; npm's esbuild postinstall self-check is likewise denied
+by the local execution sandbox.
 
 ## P0 — integrate the tagging plan without corrupting migrations
 

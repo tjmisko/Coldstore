@@ -53,12 +53,16 @@ Passed on the integrated branch:
 - `make test-web`: 31 files, 334 tests;
 - 20 consecutive runs of the eight keyboard/tagging adversarial files, 147 tests each
   (2,940 test executions);
+- 20 consecutive runs of the Gallery pending-context-motion regression after repairing the
+  page-replay lifecycle;
 - `go vet ./...`;
 - `go test ./...`;
 - `go test -race ./internal/...`;
-- `make test-e2e`; and
-- `make build` after the final code integration; and
-- the earlier detached fresh-checkout build with no preparatory dependency install.
+- `make test-e2e`;
+- `make build` after the final code integration;
+- the earlier detached fresh-checkout build with no preparatory dependency install;
+- GitHub Actions embedded-UI Playwright against the real daemon; and
+- GitHub Actions live E2E with two Syncthing devices and the containerized daemon.
 
 The final integrated build produced:
 
@@ -70,15 +74,10 @@ denies esbuild's npm postinstall self-exec even with scoped escalation; setting
 `npm_config_ignore_scripts=true` let `npm ci` install the correct platform package, after
 which the normal TypeScript/Vite and Go build completed.
 
-Two tiers remain unverified here:
-
-- Playwright was attempted against isolated roots and unused ports normally and with scoped
-  escalation; the daemon could not bind loopback.
-- `make test-e2e-live` was attempted with three alternate ports and scoped escalation; its
-  bind preflight failed before Docker startup.
-
-These are execution-environment blockers, not observed product failures. Keep their tasklist
-boxes open until the exact tiers run on a host that permits local listeners.
+The local sandbox still cannot bind the listeners those last two tiers require. GitHub
+Actions supplied the missing listener-capable environment: both jobs passed on draft PR #16
+at `b7f8910`, so their tasklist boxes are closed. That run's frontend job exposed the
+pending-context-motion lifecycle race; the current branch contains the locally verified fix.
 
 ## Production environment
 
@@ -143,7 +142,6 @@ already-offloaded archive rows.
 - Finish review/CI for the loopback-only Tailscale identity implementation, then complete an
   owner-approved build/config/restart and cross-platform/off-LAN verification using
   `onboarding.md`. Public guest sessions remain deferred.
-- Run Playwright and the live Syncthing tier in a listener-capable environment.
 - Benchmark PDF thumbnail generation on the actual two-core host from owner-provided output.
 - Complete the owner-mediated backup, deployment, throwaway quota, snapshot and Syncthing
   upgrade gates in `TASKLIST.md`.

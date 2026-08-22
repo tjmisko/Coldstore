@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { resolveMotion, resolveRange, spanIndices, visualSpan, type Geometry } from "../keymap/motions";
 import type { Command, Mode, MotionId, OperatorTarget, Scope } from "../keymap/types";
 import type { FileRecord } from "../types/api";
@@ -283,7 +283,13 @@ export function useGridKeymap(options: Options): GridCursor {
     return true;
   }, [bulk, clamped, queueContext, resolveContext, selection.count, targetIDs]);
 
-  useEffect(() => {
+  // Replay in the layout phase. A passive effect from the page that queued the
+  // command can run after the key event but before loadMore's state update. It
+  // would see the ref written by that event together with the previous
+  // render's `loading === false` and discard the command as a no-progress
+  // fetch. Layout effects for a committed page finish before another browser
+  // event can queue work, so only a later commit can inspect this ref.
+  useLayoutEffect(() => {
     const pending = pendingContext.current;
     if (!pending || loading) return;
     if (files.length <= pending.loadedLength) {

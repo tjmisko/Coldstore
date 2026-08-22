@@ -16,9 +16,10 @@ documents and tagging-design branches are already integrated; do not merge them 
 ## Immediate pickup
 
 1. Confirm `git status --short --branch` and read the two authoritative files above.
-2. Run Playwright and `make test-e2e-live` on an execution host that permits loopback binds.
-   Both were attempted normally and with scoped escalation here, but failed before their
-   servers could listen. Do not report them as code failures or as passed.
+2. Keep draft PR #16 green. Its first GitHub Actions run passed both the embedded-UI
+   Playwright job and the two-device containerized Syncthing E2E job, but exposed a Gallery
+   pending-context-motion race. The current branch fixes that replay lifecycle and passes
+   the exact regression 20 consecutive times plus the complete 334-test frontend suite.
 3. When GitHub connectivity exists, update every issue body that still calls tagging schema
    migration 6 or rename migration 7. The landed plan uses 7 and 8; issue-body edits are the
    only unfinished part of `TASKLIST.md` item 8.
@@ -79,14 +80,16 @@ documents and tagging-design branches are already integrated; do not merge them 
 ## Verification boundary
 
 The integrated branch passed lint, 31 files / 334 Vitest tests, 20 consecutive runs of the
-eight keyboard/tagging adversarial files (147 tests each), vet, all Go tests, the full
-internal race suite, in-process E2E and a final build. That build measured 3,624 KiB for
-`web/dist` and 21,483,024 bytes for the binary.
+eight keyboard/tagging adversarial files (147 tests each), 20 consecutive runs of the
+pending-context-motion regression, vet, all Go tests, the full internal race suite,
+in-process E2E and a final build. That build measured 3,624 KiB for `web/dist` and 21,483,024
+bytes for the binary.
 
 The fresh checkout needed `npm_config_ignore_scripts=true` because this sandbox denies
 esbuild's npm postinstall self-exec; the target still performed its own `npm ci` and built
-the real bundle and binary. Playwright and live E2E remain open solely because loopback bind
-is unavailable here.
+the real bundle and binary. Local loopback restrictions still prevent those two harnesses
+from running here, but GitHub Actions passed both Playwright and live Syncthing E2E on PR
+#16 at `b7f8910`.
 
 ## Branch map
 
