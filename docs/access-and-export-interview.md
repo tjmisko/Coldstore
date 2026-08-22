@@ -10,9 +10,9 @@ The owner has stated these requirements:
 - coldstore must work from an iPhone, Linux, macOS and probably Windows;
 - access away from home would be useful, but is not required for v1;
 - Tailscale is already installed for another project on several owner devices;
-- two co-owners will have full control through separately revocable Tailscale identities;
-- the second co-owner is not yet onboarded to Tailscale and will use a separate Tailscale
-  account rather than sharing the first owner's account; and
+- two co-owners now have full control through separately revocable Tailscale identities;
+- the second co-owner uses a separate, non-admin account in the owner's tailnet rather than
+  sharing the first owner's account; and
 - that co-owner's Tailscale reachability is limited to Coldstore HTTPS, not SSH, Syncthing,
   the raw backend port or any other server service; and
 - the earlier interface interview asked for the possibility of guest access from another
@@ -168,11 +168,11 @@ Trade-off: every user/device must join or be shared into the tailnet. It is exce
 the owner's devices, but awkward for a casual guest who should open a normal link with no
 installation. The backend must remain loopback-only if identity headers are trusted.
 
-For the second co-owner, prefer sharing the server machine with their separate Tailscale
-account rather than inviting that account into the whole tailnet. Tailscale documents device
-sharing as the fit for a fixed number of machines: the recipient sees only the shared machine,
-can remain in their own tailnet, and the share can be revoked independently. The access-control
-policy must still limit the reachable server services to the scope the owner approves.
+Machine sharing was the initial preference for the second co-owner, but the recipient was a
+non-admin member rather than an administrator of a separate receiving tailnet and could not
+accept that share. The deployed alternative keeps the account as a non-admin tailnet member,
+places its exact login in a named Coldstore policy group, and grants that group only TCP 443 to
+the server. Coldstore's exact-login allowlist remains an independent application gate.
 
 **Selected for v1.** The owner already uses Tailscale on several machines. This path supports
 every named platform, supplies optional away-from-home access, avoids router port forwarding,
@@ -213,9 +213,8 @@ as a shortcut around authorization.
 The browser sends the same username/password on every request. It is small and useful for
 CLI/runbook compatibility, but browser logout is poor, every user effectively shares one
 credential, and individual sessions or guests cannot be revoked. Keep it as a compatibility
-path for existing deployments; do not use it as the public guest model. It remains production's
-temporary gate while the Tailscale identity build is reviewed and deployed, but it will not be
-shared with the second co-owner.
+path for existing deployments; do not use it as the public guest model. It is no longer active
+in production and was not shared with the second co-owner.
 
 ### Tailscale identity
 
@@ -321,10 +320,11 @@ The first four questions choose v1. The rest specify public sessions only if nee
 ### Identity and permissions
 
 8. Is there exactly one owner/admin identity?
-   - **Answer:** no. There are two co-owners with full control. Each will use a separately
+   - **Answer:** no. There are two co-owners with full control. Each uses a separately
      revocable Tailscale identity in Coldstore's exact-login allowlist.
-   - The second co-owner is not yet enrolled. They will use a separate Tailscale account;
-     sharing the server machine is the provisional least-privilege onboarding path.
+   - The second co-owner is enrolled as a non-admin tailnet member. A named policy group
+     restricts that identity to the Coldstore server on TCP 443. Both allowlisted identities
+     work, and an owner test confirmed an unallowlisted third identity is denied.
 9. Should guests see the entire library, selected folders/albums, or explicit shared items?
    - **Answer:** pending.
 10. May guests download originals and full-resolution video, or only browse derivatives?
@@ -355,8 +355,8 @@ provisional recommendation appears above.
 | V1 network path | Decided | Tailscale Serve to the loopback backend |
 | V1 application auth | Decided | Exact allowlist of Tailscale Serve login identities |
 | V1 full-control principals | Decided | Two separately revocable Tailscale co-owners |
-| Second co-owner Tailscale identity | Decided | Separate account; onboarding still pending |
-| Tailscale sharing scope | Decided | Shared server machine, TCP 443/Coldstore only |
+| Second co-owner Tailscale identity | Complete | Separate non-admin tailnet member; exact login allowlisted |
+| Tailscale sharing scope | Complete | Named user group to server TCP 443; independent Coldstore allowlist |
 | Later token upgrade | Direction set | Opaque browser sessions; scoped API tokens if needed |
 | Zero-install guests in v1 | Decided | Deferred beyond v1 |
 | Remote owner mutation | Decided | Full existing web UI/API, including mutations |

@@ -1,8 +1,8 @@
 # Status — coldstore closeout
 
-Snapshot date: 2026-08-21 (America/Los_Angeles). Code state: `main` at merge commit
-`5e1dc67`; PR #16 is merged. Production is now running the integrated release. The Git tree
-and the owner-reported deployment evidence below are authoritative for handoff.
+Snapshot date: 2026-08-21 (America/Los_Angeles). PR #16 merged at `5e1dc67`; production is
+running that integrated release, while post-deployment documentation continues on `main`.
+The Git tree and the owner-reported deployment evidence below are authoritative for handoff.
 
 ## Executive state
 
@@ -17,6 +17,8 @@ and the owner-reported deployment evidence below are authoritative for handoff.
 - Owner verification passed: the service stayed active, the schema marker reported 8, the
   private URL loaded without a Basic prompt, and direct loopback access failed closed without
   a Serve identity.
+- Both separately allowlisted users now load Coldstore through the private URL. The owner also
+  tested a third, unallowlisted Tailscale identity and confirmed that it could not gain access.
 - The integrated release includes keymap, document-preview and tagging work. Document
   preview owns migration 6, metadata/tagging owns migration 7, and durable rename jobs own
   migration 8; production and the current binary now agree on schema 8.
@@ -107,10 +109,11 @@ A fresh SQLite `.backup` remains mandatory immediately before every future produ
 change. The 5-to-8 deployment satisfied that gate. The catalog cannot be reconstructed from
 hot folders because scans do not rediscover already-offloaded archive rows.
 
-The owner notes that the runtime `require_mountpoint` option had previously been removed.
-This update does not claim that it or systemd `RequiresMountsFor=` was re-enabled; reconcile
-and document those two distinct mount-safety controls separately before considering that
-deployment task closed.
+The owner notes that optional `require_mountpoint` was intentionally removed from the
+production TOML; the setting still exists in the codebase. This update does not claim that it
+was re-enabled or that systemd `RequiresMountsFor=` was re-verified. Reconcile and document
+those two distinct mount-safety controls separately before considering that deployment task
+closed.
 
 ## Access and authority
 
@@ -125,13 +128,17 @@ deployment task closed.
   Funnel disabled and the raw listener private.
 - An authenticated remote owner receives the same full web UI/API as at home, including all
   existing mutating operations. No read-only remote owner role is planned for v1.
-- Two co-owners will use separate Tailscale identities, allowing per-person attribution and
-  revocation. The old Basic credential may remain in the owner's password manager as rollback
-  material, but it is not active and is not shared for the new onboarding.
-- The second co-owner is not yet onboarded and will use a separate Tailscale account. The
-  selected least-privilege path is a revocable share of the server machine, restricted to
-  TCP 443 and the Coldstore Serve proxy. SSH, Syncthing, raw port 8090 and every other server
-  service remain out of scope. `onboarding.md` is the runbook.
+- Two co-owners now use separate exact-login Tailscale identities, allowing per-person
+  attribution and revocation. The old Basic credential may remain in the owner's password
+  manager as rollback material, but it is not active or shared.
+- The second co-owner is a non-admin member of the owner's tailnet. Machine sharing was not
+  used because accepting a machine share requires an administrative role in a separate
+  receiving tailnet. Instead, the policy's broad grant is owner-only and a named Coldstore
+  user group grants the second identity only TCP 443 to the server. Coldstore's independent
+  exact-login allowlist is the second gate.
+- Owner-reported production acceptance confirms both allowlisted identities work and an
+  unallowlisted third identity is denied. SSH, Syncthing, raw port 8090 and every other server
+  service remain out of scope; direct service-by-service denial tests are still open.
 - Owner-provided preflight on 2026-08-21 confirmed Tailscale 1.102.3, the initial absence of
   Serve/Funnel configuration and the expected loopback Basic challenge. The owner then
   reviewed the restricted tailnet policy, enabled Serve and verified the private HTTPS URL.
@@ -152,14 +159,15 @@ deployment task closed.
 
 ### Product and operations
 
-- Complete second-co-owner onboarding and cross-platform/off-LAN verification using
-  `onboarding.md`. Public guest sessions remain deferred.
+- Complete the remaining cross-platform/off-LAN and service-isolation checks in
+  `onboarding.md`. Two-user onboarding and the unallowlisted-user denial test are complete;
+  public guest sessions remain deferred.
 - Reconcile and record the intentionally removed mountpoint setting versus the separate
   systemd mount dependency; do not infer either from the successful one-time rollout.
 - Benchmark PDF thumbnail generation on the actual two-core host from owner-provided output.
 - Complete the owner-mediated throwaway quota, snapshot and Syncthing upgrade gates in
   `TASKLIST.md`.
-- Update GitHub issue bodies from planned migration 6/7 to 7/8 when network access exists.
+- Update the still-stale GitHub issue bodies from planned migration 6/7 to 7/8.
 
 ## Metadata decisions already settled
 

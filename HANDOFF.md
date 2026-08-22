@@ -10,9 +10,9 @@ Read these before changing anything:
 6. `docs/access-and-export-interview.md` — owner answers for Tailscale, auth and XMP.
 7. `onboarding.md` — Coldstore-only Tailscale Serve and co-owner onboarding runbook.
 
-PR #16 is merged into `main` at `5e1dc67`. Start future work from updated `main` on a new
-branch. The keyboard, documents and tagging-design branches are already integrated; do not
-merge them again.
+PR #16 is merged into `main` at `5e1dc67`; post-deployment documentation continues on
+`main`. Start future implementation work from updated `main` on a new branch. The keyboard,
+documents and tagging-design branches are already integrated; do not merge them again.
 
 ## Immediate pickup
 
@@ -26,9 +26,14 @@ merge them again.
 4. Tagging implementation issues #1–#14 are deployed. The unfiled XMP export follow-up,
    GitHub tracker bookkeeping and external verification gates remain.
 5. Production runs merged `main` at schema 8 behind loopback-only Tailscale Serve identity
-   authentication. Basic credentials are inactive, Funnel is disabled, and owner access is
-   verified. Follow `onboarding.md` for the still-open second-account machine share.
-6. Treat every future production/deployment checkbox as owner-mediated. The completed rollout
+   authentication. Basic credentials are inactive and Funnel is disabled. Both exact-login
+   allowlisted users can access Coldstore; an unallowlisted third identity was denied in the
+   owner's production test.
+6. The second user is a non-admin tailnet member, not a machine-share recipient. A named
+   Coldstore access group grants that identity only TCP 443 to the server; the owner's broad
+   grant remains restricted to the tailnet owner. Do not change this back to
+   `autogroup:shared` unless the account is first moved to a separate receiving tailnet.
+7. Treat every future production/deployment checkbox as owner-mediated. The completed rollout
    does not grant continuing host or restart authority.
 
 ## Integrated branch
@@ -56,6 +61,9 @@ merge them again.
   archive/restore operations without separate approval.
 - Production remains loopback-only behind private Tailscale Serve HTTPS. Public guest access
   is deferred; do not enable Funnel or expose the raw listener.
+- The second co-owner is a non-admin member with a narrow Coldstore group grant. Tailnet
+  membership alone is not authorization: preserve both the TCP 443 grant and Coldstore's
+  exact-login allowlist.
 - Take a fresh SQLite `.backup` immediately before any production schema upgrade.
 - The owner already confirmed one real archive propagated deletion through Syncthing and a
   restore succeeded. Do not repeat destructive production checks for ceremony.

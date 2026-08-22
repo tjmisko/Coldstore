@@ -1,7 +1,8 @@
 # Open tasklist — coldstore
 
 This is the authoritative open-work queue distilled from the deployment, interface review,
-parallel branches, metadata research and owner follow-up through 2026-08-21.
+parallel branches, metadata research and two-user production authorization follow-up through
+2026-08-21.
 
 Detailed designs still govern their own surfaces. This file governs ordering and completion
 state. If a detailed tasklist has stale checkboxes, update it as part of the corresponding
@@ -159,18 +160,22 @@ Use `docs/access-and-export-interview.md` to record the owner choices that gate 
       tailnet or public internet.
 - [x] Add an owner-facing Tailscale Serve runbook that proxies HTTPS only to the loopback
       listener, uses separately revocable Tailscale identities, does not enable Funnel and
-      includes rollback/revocation.
-      Cover sharing the server with the second co-owner's separate Tailscale account without
-      admitting that account to unrelated tailnet resources. See `onboarding.md`.
+      includes rollback/revocation. The deployed topology uses a non-admin tailnet member in
+      a named Coldstore group, with only TCP 443 to the server; machine sharing remains a
+      documented alternative for a recipient who administers a separate tailnet. See
+      `onboarding.md`.
 - [x] Implement `auth_mode = "tailscale"` with an exact login allowlist, whole-mux protection,
       loopback-only validation, fail-closed header parsing and no Basic Auth bypass.
 - [x] Reject cross-origin browser mutations in Tailscale mode and journal accepted mutations
       with login, authentication provider, method, path and response status.
 - [x] Deploy the reviewed identity build, remove the temporary Basic credentials from the
       service environment, and verify direct loopback requests fail without a Serve identity.
-- [ ] After separate owner approval, verify the private URL from iPhone, macOS, Linux and
-      Windows where available, including one off-LAN connection and the existing mutating
-      owner API. Do not expose the raw port or create a reduced remote-only API.
+- [x] Admit the second non-admin Tailscale identity through the narrow TCP 443 group grant and
+      Coldstore exact-login allowlist; verify both allowlisted users can load Coldstore.
+- [x] Verify an unallowlisted third Tailscale identity cannot access Coldstore.
+- [ ] After separate owner approval, finish platform coverage from iPhone, Linux and Windows
+      where available, including one off-LAN connection and the existing mutating owner API.
+      macOS access is verified. Do not expose the raw port or create a reduced remote-only API.
 - [x] Reconcile the existing contradictory Cloudflare Tunnel guidance before choosing a
       provider or topology.
 - [x] Document certificate renewal, DNS ownership, proxy trust boundaries, request-size/range
@@ -255,11 +260,13 @@ requires the owner.
       evidence is contradictory.
 - [x] Take a fresh SQLite `.backup` immediately before applying schema migrations.
 - [x] Deploy merged `main` and migrate the production catalog from schema 5 to schema 8.
-- [ ] Reconcile the owner-deferred runtime `require_mountpoint` option with the distinct
-      systemd `RequiresMountsFor=` dependency; record why each is enabled or disabled.
+- [ ] Reconcile the optional `require_mountpoint` guard, intentionally absent from the
+      production TOML, with the distinct systemd `RequiresMountsFor=` dependency; record why
+      each is enabled or disabled.
 - [ ] Confirm the unit still requires the real archive mount after any service-file update.
 - [x] Confirm the deployed binary reports schema 8 and remains active after restart.
-- [ ] Keep `thumbnail_workers=1` unless measured memory evidence supports increasing it.
+- [x] Keep `thumbnail_workers=1` unless measured memory evidence supports increasing it;
+      production is configured at one worker and no contrary memory evidence exists.
 
 ### 16. Finish rollout coverage
 

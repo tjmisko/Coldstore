@@ -5,8 +5,8 @@ exposing no other server service. The selected design uses the co-owners' separa
 identities as Coldstore authentication; it does not share an application password.
 
 Production binary/configuration changes and service restarts remain owner-mediated. The
-feature must land, be built and pass the deployment gates before replacing today's Basic
-Auth configuration.
+identity feature is deployed and Basic Auth has been removed from production; the remaining
+steps in this runbook are verification and eventual revocation guidance.
 
 ## Access contract
 
@@ -23,7 +23,8 @@ co-owner browser
 The boundary is exact:
 
 - Tailscale Serve, never Funnel;
-- one explicitly shared server machine, not general membership in the owner's tailnet;
+- one non-admin co-owner account in the owner's tailnet, selected explicitly by a named
+  Coldstore access group;
 - only TCP 443 on that machine;
 - only the Coldstore reverse proxy on Serve's HTTPS listener;
 - Coldstore remains bound to `127.0.0.1:8090`;
@@ -46,7 +47,7 @@ inside the loopback trust boundary.
 Keep real values in the private production configuration or Tailscale admin console:
 
 - either co-owner's Tailscale login;
-- machine-share invitation URL;
+- tailnet or machine-share invitation URL;
 - real `.ts.net` hostname, tailnet name, Tailscale IP or device identifier; and
 - host-specific service or policy output.
 
@@ -60,32 +61,35 @@ Owner-provided evidence on 2026-08-21 established:
 - Tailscale 1.102.3 is installed on the server;
 - initial `tailscale serve status` and `tailscale funnel status` showed no configuration;
 - Coldstore was loopback-only and returned the expected Basic Auth `401` challenge;
-- the owner reviewed the tailnet policy and restricted shared access to Coldstore HTTPS;
-- Tailscale Serve HTTPS was enabled for the server and proxies the loopback listener; and
-- the owner successfully reached the private URL and logged in with the existing Basic Auth
-  credential.
+- the owner reviewed the tailnet policy, retained unrestricted access only for the owner and
+  restricted the named Coldstore user group to the server's TCP 443 listener;
+- Tailscale Serve HTTPS was enabled for the server and proxies the loopback listener;
+- the identity-aware build is deployed with an exact two-login allowlist and no active Basic
+  credentials;
+- both allowlisted users successfully access Coldstore without an application password; and
+- a third, unallowlisted Tailscale identity was denied access.
 
-The Serve transport is therefore operational. Basic Auth remains the production application
-gate until the Tailscale identity implementation is merged, built, configured and restarted.
-Do not remove the current credentials from a running old binary: it does not understand the
-new identity mode.
+The Serve transport and two-user authorization gate are operational. The second co-owner is
+a non-admin tailnet member; machine sharing was not used because accepting a share requires
+an administrative role in a separate receiving tailnet.
 
 ## Roles
 
 ### Existing owner
 
 - administers the server's Tailscale account and policy;
-- keeps only the server machine shared;
+- keeps the broad policy grant owner-only and maintains the named Coldstore access group;
 - privately records the exact co-owner logins;
 - deploys a build containing Tailscale identity authentication;
 - updates the allowlist and restarts Coldstore through the normal deployment gate; and
-- can revoke a machine share and remove one login independently.
+- can remove the co-owner's policy-group membership, tailnet membership and application
+  allowlist entry independently.
 
 ### Second co-owner
 
 - uses a separate Tailscale account;
 - installs Tailscale on each approved personal device;
-- accepts only the server-machine share;
+- remains a non-admin member of the owner's tailnet;
 - reaches Coldstore only through the private HTTPS Serve URL; and
 - understands that their identity is authorized for the full mutating control plane.
 
@@ -93,12 +97,13 @@ new identity mode.
 
 Tailscale grants are additive. A narrow rule does not cancel a broader matching rule. In
 **Access controls -> Policies -> General access rules**, preserve unrestricted access only
-for the owner's identity and grant shared users TCP 443 to the server specifically.
+for the owner's identity and grant the named Coldstore user group TCP 443 to the server
+specifically.
 
 The intended visual rule is:
 
 ```text
-source       autogroup:shared
+source       group:coldstore-users
 destination  the Coldstore server machine specifically
 protocol     TCP
 port         443
@@ -107,9 +112,15 @@ port         443
 Do not put a real device identifier in this file. If JSON is used, choose the server's
 Tailscale IP or a private host alias as `dst`; do not copy that value into the repository.
 
-Review every other rule whose source is `*`, `autogroup:shared`, or a co-owner login. A broad
-matching grant would add SSH, Syncthing or other port access back. Use the policy editor's
-validation before saving.
+The group contains the second co-owner's exact Tailscale login. Do not use
+`autogroup:member`: it would admit every current and future tailnet member. The built-in
+`autogroup:shared` applies only to recipients of a machine share and does not match this
+non-admin member.
+
+Review every other rule whose source is `*`, `autogroup:member`,
+`group:coldstore-users`, `autogroup:shared`, or a co-owner login. A broad matching grant would
+add SSH, Syncthing or other port access back. Use the policy editor's validation before
+saving.
 
 ## Phase 2 — verify the Serve transport
 
@@ -121,9 +132,10 @@ tailscale funnel status
 curl --head --max-time 5 http://127.0.0.1:8090/
 ```
 
-Before the new identity build is deployed, the expected loopback response is the existing
-Basic Auth `401` with `WWW-Authenticate: Basic realm="coldstore"`. Serve status must show a
-single private HTTPS mapping to `http://127.0.0.1:8090`; Funnel must show no configuration.
+With the deployed identity build, the expected direct-loopback response is `401 Unauthorized`
+without a `WWW-Authenticate` Basic challenge because the request did not pass through Serve.
+Serve status must show a single private HTTPS mapping to `http://127.0.0.1:8090`; Funnel must
+show no configuration.
 
 The reviewed Serve command is recorded for reconstruction, not repeated during a normal
 authentication rollout:
@@ -196,21 +208,24 @@ It must return `401 Unauthorized` without `WWW-Authenticate`; a direct loopback 
 not passed through Serve and has no authenticated identity. Do not manually supply or test a
 forged identity header—the loopback host is the declared proxy trust boundary.
 
-## Phase 5 — share only the server machine
+## Phase 5 — admit the second co-owner with a narrow member grant
 
 In the Tailscale admin console:
 
-1. Open the server in **Machines**.
-2. Choose the machine-sharing action; do not invite the co-owner as a general tailnet member.
-3. Create a share for the co-owner's separate Tailscale account.
-4. Send the invitation through a private channel.
-5. Revoke and recreate the invitation if its link reaches the wrong person or channel.
-6. Wait for acceptance and verify the accepted account's exact login.
-7. If that login was not already configured, add it to `tailscale_allowed_users`, run
+1. Invite the co-owner's separate account as a **Member**, not an administrator.
+2. Wait for acceptance and verify the account's exact Tailscale login in **Users**.
+3. Add only that login to `group:coldstore-users` in the policy file.
+4. Confirm the group grant targets only the Coldstore server on TCP 443. Do not grant the
+   group `*`, TCP 22, raw TCP 8090 or Syncthing ports.
+5. Use **Preview rules** to confirm the co-owner's device has the intended grant and no
+   broader matching rule.
+6. If the login was not already configured, add it to `tailscale_allowed_users`, run
    preflight and perform the owner-approved Coldstore restart before the co-owner tests the UI.
 
-Machine sharing, the TCP 443 grant and Coldstore's allowlist are three cumulative gates. No
-application password is sent to the co-owner.
+Tailnet membership, the named TCP 443 grant and Coldstore's allowlist are cumulative gates.
+No application password is sent to the co-owner. Machine sharing remains an alternative only
+when the recipient administers a separate receiving tailnet; there is no in-app share-code
+acceptance flow.
 
 ## Phase 6 — co-owner device setup
 
@@ -218,8 +233,8 @@ On each approved iPhone, macOS, Linux or Windows device:
 
 1. Install the current Tailscale client from the platform's normal trusted source.
 2. Sign in with the co-owner's own Tailscale account.
-3. Accept the server-machine share.
-4. Confirm the shared server appears in Tailscale.
+3. Accept the tailnet Member invitation.
+4. Confirm the Coldstore server appears in Tailscale under the restricted account.
 5. Open the exact private `.ts.net` HTTPS URL supplied by the owner.
 6. Confirm Coldstore loads without an application login prompt.
 
@@ -229,29 +244,34 @@ Funnel URL. The supported path is the private HTTPS Serve URL.
 ## Acceptance checks
 
 - [ ] With Tailscale disconnected, the private Coldstore URL is unreachable.
-- [ ] With Tailscale connected as each allowlisted co-owner, the URL loads without Basic Auth.
-- [ ] Direct loopback access without Serve identity returns `401` and no Basic challenge.
-- [ ] TCP 22, TCP 8090 and Syncthing remain unreachable to the shared user through Tailscale.
+- [x] With Tailscale connected as each allowlisted co-owner, the URL loads without Basic Auth.
+- [x] Direct loopback access without Serve identity returns `401` and no Basic challenge.
+- [ ] TCP 22, TCP 8090 and Syncthing remain unreachable to the restricted co-owner through
+      Tailscale.
 - [ ] The existing UI and read-only API work through HTTPS.
 - [ ] Image/document preview, download and HTTP Range requests work through Serve.
 - [ ] An intended mutation produces an audit record naming the correct Tailscale login.
-- [ ] An unlisted shared identity receives the same generic `401` as a missing identity.
+- [x] An unallowlisted third Tailscale identity is denied access to Coldstore. The owner did
+      not record the exact response body/status for this acceptance report.
+- [x] The second co-owner successfully reaches Coldstore from macOS.
 - [ ] The iPhone works on Wi-Fi and once over cellular when convenient.
 - [ ] At least one desktop works away from the home LAN when convenient.
 - [ ] A reboot or restart leaves the background Serve mapping unchanged.
-- [ ] `tailscale funnel status` still shows no public configuration.
+- [x] `tailscale funnel status` still shows no public configuration.
 
 ## Routine use
 
 - Keep Tailscale connected when using Coldstore away from home.
 - Use only the private HTTPS Serve URL.
-- Treat a lost device, unexpected machine share or unexpected allowlist entry as a security
-  event.
-- Periodically review the machine share, exact-login allowlist, policy and Serve/Funnel status.
+- Treat a lost device, unexpected tailnet member/group entry or unexpected allowlist entry as
+  a security event.
+- Periodically review tailnet membership, the named Coldstore group, exact-login allowlist,
+  policy and Serve/Funnel status.
 
 ## Offboarding one co-owner
 
-1. Revoke that co-owner's server-machine share immediately.
+1. Remove the co-owner from `group:coldstore-users`, then suspend or delete their tailnet
+   membership if the relationship is ending entirely.
 2. Confirm their devices can no longer reach the private URL.
 3. Remove their exact login from `tailscale_allowed_users`.
 4. Run preflight and perform the owner-approved Coldstore restart.
@@ -270,7 +290,7 @@ tailscale serve --https=443 off
 tailscale serve status
 ```
 
-Disabling Serve does not stop Coldstore or revoke a machine share. Revoke the share
+Disabling Serve does not stop Coldstore or remove tailnet membership or grants. Revoke those
 separately. Do not use `tailscale serve reset` unless clearing every Serve entry is intended.
 
 To roll the application back to Basic Auth, restore both Basic credentials through the
@@ -283,5 +303,7 @@ enable Funnel as a rollback.
 - [Tailscale Serve and identity headers](https://tailscale.com/docs/features/tailscale-serve)
 - [Tailscale Serve command](https://tailscale.com/docs/reference/tailscale-cli/serve)
 - [Tailscale machine sharing](https://tailscale.com/docs/features/sharing)
+- [Tailscale user roles](https://tailscale.com/docs/reference/user-roles)
+- [Tailscale invitations versus machine sharing](https://tailscale.com/docs/reference/inviting-vs-sharing)
 - [Tailscale grants](https://tailscale.com/docs/features/access-control/grants)
 - [Tailscale grant syntax](https://tailscale.com/docs/reference/syntax/grants)
