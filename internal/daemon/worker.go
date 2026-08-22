@@ -56,6 +56,7 @@ type Worker struct {
 }
 
 func NewWorker(cat *catalog.Catalog, mover *Mover, scanner *Scanner, logger *slog.Logger) *Worker {
+	mover.bindScanner(scanner)
 	return &Worker{
 		cat:          cat,
 		mover:        mover,
@@ -137,7 +138,42 @@ func (w *Worker) runJob(ctx context.Context, job *catalog.Job) error {
 	if job.Action == catalog.JobActionScan {
 		return w.runScanJob(ctx, job)
 	}
+	if job.Action == catalog.JobActionRename {
+		return w.runRenameJob(ctx, job)
+	}
 	return w.runItemJob(ctx, job)
+}
+
+// runRenameJob executes the one synthetic, restartable rename item. Like a
+// scan, it owns no job_items rows; unlike a scan, the payload is durable and
+// each filesystem/catalog step is idempotent after a crash.
+func (w *Worker) runRenameJob(ctx context.Context, job *catalog.Job) error {
+	payload, err := catalog.DecodeRenamePayload(job.Payload)
+	if err == nil {
+		err = w.mover.RenamePath(ctx, job.FolderLabel, payload.From, payload.To)
+	}
+	if ctx.Err() != nil {
+		w.logger.Info("rename job interrupted by shutdown", "job", job.ID)
+		return nil
+	}
+	// Once a filesystem plan has started, an error may mean an earlier tree is
+	// already at its destination. Keep the synthetic item running so this worker
+	// retries its idempotent payload and startup recovery can requeue it after a
+	// crash. Marking it failed here would strand the three trees split forever.
+	if errors.Is(err, errRenameIncomplete) {
+		w.logger.Warn("rename incomplete; retaining job for retry",
+			"job", job.ID, "folder", job.FolderLabel, "error", err)
+		return err
+	}
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+		w.logger.Error("rename job failed", "job", job.ID, "folder", job.FolderLabel, "error", err)
+	}
+	if cerr := w.cat.CompleteJobItemVirtual(job.ID, msg); cerr != nil {
+		return fmt.Errorf("recording rename result for job %d: %w", job.ID, cerr)
+	}
+	return w.cat.FinishJob(job.ID, time.Now().Unix())
 }
 
 // runScanJob runs the single synthetic item of a scan job. A scan job has
@@ -167,13 +203,10 @@ func (w *Worker) runScanJob(ctx context.Context, job *catalog.Job) error {
 
 func (w *Worker) scan(ctx context.Context, folderLabel string) error {
 	// A scan JOB is the owner pressing Rescan; the periodic catalog tick does
-	// not come through here. That distinction is what makes this the right
-	// place to clear the three-strikes thumbnail cap: a file whose thumbnail
-	// failed three times is otherwise excluded from the queue forever, so a
-	// repaired file, or an ffmpeg that has since been installed, could never
-	// produce a thumbnail again for the life of the database. Resetting on the
-	// periodic tick instead would retry the genuinely unreadable files every
-	// fifteen minutes, which is what the cap exists to stop.
+	// not come through here. That distinction makes this the right place to
+	// clear both derived-data failure caps: a repaired file, or a decoder that
+	// has since been installed, must be retryable on request without making the
+	// periodic tick retry genuinely unreadable files forever.
 	reset, err := w.cat.ResetThumbnailFailures(folderLabel)
 	if err != nil {
 		w.logger.Warn("cannot clear thumbnail failures before a manual scan",
@@ -181,6 +214,14 @@ func (w *Worker) scan(ctx context.Context, folderLabel string) error {
 	} else if reset > 0 {
 		w.logger.Info("cleared thumbnail failures for a manual scan",
 			"folder", folderLabel, "files", reset)
+	}
+	metadataReset, err := w.cat.ResetMetadataFailures(folderLabel)
+	if err != nil {
+		w.logger.Warn("cannot clear metadata failures before a manual scan",
+			"folder", folderLabel, "error", err)
+	} else if metadataReset > 0 {
+		w.logger.Info("cleared metadata failures for a manual scan",
+			"folder", folderLabel, "files", metadataReset)
 	}
 
 	if folderLabel == "" {

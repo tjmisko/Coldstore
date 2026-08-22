@@ -83,14 +83,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # poppler-utils supplies pdftocairo, which the PDF thumbnail path shells
+      # out to. Without it those thumbnails silently do not generate: the
+      # generator records a failure per file and the tests that assert on a
+      # rendered page have nothing to look at.
+      - name: Install ffmpeg and poppler
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg poppler-utils
       - run: go test -tags e2e -count=1 -timeout 120s ./tests/e2e/...
 
   # The browser tier: Playwright drives the REAL daemon serving the REAL
-  # embedded bundle over a freshly seeded demo installation. ffmpeg is needed
-  # because the seeder generates thumbnails, and a headless chromium is pulled
-  # in explicitly -- `npm ci` installs the runner, not the browsers.
+  # embedded bundle over a freshly seeded demo installation. ffmpeg and
+  # poppler-utils are needed because the daemon generates thumbnails against
+  # the seeded install, and a headless chromium is pulled in explicitly --
+  # `npm ci` installs the runner, not the browsers.
+  #
+  # This is also the only job that runs pdf.js for real: the worker, the
+  # standard fonts and the wasm decoders are all served out of the embedded
+  # bundle, and a vitest run with a stubbed fetch cannot tell you whether any
+  # of them are actually in there.
   playwright:
     name: playwright (embedded UI against the real daemon)
     runs-on: ubuntu-latest
@@ -105,8 +115,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg and poppler
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg poppler-utils
       - name: Install dependencies
         working-directory: web
         run: npm ci

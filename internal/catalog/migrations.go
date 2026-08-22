@@ -23,12 +23,15 @@ var migrations = []migration{
 	{3, migration3FolderState},
 	{4, migration4Jobs},
 	{5, migration5ThumbnailFailures},
+	{6, migration6DetectedType},
+	{7, migration7TagsAndMetadata},
+	{8, migration8RenameJobs},
 }
 
 // schemaVersion is the version a freshly migrated database reports.
 // It equals the highest entry above and is bumped in the same commit as that
 // entry.
-const schemaVersion = 5
+const schemaVersion = 8
 
 // SchemaVersion returns the schema version this binary writes.
 func SchemaVersion() int { return schemaVersion }
@@ -42,7 +45,10 @@ func DatabaseSchemaVersion(dbPath string) (int, error) {
 		}
 		return 0, fmt.Errorf("stating database: %w", err)
 	}
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
+	if err := ensureNoUncheckpointedWAL(dbPath); err != nil {
+		return 0, err
+	}
+	db, err := sql.Open("sqlite3", readOnlyDSN(dbPath))
 	if err != nil {
 		return 0, fmt.Errorf("opening database: %w", err)
 	}
@@ -258,4 +264,112 @@ ALTER TABLE files ADD COLUMN thumb_error TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX idx_files_thumb_queue
 	ON files(thumbnail_path, thumb_attempts, status);
+`
+
+// migration6DetectedType adds the content-sniffed type (H0b).
+//
+// mime_type is derived from the extension, so it is empty for exactly the
+// files this column exists to reach: the extension-less bookmark exports and
+// notes that sync alongside a camera roll. An extension-keyed thumbnail or
+// preview queue can never select them.
+//
+// The default is the empty string, which every pre-existing row therefore
+// takes. That is the correct starting state and is load-bearing: empty means
+// "not yet sniffed", so the next scan backfills the whole catalog once and
+// then stops. A file the sniff genuinely cannot identify records
+// 'application/octet-stream' rather than staying empty, so it is not re-read
+// forever.
+//
+// The index is on (detected_type, thumbnail_path, thumb_attempts) rather than
+// extending idx_files_thumb_queue, because the queue predicate becomes a
+// disjunction -- extension IN (...) OR detected_type IN (...) -- and SQLite
+// serves an OR of two indexed branches far better than one composite index it
+// can only use for half the clause.
+const migration6DetectedType = `
+ALTER TABLE files ADD COLUMN detected_type TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX idx_files_detected_type_queue
+	ON files(detected_type, thumbnail_path, thumb_attempts, status);
+`
+
+// migration7TagsAndMetadata adds the normalised tag tables, owner description,
+// capture/location metadata, Live Photo pairing, extraction bookkeeping, and
+// the cosmetic folder display name. It is deliberately additive; widening the
+// jobs action constraint for rename is the separate migration 8.
+const migration7TagsAndMetadata = `
+CREATE TABLE tags (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	name       TEXT NOT NULL,
+	name_fold  TEXT NOT NULL UNIQUE,
+	created_at INTEGER NOT NULL
+);
+
+CREATE TABLE file_tags (
+	file_id    INTEGER NOT NULL,
+	tag_id     INTEGER NOT NULL,
+	applied_at INTEGER NOT NULL,
+	PRIMARY KEY (file_id, tag_id)
+) WITHOUT ROWID;
+
+CREATE INDEX idx_file_tags_tag ON file_tags(tag_id, file_id);
+
+ALTER TABLE files ADD COLUMN description TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN captured_local          TEXT NOT NULL DEFAULT '';
+ALTER TABLE files ADD COLUMN captured_offset_minutes INTEGER;
+ALTER TABLE files ADD COLUMN captured_source         TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN gps_lat        REAL;
+ALTER TABLE files ADD COLUMN gps_lon        REAL;
+ALTER TABLE files ADD COLUMN gps_altitude_m REAL;
+ALTER TABLE files ADD COLUMN gps_accuracy_m REAL;
+ALTER TABLE files ADD COLUMN gps_source     TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN pair_key    TEXT NOT NULL DEFAULT '';
+ALTER TABLE files ADD COLUMN pair_source TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE files ADD COLUMN meta_scanned_at   INTEGER;
+ALTER TABLE files ADD COLUMN meta_attempts     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE files ADD COLUMN meta_last_attempt INTEGER;
+ALTER TABLE files ADD COLUMN meta_error        TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX idx_files_meta_queue ON files(meta_scanned_at, meta_attempts, status);
+CREATE INDEX idx_files_captured ON files(folder_label, captured_local, id);
+CREATE INDEX idx_files_gps ON files(gps_lat, gps_lon);
+CREATE INDEX idx_files_pair ON files(folder_label, pair_key);
+
+ALTER TABLE folder_configs ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
+`
+
+// migration8RenameJobs rebuilds jobs because SQLite cannot widen a CHECK in
+// place. payload is intentionally private to the durable rename worker; the
+// other actions keep the empty default and their wire responses do not expose
+// it. job_items survives unchanged because nothing references jobs with an
+// enforced foreign key.
+const migration8RenameJobs = `
+CREATE TABLE jobs_new (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	action TEXT NOT NULL CHECK(action IN ('restore','archive','scan','rename')),
+	folder_label TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT 'pending'
+		CHECK(state IN ('pending','running','done','failed')),
+	total INTEGER NOT NULL DEFAULT 0,
+	done INTEGER NOT NULL DEFAULT 0,
+	failed INTEGER NOT NULL DEFAULT 0,
+	error TEXT NOT NULL DEFAULT '',
+	payload TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	started_at INTEGER,
+	finished_at INTEGER
+);
+
+INSERT INTO jobs_new (id, action, folder_label, state, total, done, failed, error,
+	payload, created_at, started_at, finished_at)
+	SELECT id, action, folder_label, state, total, done, failed, error,
+		'', created_at, started_at, finished_at FROM jobs;
+
+DROP TABLE jobs;
+ALTER TABLE jobs_new RENAME TO jobs;
+
+CREATE INDEX idx_jobs_state ON jobs(state, id);
 `

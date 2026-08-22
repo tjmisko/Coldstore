@@ -17,7 +17,8 @@ type statusResponse struct {
 }
 
 type folderStatus struct {
-	Label string `json:"label"`
+	Label       string `json:"label"`
+	DisplayName string `json:"display_name"`
 	// SyncedSizeBytes keeps its name for compatibility, but it is the folder's
 	// ON-DEVICE FOOTPRINT: status IN ('synced','archiving','restoring'), the
 	// same aggregate enforcement budgets against.
@@ -128,6 +129,7 @@ func (s *Server) folderStatusFor(fc catalog.FolderConfigRecord) (folderStatus, e
 
 	return folderStatus{
 		Label:           fc.FolderLabel,
+		DisplayName:     fc.DisplayName,
 		SyncedSizeBytes: onDevice,
 		BudgetBytes:     fc.BudgetBytes,
 		PinnedBytes:     pinned,

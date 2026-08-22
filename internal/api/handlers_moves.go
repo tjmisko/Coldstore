@@ -107,6 +107,9 @@ func (s *Server) writeMoveError(w http.ResponseWriter, action string, id int64, 
 		writeError(w, http.StatusConflict, "the source file changed during the move")
 	case errors.Is(err, daemon.ErrColdStorageFull):
 		writeError(w, http.StatusInsufficientStorage, "cold storage below 5% free")
+	case errors.Is(err, daemon.ErrColdStorageUnmounted):
+		writeError(w, http.StatusServiceUnavailable,
+			"cold storage is not a mounted volume; archiving is disabled until it is")
 	default:
 		s.logger.Error(action+" failed", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, action+" failed")

@@ -65,7 +65,7 @@ export function useStatus(): StatusState {
 export interface FoldersState {
   folders: FolderConfig[];
   error: string | null;
-  /** Narrowed to the three fields the UI owns. With Partial<FolderConfig> the
+  /** Narrowed to the fields the UI owns. With Partial<FolderConfig> the
    *  first budget editor written against it would have PUT syncthing_path="",
    *  grace_minutes=0 and enabled=false alongside the budget -- disabling the
    *  folder on its first save. */

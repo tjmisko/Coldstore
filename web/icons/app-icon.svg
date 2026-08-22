@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-label="Coldstore">
+  <rect width="180" height="180" fill="#0a0a0a"/>
+  <path fill="#94a3b8" opacity=".45" d="M28 38 v22 a62 18 0 0 0 124 0 v-22 a62 18 0 0 0 -124 0 z"/>
+  <path fill="#94a3b8" opacity=".75" d="M28 78 v22 a62 18 0 0 0 124 0 v-22 a62 18 0 0 0 -124 0 z"/>
+  <path fill="#38bdf8" d="M28 118 v22 a62 18 0 0 0 124 0 v-22 a62 18 0 0 0 -124 0 z"/>
+</svg>

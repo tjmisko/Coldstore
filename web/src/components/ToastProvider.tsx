@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ToastContext, type Toast, type ToastKind } from "../lib/toast";
+import { Z } from "../lib/zLayers";
 
 const DISMISS_MS: Record<ToastKind, number> = {
   success: 4000,
@@ -20,13 +21,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const show = useCallback(
-    (kind: ToastKind, message: string) => {
+    (kind: ToastKind, message: string, durationMs?: number) => {
       const id = ++nextID.current;
       setToasts((prev) => [...prev, { id, kind, message }]);
       const timer = setTimeout(() => {
         timers.current.delete(timer);
         dismiss(id);
-      }, DISMISS_MS[kind]);
+      }, durationMs ?? DISMISS_MS[kind]);
       timers.current.add(timer);
     },
     [dismiss],
@@ -46,7 +47,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext value={api}>
       {children}
       <div
-        className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]"
+        style={{ zIndex: Z.toast }}
+        className="fixed bottom-4 right-4 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]"
         aria-live="polite"
       >
         {toasts.map((toast) => (
@@ -54,12 +56,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             role={toast.kind === "error" ? "alert" : "status"}
             data-toast={toast.kind}
-            className={`rounded-lg border px-3 py-2 text-sm shadow-lg backdrop-blur ${
+            className={`rounded-lg border px-3 py-2.5 text-base shadow-lg backdrop-blur ${
               toast.kind === "error"
-                ? "bg-red-950/90 border-red-800 text-red-100"
+                ? "bg-alarm-dim/95 border-alarm/45 text-ink"
                 : toast.kind === "success"
-                  ? "bg-emerald-950/90 border-emerald-800 text-emerald-100"
-                  : "bg-neutral-900/95 border-neutral-700 text-neutral-100"
+                  ? "bg-surface/95 border-line-strong text-ink"
+                  : "bg-surface/95 border-line text-ink-muted"
             }`}
           >
             <div className="flex items-start gap-2">
@@ -67,7 +69,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               <button
                 onClick={() => dismiss(toast.id)}
                 aria-label="Dismiss"
-                className="text-neutral-400 hover:text-white leading-none"
+                className="text-ink-faint hover:text-ink leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
               >
                 &times;
               </button>

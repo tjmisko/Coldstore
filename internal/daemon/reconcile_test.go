@@ -265,3 +265,76 @@ func TestReconcileFoldersShouldRefuseToStartWhenADeclarationIsUnusable(t *testin
 		})
 	}
 }
+
+func TestReconcileFoldersShouldRejectALabelRenameBeforeWritingAnything(t *testing.T) {
+	cat, dbPath := openCatalog(t)
+	if err := ReconcileFolders(tomlConfig(config.FolderConfig{
+		Label: "Photos", Path: "/srv/sync/Photos", BudgetBytes: 20_000,
+	}), cat, testLogger()); err != nil {
+		t.Fatal(err)
+	}
+	seededEvents := countEvents(t, dbPath, "folder_seeded")
+
+	// The first declaration would be a valid insert if reconciliation reached
+	// its write loop. The second is an attempted cosmetic rename of Photos.
+	err := ReconcileFolders(tomlConfig(
+		config.FolderConfig{Label: "Docs", Path: "/srv/sync/Docs", BudgetBytes: 10_000},
+		config.FolderConfig{Label: "Pictures", Path: "/srv/sync/Photos", BudgetBytes: 20_000},
+	), cat, testLogger())
+	if err == nil {
+		t.Fatal("renaming Photos to Pictures while retaining its path must be rejected")
+	}
+	for _, want := range []string{"Pictures", "/srv/sync/Photos", "Photos", "permanent", "display_name"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want recovery detail %q", err, want)
+		}
+	}
+
+	all, err := cat.ListFolderConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].FolderLabel != "Photos" || !all[0].PresentInTOML {
+		t.Errorf("folder rows after refusal = %+v, want the untouched Photos row only", all)
+	}
+	if got := countEvents(t, dbPath, "folder_seeded"); got != seededEvents {
+		t.Errorf("folder_seeded events = %d, want unchanged %d", got, seededEvents)
+	}
+}
+
+func TestReconcileFoldersShouldRejectSwappedLabels(t *testing.T) {
+	cat, _ := openCatalog(t)
+	if err := ReconcileFolders(tomlConfig(
+		config.FolderConfig{Label: "Photos", Path: "/srv/sync/Photos", BudgetBytes: 20_000},
+		config.FolderConfig{Label: "Docs", Path: "/srv/sync/Docs", BudgetBytes: 10_000},
+	), cat, testLogger()); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ReconcileFolders(tomlConfig(
+		config.FolderConfig{Label: "Photos", Path: "/srv/sync/Docs", BudgetBytes: 20_000},
+		config.FolderConfig{Label: "Docs", Path: "/srv/sync/Photos", BudgetBytes: 10_000},
+	), cat, testLogger())
+	if err == nil || !strings.Contains(err.Error(), "already catalogued under label \"Docs\"") {
+		t.Fatalf("swapped label reconciliation error = %v, want the Docs ownership conflict", err)
+	}
+}
+
+func TestReconcileFoldersShouldCompareCleanedPaths(t *testing.T) {
+	cat, _ := openCatalog(t)
+	if err := ReconcileFolders(tomlConfig(config.FolderConfig{
+		Label: "Photos", Path: "/srv/sync/Photos", BudgetBytes: 20_000,
+	}), cat, testLogger()); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ReconcileFolders(tomlConfig(config.FolderConfig{
+		Label: "Pictures", Path: "/srv/sync/Albums/../Photos/", BudgetBytes: 20_000,
+	}), cat, testLogger())
+	if err == nil {
+		t.Fatal("a cleaned path with a trailing slash bypassed the permanent-label guard")
+	}
+	if !strings.Contains(err.Error(), `path "/srv/sync/Photos"`) {
+		t.Errorf("error = %q, want the cleaned path", err)
+	}
+}

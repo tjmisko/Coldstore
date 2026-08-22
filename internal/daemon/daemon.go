@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
+	"github.com/tjmisko/coldstore/internal/metadata"
 	"github.com/tjmisko/coldstore/internal/thumbnail"
 )
 
@@ -70,12 +72,17 @@ const (
 	wedgeWarningRefreshSeconds = 24 * 60 * 60
 )
 
-// thumbnailExts are all extensions the thumbnail generator supports.
-var thumbnailExts = []string{
-	".jpg", ".jpeg", ".png", ".webp",
-	".heif", ".heic",
-	".mp4", ".mov", ".avi", ".mkv", ".webm",
-}
+// thumbnailExts are all extensions the thumbnail generator supports. It is
+// asked of the generator rather than written out here: a second hand-kept copy
+// of the list is how a format ends up supported by the generator and never
+// selected by the queue.
+var thumbnailExts = thumbnail.SupportedExtensions()
+
+// thumbnailTypes is the second arm of the queue predicate: the content-sniffed
+// types the generator can render. It is what reaches a file with no extension,
+// which an extension-keyed query cannot select no matter how many formats the
+// generator learns.
+var thumbnailTypes = thumbnail.SupportedDetectedTypes()
 
 type Daemon struct {
 	cfg                 *config.Config
@@ -85,13 +92,15 @@ type Daemon struct {
 	mover               *Mover
 	worker              *Worker
 	thumbGen            *thumbnail.Generator
+	metadataExtractor   metadata.Extractor
 	initialScanComplete bool
 
-	// Thumbnail generation runs off the select loop so a long pass cannot
-	// delay SIGTERM. thumbRunning admits one pass at a time; thumbWG lets
-	// shutdown wait for the running pass to notice the cancelled context.
-	thumbRunning atomic.Bool
-	thumbWG      sync.WaitGroup
+	// Derived-data work runs off the select loop so a long pass cannot delay
+	// SIGTERM. One guard covers metadata followed by thumbnails, preserving
+	// that order while preventing overlapping passes.
+	derivedRunning atomic.Bool
+	derivedWG      sync.WaitGroup
+	pairAttempted  sync.Map // candidate-cluster key -> struct{}, reset on restart
 }
 
 // New builds the daemon around an existing Mover. The mover is a parameter
@@ -107,13 +116,14 @@ func New(cfg *config.Config, cat *catalog.Catalog, mover *Mover, logger *slog.Lo
 	// wake channel that POST /jobs would poke while the running one sleeps.
 	scanner := NewScanner(cfg, cat, logger)
 	return &Daemon{
-		cfg:      cfg,
-		cat:      cat,
-		logger:   logger,
-		scanner:  scanner,
-		mover:    mover,
-		worker:   NewWorker(cat, mover, scanner, logger),
-		thumbGen: thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger),
+		cfg:               cfg,
+		cat:               cat,
+		logger:            logger,
+		scanner:           scanner,
+		mover:             mover,
+		worker:            NewWorker(cat, mover, scanner, logger),
+		thumbGen:          thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger),
+		metadataExtractor: metadata.New(),
 	}
 }
 
@@ -143,9 +153,9 @@ func (d *Daemon) Run() error {
 // cancellation is honoured mid-work rather than only between ticks. It returns
 // once every in-flight unit of work has stopped.
 func (d *Daemon) RunContext(ctx context.Context) error {
-	// A background thumbnail pass may outlive the loop below by the length of
-	// one file; do not return until it has stopped.
-	defer d.thumbWG.Wait()
+	// A background derived-data pass may outlive the loop below by the length
+	// of one file; do not return until it has stopped.
+	defer d.derivedWG.Wait()
 
 	// Retry initial scan up to 3 times before entering the main loop.
 	// Quota enforcement is gated on a successful initial scan.
@@ -188,7 +198,7 @@ func (d *Daemon) RunContext(ctx context.Context) error {
 	}()
 	defer workerWG.Wait()
 
-	d.startThumbnailPass(ctx)
+	d.startDerivedDataPass(ctx)
 
 	scanTicker := time.NewTicker(time.Duration(d.cfg.Daemon.ScanIntervalMinutes) * time.Minute)
 	defer scanTicker.Stop()
@@ -219,7 +229,7 @@ func (d *Daemon) RunContext(ctx context.Context) error {
 				d.initialScanComplete = true
 				d.logger.Info("initial scan completed on catalog sync tick")
 			}
-			d.startThumbnailPass(ctx)
+			d.startDerivedDataPass(ctx)
 			d.purgeOldJobs()
 		}
 	}
@@ -362,11 +372,6 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 		allPatterns = append(allPatterns, p.Pattern)
 	}
 
-	candidates, err := d.cat.OffloadCandidates(folder.FolderLabel, offloadCandidateBatchSize)
-	if err != nil {
-		return fmt.Errorf("getting offload candidates: %w", err)
-	}
-
 	// Grace is per folder and comes from the database too. A negative value
 	// clamps to zero rather than reaching into the future for a cutoff.
 	graceMinutes := folder.GraceMinutes
@@ -382,18 +387,38 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 	var evictedBytes int64
 	defer func() { d.reportBulkEviction(folder.FolderLabel, evicted, evictedBytes) }()
 
-	for _, file := range candidates {
+	// Materialise a complete candidate snapshot through bounded keyset pages
+	// before moving anything. Eligible files disappear from the synced predicate
+	// as they move, so OFFSET would skip an equal number from the next page.
+	// Expansion can repeat a group whose later member is itself a seed; seenIDs
+	// collapses that harmless overlap. Holding the complete snapshot lets
+	// groupPairCandidates restore global newest-member ordering across page
+	// boundaries without issuing an unbounded SQLite query.
+	afterID := int64(0)
+	seenIDs := make(map[int64]struct{})
+	candidates := make([]catalog.FileRecord, 0, offloadCandidateBatchSize)
+	for {
+		page, nextID, err := d.cat.OffloadCandidatePage(
+			folder.FolderLabel, offloadCandidateBatchSize, afterID)
+		if err != nil {
+			return fmt.Errorf("getting offload candidates: %w", err)
+		}
+		if nextID == 0 {
+			break
+		}
+		afterID = nextID
+		for i := range page {
+			if _, ok := seenIDs[page[i].ID]; ok {
+				continue
+			}
+			seenIDs[page[i].ID] = struct{}{}
+			candidates = append(candidates, page[i])
+		}
+	}
+
+	for _, group := range groupPairCandidates(candidates) {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("offload loop interrupted: %w", err)
-		}
-
-		// Redundant with OffloadCandidates' `pinned = 0` and deliberately so:
-		// a future caller that forgets the SQL filter still cannot offload a
-		// pinned file. The authoritative layer is ClaimUnpinnedFile, inside
-		// the mover, which also catches a pin that lands after this query ran
-		// (design section 4.1).
-		if file.Pinned {
-			continue
 		}
 
 		// Re-query rather than decrementing a running total. Another actor --
@@ -406,31 +431,54 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 			return fmt.Errorf("getting folder size: %w", err)
 		}
 		if onDevice <= folder.BudgetBytes {
-			break
+			return nil
 		}
 
-		// Skip persistent paths
-		if IsPersistent(file.RelativePath, allPatterns) {
-			continue
+		eligible := true
+		ids := make([]int64, 0, len(group))
+		groupCount := 0
+		var groupBytes int64
+		for i := range group {
+			file := &group[i]
+			ids = append(ids, file.ID)
+			switch file.Status {
+			case catalog.StatusArchived:
+				continue
+			case catalog.StatusSynced:
+			default:
+				eligible = false // missing/transient groups are never partially moved
+				continue
+			}
+			// Every policy is group-wide: protecting the still protects its
+			// MOV and sidecars, and vice versa.
+			if file.Pinned || IsPersistent(file.RelativePath, allPatterns) {
+				eligible = false
+				continue
+			}
+			lastActivity := file.FileMtime
+			if file.FileAtime.After(lastActivity) {
+				lastActivity = file.FileAtime
+			}
+			if lastActivity.After(graceCutoff) {
+				eligible = false
+				continue
+			}
+			diskPath := filepath.Join(folder.SyncthingPath, file.RelativePath)
+			info, err := os.Stat(diskPath)
+			if err != nil {
+				d.logger.Warn("cannot stat paired candidate, skipping group",
+					"path", diskPath, "error", err)
+				eligible = false
+				continue
+			}
+			if info.ModTime().After(graceCutoff) {
+				eligible = false
+				continue
+			}
+			groupCount++
+			groupBytes += file.SizeBytes
 		}
-
-		// Skip files within grace period, using max(mtime, atime)
-		lastActivity := file.FileMtime
-		if file.FileAtime.After(lastActivity) {
-			lastActivity = file.FileAtime
-		}
-		if lastActivity.After(graceCutoff) {
-			continue
-		}
-
-		// Re-check mtime on disk to avoid racing with active transfers
-		diskPath := filepath.Join(folder.SyncthingPath, file.RelativePath)
-		info, err := os.Stat(diskPath)
-		if err != nil {
-			d.logger.Warn("cannot stat file, skipping", "path", diskPath, "error", err)
-			continue
-		}
-		if info.ModTime().After(graceCutoff) {
+		if !eligible || groupCount == 0 {
 			continue
 		}
 
@@ -438,7 +486,7 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 		// every row transition. The automatic variant claims with
 		// ClaimUnpinnedFile, so a pin that commits between the candidate
 		// query above and the claim inside wins and the file stays (D2).
-		if _, err := d.mover.ArchiveAutomatic(file.ID); err != nil {
+		if _, err := d.mover.ArchiveAutomaticGroup(ids); err != nil {
 			switch {
 			case errors.Is(err, ErrColdStorageFull), errors.Is(err, ErrFolderUnavailable):
 				// Neither condition gets better by trying the next file.
@@ -447,19 +495,64 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 			case errors.Is(err, ErrFileStateChanged):
 				// Somebody else -- a pin, a restore, a manual archive -- got
 				// to this row first. Entirely ordinary.
-				d.logger.Debug("skipping file claimed by another actor",
-					"path", file.RelativePath, "error", err)
+				d.logger.Debug("skipping pair group claimed by another actor",
+					"path", group[0].RelativePath, "error", err)
 			default:
-				d.logger.Error("offload failed", "path", file.RelativePath, "error", err)
+				d.logger.Error("offload failed", "path", group[0].RelativePath, "error", err)
 			}
 			continue
 		}
 
-		evicted++
-		evictedBytes += file.SizeBytes
+		evicted += groupCount
+		evictedBytes += groupBytes
 	}
 
 	return nil
+}
+
+// groupPairCandidates makes the policy loop structurally incapable of treating
+// a member alone and applies the catalog's global oldest-group-first order.
+// Sorting here matters when bounded catalog pages expanded groups whose newest
+// member fell in a later page.
+func groupPairCandidates(files []catalog.FileRecord) [][]catalog.FileRecord {
+	groups := make([][]catalog.FileRecord, 0)
+	indexes := make(map[string]int)
+	for _, file := range files {
+		key := fmt.Sprintf("id:%d", file.ID)
+		if file.PairKey != "" {
+			key = file.FolderLabel + "\x00" + file.PairKey
+		}
+		idx, ok := indexes[key]
+		if !ok {
+			idx = len(groups)
+			indexes[key] = idx
+			groups = append(groups, nil)
+		}
+		groups[idx] = append(groups[idx], file)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		activity := func(group []catalog.FileRecord) time.Time {
+			var newest time.Time
+			for k := range group {
+				candidate := group[k].FileMtime
+				if group[k].FileAtime.After(candidate) {
+					candidate = group[k].FileAtime
+				}
+				if candidate.After(newest) {
+					newest = candidate
+				}
+			}
+			return newest
+		}
+		left, right := activity(groups[i]), activity(groups[j])
+		if left.Equal(right) {
+			// The member ids are stable and groups are assembled in ascending page
+			// order, giving equal-activity groups a deterministic final order.
+			return groups[i][0].ID < groups[j][0].ID
+		}
+		return left.Before(right)
+	})
+	return groups
 }
 
 // reportBulkEviction writes one loud event when a single enforcement pass took
@@ -566,18 +659,22 @@ func (d *Daemon) enforceEpilogue(label string) {
 	}
 }
 
-// startThumbnailPass runs one thumbnail pass in the background. At most one
-// pass runs at a time: a tick that arrives while the previous pass is still
-// working is dropped rather than queued.
-func (d *Daemon) startThumbnailPass(ctx context.Context) {
-	if !d.thumbRunning.CompareAndSwap(false, true) {
-		d.logger.Debug("thumbnail pass already running, skipping this tick")
+// startDerivedDataPass runs metadata and then thumbnails in one background
+// goroutine. A tick that arrives while either phase is active is dropped rather
+// than queued.
+func (d *Daemon) startDerivedDataPass(ctx context.Context) {
+	if !d.derivedRunning.CompareAndSwap(false, true) {
+		d.logger.Debug("derived-data pass already running, skipping this tick")
 		return
 	}
-	d.thumbWG.Add(1)
+	d.derivedWG.Add(1)
 	go func() {
-		defer d.thumbWG.Done()
-		defer d.thumbRunning.Store(false)
+		defer d.derivedWG.Done()
+		defer d.derivedRunning.Store(false)
+		d.extractMetadata(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 		d.generateThumbnails(ctx)
 	}()
 }
@@ -622,7 +719,7 @@ func (d *Daemon) generateThumbnails(ctx context.Context) {
 			return
 		}
 
-		files, err := d.cat.FilesNeedingThumbnails(thumbnailExts, thumbnailBatchSize)
+		files, err := d.cat.FilesNeedingThumbnailsByType(thumbnailExts, thumbnailTypes, thumbnailBatchSize)
 		if err != nil {
 			d.logger.Error("querying files for thumbnails", "error", err)
 			return

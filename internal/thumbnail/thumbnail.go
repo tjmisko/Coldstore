@@ -2,40 +2,35 @@ package thumbnail
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"image"
+	_ "image/gif" // some older EPUB covers are GIF, and .gif is thumbnailable
 	"image/jpeg"
 	_ "image/png"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	_ "golang.org/x/image/webp"
 
 	"github.com/disintegration/imaging"
 	"github.com/tjmisko/coldstore/internal/catalog"
+	"github.com/tjmisko/coldstore/internal/filetype"
 )
 
 const (
 	maxEdge     = 400
 	jpegQ       = 80
 	thumbSuffix = ".thumb.jpg"
-
-	// defaultFFmpegTimeout bounds a single ffmpeg invocation. A truncated or
-	// malformed video can make ffmpeg sit forever; without a deadline one such
-	// file stalls the whole thumbnail backlog.
-	defaultFFmpegTimeout = 30 * time.Second
 )
 
 // imageExts are extensions handled by the Go imaging pipeline.
 var imageExts = map[string]bool{
-	".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
+	".jpg": true, ".jpeg": true, ".png": true, ".webp": true, ".gif": true,
 }
 
 // heifExts need ffmpeg for decoding.
@@ -48,10 +43,113 @@ var videoExts = map[string]bool{
 	".mp4": true, ".mov": true, ".avi": true, ".mkv": true, ".webm": true,
 }
 
+// pdfExts need poppler.
+var pdfExts = map[string]bool{
+	".pdf": true,
+}
+
+// epubExts are handled entirely in Go: an EPUB is a zip with an XML manifest
+// in it, and archive/zip plus encoding/xml read both.
+var epubExts = map[string]bool{
+	".epub": true,
+}
+
+// extCategories is the ONE place a new thumbnailable category is registered.
+// CanThumbnail, SupportedExtensions and Generate's dispatch switch all read
+// from it, so the queue predicate and the generator cannot drift apart. The
+// daemon used to keep a second hand-written copy of this list, and adding a
+// format to one and not the other made the generator support a type the queue
+// never selected -- silently, because nothing tied the two together.
+var extCategories = []map[string]bool{imageExts, heifExts, videoExts, pdfExts, epubExts}
+
+// detectedTypes maps a content-sniffed type onto the same categories.
+//
+// It is the second way into the generator, and the only one that works for a
+// file with no extension: extension and mime_type are both derived from the
+// filename, so a bookmark export called "reading" is invisible to either. This
+// list has to stay in step with extCategories by hand -- there is no
+// mechanical relation between ".mov" and "video/quicktime" -- which is what
+// the round-trip test in thumbnail_test.go checks.
+var detectedImageTypes = map[string]bool{
+	filetype.TypeJPEG: true,
+	filetype.TypePNG:  true,
+	filetype.TypeWebP: true,
+	filetype.TypeGIF:  true,
+}
+
+var detectedHEIFTypes = map[string]bool{
+	filetype.TypeHEIC: true,
+	filetype.TypeHEIF: true,
+	filetype.TypeAVIF: true,
+}
+
+var detectedVideoTypes = map[string]bool{
+	filetype.TypeMP4:       true,
+	filetype.TypeQuickTime: true,
+	filetype.TypeMatroska:  true,
+	filetype.TypeWebM:      true,
+	filetype.TypeAVI:       true,
+}
+
+var detectedPDFTypes = map[string]bool{
+	filetype.TypePDF: true,
+}
+
+var detectedEPUBTypes = map[string]bool{
+	filetype.TypeEPUB: true,
+}
+
+var typeCategories = []map[string]bool{
+	detectedImageTypes, detectedHEIFTypes, detectedVideoTypes,
+	detectedPDFTypes, detectedEPUBTypes,
+}
+
+// CanThumbnailType reports whether a content-sniffed type is one the generator
+// can render.
+func CanThumbnailType(detected string) bool {
+	for _, set := range typeCategories {
+		if set[detected] {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportedDetectedTypes returns every type CanThumbnailType accepts, sorted,
+// as the second arm to hand to catalog.FilesNeedingThumbnailsByType.
+func SupportedDetectedTypes() []string {
+	var types []string
+	for _, set := range typeCategories {
+		for t := range set {
+			types = append(types, t)
+		}
+	}
+	sort.Strings(types)
+	return types
+}
+
 // CanThumbnail returns true if we support generating a thumbnail for this extension.
 func CanThumbnail(ext string) bool {
 	ext = strings.ToLower(ext)
-	return imageExts[ext] || heifExts[ext] || videoExts[ext]
+	for _, set := range extCategories {
+		if set[ext] {
+			return true
+		}
+	}
+	return false
+}
+
+// SupportedExtensions returns every extension CanThumbnail accepts, sorted, as
+// the list to hand to catalog.FilesNeedingThumbnails.
+func SupportedExtensions() []string {
+	var exts []string
+	for _, set := range extCategories {
+		for ext := range set {
+			exts = append(exts, ext)
+		}
+	}
+	sort.Strings(exts)
+	return exts
 }
 
 // Generator produces thumbnails and stores them in the configured thumbnail directory.
@@ -60,31 +158,34 @@ type Generator struct {
 	cat      *catalog.Catalog
 	logger   *slog.Logger
 
-	ffmpegBin     string
-	ffmpegTimeout time.Duration
+	ffmpeg tool
+	pdf    tool
 }
 
 func NewGenerator(coldStoragePath string, cat *catalog.Catalog, logger *slog.Logger) *Generator {
 	return &Generator{
-		thumbDir:      filepath.Join(coldStoragePath, "thumbnails"),
-		cat:           cat,
-		logger:        logger,
-		ffmpegBin:     "ffmpeg",
-		ffmpegTimeout: defaultFFmpegTimeout,
+		thumbDir: filepath.Join(coldStoragePath, "thumbnails"),
+		cat:      cat,
+		logger:   logger,
+		ffmpeg:   newTool("ffmpeg", "ffmpeg"),
+		// pdftocairo, NOT pdftoppm. pdftoppm cannot write to stdout: given "-"
+		// as its output root it creates a file literally named "-.jpg". Every
+		// snippet online that pipes it is wrong.
+		pdf: newTool("pdftocairo", "pdftocairo"),
 	}
 }
 
 // SetFFmpeg overrides the ffmpeg binary and the per-invocation timeout. A
 // non-positive timeout restores the default.
 func (g *Generator) SetFFmpeg(binary string, timeout time.Duration) {
-	if binary != "" {
-		g.ffmpegBin = binary
-	}
-	if timeout > 0 {
-		g.ffmpegTimeout = timeout
-		return
-	}
-	g.ffmpegTimeout = defaultFFmpegTimeout
+	g.ffmpeg.set(binary, timeout)
+}
+
+// SetPDFRenderer overrides the PDF renderer and its per-invocation timeout,
+// the same way SetFFmpeg does. It exists so the fake-binary test pattern
+// extends to PDFs and unit tests do not need poppler installed.
+func (g *Generator) SetPDFRenderer(binary string, timeout time.Duration) {
+	g.pdf.set(binary, timeout)
 }
 
 // ThumbPath returns the filesystem path where a thumbnail would be stored.
@@ -111,20 +212,29 @@ func (g *Generator) GenerateContext(ctx context.Context, file *catalog.FileRecor
 	}
 
 	ext := strings.ToLower(file.Extension)
+	detected := file.DetectedType
 	outPath := g.ThumbPath(file.FolderLabel, file.RelativePath)
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("creating thumb dir: %w", err)
 	}
 
+	// Extension first, detected type second. The extension is what the owner
+	// named the file and is right almost always; the sniffed type is the way
+	// in for the files that have no extension at all, which is the only reason
+	// it exists.
 	var err error
 	switch {
-	case imageExts[ext]:
+	case imageExts[ext], detectedImageTypes[detected]:
 		err = g.generateImage(sourcePath, outPath)
-	case heifExts[ext]:
+	case heifExts[ext], detectedHEIFTypes[detected]:
 		err = g.generateHEIF(ctx, sourcePath, outPath)
-	case videoExts[ext]:
+	case videoExts[ext], detectedVideoTypes[detected]:
 		err = g.generateVideo(ctx, sourcePath, outPath)
+	case pdfExts[ext], detectedPDFTypes[detected]:
+		err = g.generatePDF(ctx, sourcePath, outPath)
+	case epubExts[ext], detectedEPUBTypes[detected]:
+		err = g.generateEPUB(sourcePath, outPath)
 	default:
 		return fmt.Errorf("unsupported extension: %s", ext)
 	}
@@ -149,59 +259,12 @@ func (g *Generator) generateImage(src, dst string) error {
 	return saveThumb(img, dst)
 }
 
-// ffmpegWaitDelay bounds how long Wait blocks after the process has been
-// killed. Without it a killed ffmpeg that left a child holding the output pipe
-// open would hang the worker anyway, which is the very failure the timeout
-// exists to prevent.
-const ffmpegWaitDelay = 2 * time.Second
-
-// newFFmpegCmd builds a cancellable ffmpeg invocation. The process gets its own
-// process group so cancellation kills any child it spawned, not just ffmpeg
-// itself.
-func (g *Generator) newFFmpegCmd(cctx context.Context, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(cctx, g.ffmpegBin, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
-	cmd.WaitDelay = ffmpegWaitDelay
-	return cmd
-}
-
-// ffmpegContext derives the deadline for one ffmpeg invocation.
-func (g *Generator) ffmpegContext(ctx context.Context) (context.Context, context.CancelFunc, time.Duration) {
-	timeout := g.ffmpegTimeout
-	if timeout <= 0 {
-		timeout = defaultFFmpegTimeout
-	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	return cctx, cancel, timeout
-}
-
-// ffmpegError turns a killed-by-deadline exec failure into a legible timeout
-// error, so the recorded thumb_error says why the file was given up on.
-func ffmpegError(cctx context.Context, timeout time.Duration, src string, err error, output string) error {
-	if errors.Is(cctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("ffmpeg timed out after %s on %s", timeout, src)
-	}
-	if errors.Is(cctx.Err(), context.Canceled) {
-		return fmt.Errorf("ffmpeg cancelled on %s: %w", src, context.Canceled)
-	}
-	if output == "" {
-		return fmt.Errorf("ffmpeg: %w", err)
-	}
-	return fmt.Errorf("ffmpeg: %w: %s", err, output)
-}
-
 func (g *Generator) generateHEIF(ctx context.Context, src, dst string) error {
-	cctx, cancel, timeout := g.ffmpegContext(ctx)
+	cctx, cancel, timeout := g.ffmpeg.deadline(ctx)
 	defer cancel()
 
 	// Use ffmpeg to decode HEIF -> pipe to stdout as PNG, then resize in Go
-	cmd := g.newFFmpegCmd(cctx,
+	cmd := g.ffmpeg.command(cctx,
 		"-i", src,
 		"-vframes", "1",
 		"-f", "image2pipe",
@@ -220,7 +283,7 @@ func (g *Generator) generateHEIF(ctx context.Context, src, dst string) error {
 
 	img, _, decodeErr := image.Decode(stdout)
 	if waitErr := cmd.Wait(); waitErr != nil {
-		return ffmpegError(cctx, timeout, src, waitErr, "")
+		return g.ffmpeg.fail(cctx, timeout, src, waitErr, "")
 	}
 	if decodeErr != nil {
 		return fmt.Errorf("decoding ffmpeg output: %w", decodeErr)
@@ -231,11 +294,11 @@ func (g *Generator) generateHEIF(ctx context.Context, src, dst string) error {
 }
 
 func (g *Generator) generateVideo(ctx context.Context, src, dst string) error {
-	cctx, cancel, timeout := g.ffmpegContext(ctx)
+	cctx, cancel, timeout := g.ffmpeg.deadline(ctx)
 	defer cancel()
 
 	// ffmpeg: extract a representative frame
-	cmd := g.newFFmpegCmd(cctx,
+	cmd := g.ffmpeg.command(cctx,
 		"-i", src,
 		"-vf", "thumbnail,scale='min("+fmt.Sprintf("%d", maxEdge)+"\\,iw):-1'",
 		"-frames:v", "1",
@@ -244,7 +307,7 @@ func (g *Generator) generateVideo(ctx context.Context, src, dst string) error {
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return ffmpegError(cctx, timeout, src, err, string(out))
+		return g.ffmpeg.fail(cctx, timeout, src, err, string(out))
 	}
 	return nil
 }

@@ -1,26 +1,60 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../lib/api";
+import { useCallback, useRef, useState } from "react";
+import { api, type NearFilter } from "../lib/api";
+import { captureDayGroups, captureGridRowStarts, formatCaptureDay, resolveCaptureDayJump } from "../lib/capture";
 import { formatCount, formatSize } from "../lib/format";
+import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
-import type { FileRecord } from "../types/api";
+import { useGridKeymap } from "../hooks/useGridKeymap";
+import { galleryColumns, useViewport } from "../hooks/useViewport";
+import type { FileRecord, FileSort } from "../types/api";
+import { CaptureMeta } from "./CaptureMeta";
+import { ContextMenu, type ContextMenuTarget } from "./ContextMenu";
+import { DescriptionEditor } from "./DescriptionEditor";
 import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
+import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
 import { SelectionBar } from "./SelectionBar";
+import { TagChips } from "./TagChips";
+import { TagMode } from "./TagMode";
+import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 
 interface GalleryProps {
   folder: string;
+  displayName?: string;
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
   onFolderChanged(): void;
+  onShowInFiles?(file: FileRecord): void;
 }
 
-export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: GalleryProps) {
-  const workspace = useFileWorkspace({ folder, filterKey, sort: "mtime", onFolderChanged });
+export function Gallery({
+  folder,
+  displayName = folder,
+  filterKey,
+  onFilterChange,
+  onFolderChanged,
+  onShowInFiles = () => {},
+}: GalleryProps) {
+  const [sort, setSort] = useState<FileSort>("mtime");
+  const [near, setNear] = useState<NearFilter | null>(null);
+  const workspace = useFileWorkspace({
+    folder, filterKey, sort, near: near ?? undefined, onFolderChanged,
+  });
   const { files: list, selection, actions, preset, filters } = workspace;
+  const effectiveSort = preset.sort ?? sort;
   const { files, loading, error, hasMore, loadMore, refetchIds } = list;
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
+  const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
+  const [locationIndex, setLocationIndex] = useState<number | null>(null);
+  const [tagPrompt, setTagPrompt] = useState<{
+    ids: number[];
+    mode: TagPromptMode;
+    initialTags?: string[];
+  } | null>(null);
+  const [tagMode, setTagMode] = useState(false);
   const observer = useRef<IntersectionObserver | null>(null);
 
   const sentinelRef = useCallback(
@@ -38,36 +72,6 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
     [hasMore, loading, loadMore],
   );
 
-  // Window-level shortcuts. The target check is what keeps them out of the
-  // search box and the budget editor: without it, Escape and Ctrl+A are stolen
-  // from every input on the page.
-  useEffect(() => {
-    if (lightboxIndex !== null) return;
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" ||
-          target.tagName === "TEXTAREA" ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
-        e.preventDefault();
-        selection.selectMany(files.map((f) => f.id));
-        return;
-      }
-      if (e.key === "Escape") {
-        selection.clear();
-        return;
-      }
-      if (e.key === "Enter" && files.length > 0) setLightboxIndex(0);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxIndex, files, selection]);
-
   const onFinished = useCallback(
     async (ids: number[]) => {
       await refetchIds(ids);
@@ -76,9 +80,62 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
     [refetchIds, onFolderChanged],
   );
 
+  const openTagPrompt = useCallback((mode: TagPromptMode, ids: number[]) => {
+    const previous = workspace.lastTagOperation;
+    setTagPrompt({
+      ids,
+      mode,
+      initialTags: previous?.mode === mode ? previous.tags : undefined,
+    });
+  }, [workspace.lastTagOperation]);
+
+  const bulk = useBulkActions({ selection, filters, onFinished, onTag: openTagPrompt });
+
+  const viewport = useViewport();
+  const columns = galleryColumns(viewport.width);
+  // The sidebar is 288px from md up, and the grid has p-6 plus a 8px gap.
+  const gridWidth = Math.max(200, viewport.width - (viewport.width >= 768 ? 288 : 0) - 56);
+  const tile = gridWidth / columns;
+  const visibleRows = Math.max(1, Math.floor(viewport.height / (tile + 8)));
+
+  const openMenu = useCallback(
+    (index: number, at: { x: number; y: number } | null) => {
+      const file = files[index];
+      if (!file) return;
+      // Right-clicking INSIDE a selection acts on the whole selection; outside
+      // one it acts on the file clicked, and does not disturb the selection.
+      const inSelection = selection.isSelected(file.id) && selection.count > 0;
+      setMenu({ file, ids: inSelection ? selection.ids : [file.id], at });
+    },
+    [files, selection],
+  );
+
+  const cursor = useGridKeymap({
+    scope: "gallery",
+    files,
+    columns,
+    visibleRows,
+    rowStarts: effectiveSort === "captured" ? captureGridRowStarts(files, columns) : undefined,
+    selection,
+    actions,
+    bulk,
+    conflictMode: preset.key === "conflicts",
+    onOpen: setLightboxIndex,
+    onContextMenu: (index) => openMenu(index, null),
+    onEditDescription: setDescriptionIndex,
+    resolveCaptureDay: effectiveSort === "captured"
+      ? (index, direction, count) => resolveCaptureDayJump(files, index, direction, count)
+      : undefined,
+    hasMore,
+    loading,
+    loadMore,
+    onTagMode: () => setTagMode(true),
+    active: lightboxIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
+  });
+
   if (!folder) {
     return (
-      <div className="flex items-center justify-center h-full text-neutral-500">
+      <div className="flex items-center justify-center h-full text-ink-muted">
         Select a folder from the sidebar
       </div>
     );
@@ -86,44 +143,95 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
 
   return (
     <div className="p-4 md:p-6 pb-24">
-      <h2 className="text-xl font-semibold mb-3">{folder}</h2>
-      <FilterBar active={filterKey} onChange={onFilterChange} />
+      {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
+          top of the first few characters of the folder name at 390px. Margin,
+          not padding: the box has to move for a bounding-box test to see it. */}
+      <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{displayName}</h2>
+      <FilterBar active={filterKey} onChange={onFilterChange} near={near} onClearNear={() => setNear(null)} />
+
+      <label className="mb-4 flex w-fit items-center gap-2 text-meta text-ink-muted">
+        Sort
+        <select
+          aria-label="Sort gallery"
+          value={effectiveSort}
+          disabled={preset.sort !== undefined}
+          onChange={(event) => setSort(event.target.value as FileSort)}
+          className="rounded-md border border-line-strong bg-raised px-2 py-1 text-ink outline-none focus:border-cursor focus:ring-2 focus:ring-cursor/40"
+        >
+          <option value="mtime">Modified time</option>
+          <option value="captured">Capture time</option>
+          <option value="name">Name</option>
+          <option value="size">Size</option>
+        </select>
+      </label>
 
       {error && (
-        <p className="mb-3 text-sm text-red-400" role="alert">
+        <p className="mb-3 text-meta text-alarm" role="alert">
           {error}
         </p>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2 select-none">
-        {files.map((file, index) => (
-          <Tile
-            key={file.id}
-            file={file}
-            selected={selection.isSelected(file.id)}
-            anySelected={selection.count > 0}
-            conflictMode={preset.key === "conflicts"}
-            onOpen={() => setLightboxIndex(index)}
-            onToggle={() => selection.toggle(file.id)}
-            onToggleRange={() => selection.toggleRange(file.id)}
-            onPin={(pinned) => void actions.setPinned(file, pinned)}
-            onResolve={(keep) => void actions.resolve(file, keep)}
-          />
-        ))}
-      </div>
+      {(effectiveSort === "captured"
+        ? captureDayGroups(files)
+        : [{ day: "", start: 0, files }]
+      ).map((group) => (
+        <section key={`${group.day}:${group.start}`} data-capture-day={effectiveSort === "captured" ? group.day : undefined}>
+          {effectiveSort === "captured" && (
+            <h3 className="mb-2 mt-5 text-meta font-medium text-ink-muted">
+              {formatCaptureDay(group.day)}
+            </h3>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 select-none">
+            {group.files.map((file, offset) => {
+              const index = group.start + offset;
+              return (
+                <div key={file.id} className="min-w-0">
+                  <Tile
+                    file={file}
+                    selected={selection.isSelected(file.id)}
+                    anySelected={selection.count > 0}
+                    cursor={index === cursor.index}
+                    conflictMode={preset.key === "conflicts"}
+                    onOpen={() => {
+                      cursor.setIndex(index);
+                      setLightboxIndex(index);
+                    }}
+                    onToggle={() => {
+                      cursor.setIndex(index);
+                      selection.toggle(file.id);
+                    }}
+                    onToggleRange={() => selection.toggleRange(file.id)}
+                    onPin={(pinned) => void actions.setPinned(file, pinned)}
+                    onResolve={(keep) => void actions.resolve(file, keep)}
+                    onMenu={(at) => {
+                      cursor.setIndex(index);
+                      openMenu(index, at);
+                    }}
+                  />
+                  {effectiveSort === "captured" && (
+                    <div className="mt-1 truncate">
+                      <CaptureMeta file={file} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
 
       <div ref={sentinelRef} className="h-8" />
 
-      {loading && <div className="text-center text-neutral-500 py-4">Loading...</div>}
+      {loading && <div className="text-center text-ink-faint py-4 text-meta">Loading...</div>}
 
       {!loading && files.length === 0 && (
-        <div className="text-center text-neutral-500 py-10 text-sm">
+        <div className="text-center text-ink-muted py-12 text-meta">
           No files match this filter.
         </div>
       )}
 
       {!hasMore && files.length > 0 && (
-        <div className="text-center text-neutral-600 py-4 text-sm">
+        <div className="text-center text-ink-faint py-4 text-meta tabular">
           {formatCount(files.length)} files
         </div>
       )}
@@ -136,15 +244,74 @@ export function Gallery({ folder, filterKey, onFilterChange, onFolderChanged }: 
           onLoadMore={loadMore}
           hasMore={hasMore}
           actions={actions}
+          lastTagOperation={workspace.lastTagOperation}
+          bulk={bulk}
+          selection={selection}
+          onFindNearby={setNear}
         />
       )}
 
-      <SelectionBar
-        selection={selection}
-        filters={filters}
-        files={files}
-        onFinished={onFinished}
-      />
+      {menu && (
+        <ContextMenu
+          target={menu}
+          conflictMode={preset.key === "conflicts"}
+          actions={actions}
+          bulk={bulk}
+          onOpen={() => setLightboxIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onEditDescription={() => setDescriptionIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onEditLocation={() => setLocationIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onEditTags={(mode) => setTagPrompt({ ids: menu.ids, mode })}
+          onShowInFiles={() => onShowInFiles(menu.file)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {descriptionIndex !== null && files[descriptionIndex] && (
+        <DescriptionEditor
+          files={files}
+          initialIndex={descriptionIndex}
+          actions={actions}
+          lastTagOperation={workspace.lastTagOperation}
+          onIndexChange={cursor.setIndex}
+          onClose={() => setDescriptionIndex(null)}
+        />
+      )}
+
+      {locationIndex !== null && files[locationIndex] && (
+        <LocationEditor
+          file={files[locationIndex]}
+          actions={actions}
+          onFindNearby={(next) => {
+            setNear(next);
+            setLocationIndex(null);
+          }}
+          onClose={() => setLocationIndex(null)}
+        />
+      )}
+
+      {tagPrompt && (
+        <TagPrompt
+          folder={folder}
+          ids={tagPrompt.ids}
+          mode={tagPrompt.mode}
+          selectionNote={bulk.selectAllNote}
+          initialTags={tagPrompt.initialTags}
+          onApply={(add, remove) => actions.tagFiles(tagPrompt.ids, add, remove)}
+          onClose={() => setTagPrompt(null)}
+        />
+      )}
+
+      {tagMode && cursor.file && (
+        <TagMode
+          files={files}
+          index={cursor.index}
+          actions={actions}
+          lastOperation={workspace.lastTagOperation}
+          onClose={() => setTagMode(false)}
+        />
+      )}
+
+      <SelectionBar selection={selection} files={files} bulk={bulk} />
     </div>
   );
 }
@@ -153,12 +320,14 @@ interface TileProps {
   file: FileRecord;
   selected: boolean;
   anySelected: boolean;
+  cursor: boolean;
   conflictMode: boolean;
   onOpen(): void;
   onToggle(): void;
   onToggleRange(): void;
   onPin(pinned: boolean): void;
   onResolve(keep: "device" | "archive"): void;
+  onMenu(at: { x: number; y: number }): void;
 }
 
 /** The tile is a div with role="button", not a <button>.
@@ -170,12 +339,14 @@ function Tile({
   file,
   selected,
   anySelected,
+  cursor,
   conflictMode,
   onOpen,
   onToggle,
   onToggleRange,
   onPin,
   onResolve,
+  onMenu,
 }: TileProps) {
   const thumbnail = file.thumbnail_path ? api.thumbnailUrl(file.thumbnail_path) : "";
   const thumbFailed = file.thumb_attempts >= 3;
@@ -198,17 +369,18 @@ function Tile({
       tabIndex={0}
       aria-label={file.filename}
       data-file-id={file.id}
+      data-pair-group={file.pair_key || undefined}
       data-selected={selected}
+      data-cursor={cursor}
+      data-cursor-scope="gallery"
       onClick={handleClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu({ x: e.clientX, y: e.clientY });
       }}
-      className={`relative aspect-square bg-neutral-800 rounded-lg overflow-hidden group cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-        selected ? "ring-2 ring-blue-500" : ""
-      }`}
+      className={`relative aspect-square bg-raised rounded-lg overflow-hidden group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-ground ${
+        selected ? "ring-2 ring-ink" : ""
+      } ${cursor && !selected ? "ring-2 ring-cursor" : ""}`}
     >
       {thumbnail ? (
         <img
@@ -218,19 +390,19 @@ function Tile({
           loading="lazy"
         />
       ) : (
-        <div className="w-full h-full flex flex-col items-center justify-center text-neutral-500 text-xs gap-1 p-2 text-center">
+        <div className="w-full h-full flex flex-col items-center justify-center text-ink-faint text-meta gap-1.5 p-2 text-center">
           {thumbFailed ? (
             <span title={file.thumb_error || "thumbnail generation failed"} aria-label="thumbnail failed">
               &#9888;
             </span>
           ) : null}
-          <span className="truncate w-full">{file.extension || file.filename}</span>
+          <span className="truncate w-full font-mono">{file.extension || file.filename}</span>
         </div>
       )}
 
       <label
-        className={`absolute top-1 left-1 p-1 rounded bg-black/50 transition-opacity ${
-          selected || anySelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+        className={`absolute top-0 left-0 p-2 cursor-pointer transition-opacity ${
+          selected || anySelected ? "opacity-100" : "opacity-60 group-hover:opacity-100 focus-within:opacity-100"
         }`}
         onClick={(e) => e.stopPropagation()}
       >
@@ -249,27 +421,46 @@ function Tile({
             if (e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey) return;
             onToggle();
           }}
-          className="accent-blue-500"
+          className="peer sr-only"
         />
+        <span
+          aria-hidden="true"
+          className="block size-5 rounded-[5px] border-2 border-white/90 bg-ground/45 shadow-[0_0_0_1px_rgba(0,0,0,0.55),0_1px_4px_rgba(0,0,0,0.75)] backdrop-blur-[2px] transition-colors peer-checked:border-ink peer-checked:bg-ink peer-checked:[&_svg]:opacity-100 peer-focus-visible:ring-2 peer-focus-visible:ring-cursor peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-ground"
+        >
+          <svg viewBox="0 0 20 20" className="size-full text-ground opacity-0">
+            <path
+              d="M5 10.5l3.2 3.2L15 7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.75"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
       </label>
 
       <div className="absolute top-1 right-1" onClick={(e) => e.stopPropagation()}>
         <PinToggle file={file} onPin={onPin} compact />
       </div>
 
-      <div className="absolute bottom-1 right-1 flex gap-1">
+      <div className="pointer-events-none absolute bottom-1.5 left-1.5 max-w-[70%] overflow-hidden">
+        <TagChips tags={file.tags} />
+      </div>
+
+      <div className="absolute bottom-1.5 right-1.5 flex gap-1">
         {file.pinned && (
-          <span className="bg-indigo-600/85 text-[10px] px-1.5 py-0.5 rounded-full" data-badge="pinned">
+          <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-held-dim/90 text-held ring-1 ring-held/40 backdrop-blur-[2px]" data-badge="pinned">
             pinned
           </span>
         )}
         {file.status === "archived" && (
-          <span className="bg-amber-600/85 text-[10px] px-1.5 py-0.5 rounded-full" data-badge="archived">
+          <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-cold-dim/90 text-cold ring-1 ring-cold/40 backdrop-blur-[2px]" data-badge="archived">
             archived
           </span>
         )}
         {file.status === "missing" && (
-          <span className="bg-red-700/85 text-[10px] px-1.5 py-0.5 rounded-full" data-badge="missing">
+          <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-alarm-dim/90 text-alarm ring-1 ring-alarm/40 backdrop-blur-[2px]" data-badge="missing">
             missing
           </span>
         )}
@@ -277,25 +468,25 @@ function Tile({
 
       {conflictMode && (
         <div
-          className="absolute inset-x-0 bottom-0 bg-black/80 p-1.5 flex gap-1 text-[11px]"
+          className="absolute inset-x-0 bottom-0 bg-ground/85 backdrop-blur-sm p-1.5 flex gap-1.5 text-micro"
           onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={() => onResolve("device")}
-            className="flex-1 px-1 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600"
+            className="flex-1 px-1.5 py-1 rounded-md bg-raised text-ink ring-1 ring-line-strong hover:bg-raised-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
           >
             Keep device
           </button>
           <button
             onClick={() => onResolve("archive")}
-            className="flex-1 px-1 py-0.5 rounded bg-amber-700 hover:bg-amber-600"
+            className="flex-1 px-1.5 py-1 rounded-md bg-cold-dim text-cold ring-1 ring-cold/40 hover:bg-cold/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
           >
             Keep archived
           </button>
         </div>
       )}
 
-      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors pointer-events-none" />
+      <div className="absolute inset-0 bg-ground/0 group-hover:bg-ground/25 transition-colors pointer-events-none" />
       <span className="sr-only">{formatSize(file.size_bytes)}</span>
     </div>
   );

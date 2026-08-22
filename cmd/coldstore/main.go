@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,13 +15,41 @@ import (
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 	"github.com/tjmisko/coldstore/internal/daemon"
+	"github.com/tjmisko/coldstore/internal/diagnostic"
 )
 
 func main() {
 	configPath := flag.String("config", "coldstore.toml", "path to config file")
 	scanOnce := flag.Bool("scan", false, "run a single catalog scan and exit")
 	checkOnly := flag.Bool("check", false, "validate the config and the machine, print the result, and exit")
+	statusOnly := flag.Bool("status", false, "print an offline, read-only archive health report and exit")
+	jsonOutput := flag.Bool("json", false, "with --status, emit structured JSON")
 	flag.Parse()
+	if err := validateModeFlags(*scanOnce, *checkOnly, *statusOnly, *jsonOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+		os.Exit(diagnostic.ExitFailure)
+	}
+
+	// Status dispatches before normal config loading and CheckEnvironment. It
+	// neither reads service-only credential environment variables nor performs
+	// the create/delete writability probes used by daemon preflight.
+	if *statusOnly {
+		cfg, err := config.LoadForInspection(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+			os.Exit(diagnostic.ExitFailure)
+		}
+		dbPath := filepath.Join(cfg.Storage.ColdStoragePath, "catalog.db")
+		code, err := writeStatus(context.Background(), os.Stdout, cfg, dbPath, *jsonOutput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: rendering status: %v\n", err)
+			os.Exit(diagnostic.ExitFailure)
+		}
+		if code != diagnostic.ExitHealthy {
+			os.Exit(code)
+		}
+		return
+	}
 
 	// Config is loaded and validated before anything else exists -- before the
 	// catalog is opened and long before a socket is bound. config.Load performs
@@ -45,12 +75,16 @@ func main() {
 		logger.Warn("preflight", "detail", w)
 	}
 
+	dbPath := cfg.Storage.ColdStoragePath + "/catalog.db"
 	if *checkOnly {
+		if err := checkCatalogFolderIdentities(cfg, dbPath); err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+			os.Exit(1)
+		}
 		reportPreflight(os.Stdout, cfg, *configPath, warnings)
 		return
 	}
 
-	dbPath := cfg.Storage.ColdStoragePath + "/catalog.db"
 	cat, err := catalog.Open(dbPath)
 	if err != nil {
 		logger.Error("failed to open catalog", "error", err)
@@ -139,6 +173,44 @@ func main() {
 	}
 }
 
+func validateModeFlags(scan, check, status, jsonOutput bool) error {
+	modes := 0
+	for _, selected := range []bool{scan, check, status} {
+		if selected {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return fmt.Errorf("--scan, --check and --status are mutually exclusive")
+	}
+	if jsonOutput && !status {
+		return fmt.Errorf("--json requires --status")
+	}
+	return nil
+}
+
+func writeStatus(ctx context.Context, w io.Writer, cfg *config.Config, dbPath string, jsonOutput bool) (int, error) {
+	report := diagnostic.NewBuilder().Build(ctx, cfg, dbPath)
+	var err error
+	if jsonOutput {
+		err = diagnostic.WriteJSON(w, report)
+	} else {
+		err = diagnostic.WriteHuman(w, report)
+	}
+	return report.ExitCode, err
+}
+
+// checkCatalogFolderIdentities is the only catalog access performed by
+// --check. ReadFolderIdentities uses a read-only, query-only SQLite connection
+// and does not create or migrate a catalog.
+func checkCatalogFolderIdentities(cfg *config.Config, dbPath string) error {
+	identities, err := catalog.ReadFolderIdentities(dbPath)
+	if err != nil {
+		return fmt.Errorf("checking catalog folder identities: %w", err)
+	}
+	return daemon.ValidateFolderIdentityChanges(cfg, identities)
+}
+
 // reportPreflight prints what --check found. It exists so the owner can answer
 // "is this box ready?" without starting the daemon, touching the catalog or
 // binding a port -- everything above this point is read-only apart from one
@@ -150,12 +222,21 @@ func reportPreflight(w io.Writer, cfg *config.Config, configPath string, warning
 		reach = "this host only"
 	}
 	auth := "DISABLED"
-	if cfg.Server.Username != "" && cfg.Server.Password != "" {
+	switch cfg.Server.AuthenticationMode() {
+	case config.AuthModeBasic:
 		auth = "basic auth as " + cfg.Server.Username
+	case config.AuthModeTailscale:
+		count := len(cfg.Server.TailscaleAllowedUsers)
+		principal := "users"
+		if count == 1 {
+			principal = "user"
+		}
+		auth = fmt.Sprintf("Tailscale Serve identity allowlist (%d %s)", count, principal)
 	}
 
 	fmt.Fprintf(w, "config           %s\n", configPath)
-	fmt.Fprintf(w, "cold storage     %s (exists, writable)\n", cfg.Storage.ColdStoragePath)
+	fmt.Fprintf(w, "cold storage     %s (exists, writable%s)\n",
+		cfg.Storage.ColdStoragePath, describeColdStorageMount(cfg.Storage.ColdStoragePath))
 	fmt.Fprintf(w, "listen           %s -- reachable from %s\n", cfg.Server.ListenAddr, reach)
 	fmt.Fprintf(w, "auth             %s\n", auth)
 	fmt.Fprintf(w, "folders          %d declared\n", len(cfg.Folders))
@@ -176,6 +257,35 @@ func reportPreflight(w io.Writer, cfg *config.Config, configPath string, warning
 	fmt.Fprintln(w, "\nWarnings are not fatal. A folder that is missing or has no .stfolder is")
 	fmt.Fprintln(w, "skipped until it appears, which is what lets the daemon survive being")
 	fmt.Fprintln(w, "started before its mount.")
+}
+
+// describeColdStorageMount says whether cold storage is its own mounted
+// filesystem, because --check has no other way to raise the one mistake that
+// costs data outright.
+//
+// checkColdStorage passes on an UNMOUNTED fstab mountpoint: the directory has
+// to exist for mount(8) to work, so it is there, it is a directory, and it is
+// writable -- on the root filesystem. The daemon then writes a fresh catalog
+// and every archived file there while Syncthing propagates the deletions to
+// every device the owner has, and the real archive reappears shadowed and
+// invisible when the volume is finally mounted. The unit's RequiresMountsFor=
+// is what prevents that at boot; nothing prevents it if the owner starts the
+// daemon by hand.
+//
+// A plain directory is a supported layout, so this is a description and not a
+// verdict. It is worded so that reading past it is a choice.
+func describeColdStorageMount(path string) string {
+	state, err := config.DescribeMount(path)
+	if err != nil {
+		return ""
+	}
+	if !state.IsMountPoint {
+		return "; NOT a separate mount -- confirm this is deliberate"
+	}
+	if state.FSType == "" {
+		return "; mounted"
+	}
+	return "; mounted, " + state.FSType
 }
 
 // printReadWritePaths emits the exact ReadWritePaths= line this config needs,

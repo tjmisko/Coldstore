@@ -17,6 +17,7 @@ import (
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
+	"github.com/tjmisko/coldstore/internal/filetype"
 )
 
 // ErrScanInProgress is returned when a scan is asked for while one is already
@@ -118,7 +119,12 @@ func (s *Scanner) ScanFolderContext(ctx context.Context, folder catalog.FolderCo
 // holds it for the whole pass, so the per-folder entry point cannot take it
 // again -- sync.Mutex is not reentrant, and a TryLock here would turn every
 // folder after the first into ErrScanInProgress.
-func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRecord) error {
+func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRecord) (retErr error) {
+	defer func() {
+		if retErr != nil {
+			s.recordScanEvent("scan_failed", folder.FolderLabel, retErr.Error())
+		}
+	}()
 	if err := verifyFolderRoot(folder.SyncthingPath); err != nil {
 		return fmt.Errorf("folder root unavailable, skipping scan of %q at %s: %w",
 			folder.FolderLabel, folder.SyncthingPath, err)
@@ -217,6 +223,8 @@ func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRec
 	if incomplete > 0 {
 		s.logger.Warn("folder scan incomplete, not marking any file missing",
 			"label", folder.FolderLabel, "files_scanned", scanned, "errors", incomplete)
+		s.recordScanEvent("scan_incomplete", folder.FolderLabel,
+			fmt.Sprintf("files scanned %d, errors %d", scanned, incomplete))
 		return nil
 	}
 
@@ -225,10 +233,78 @@ func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRec
 		return fmt.Errorf("marking missing files in %s: %w", folder.FolderLabel, err)
 	}
 
+	sniffed := s.sniffFolder(ctx, folder)
+
 	s.logger.Info("folder scan complete",
 		"label", folder.FolderLabel, "files_scanned", scanned,
-		"marked_missing", missing, "conflicts", conflicts)
+		"marked_missing", missing, "conflicts", conflicts, "sniffed", sniffed)
+	s.recordScanEvent("scan_completed", folder.FolderLabel,
+		fmt.Sprintf("files scanned %d, marked missing %d, conflicts %d, sniffed %d",
+			scanned, missing, conflicts, sniffed))
 	return nil
+}
+
+func (s *Scanner) recordScanEvent(eventType, label, details string) {
+	if err := s.cat.LogEvent(eventType, label, "", details); err != nil {
+		s.logger.Warn("cannot record scan health event", "type", eventType,
+			"folder", label, "error", err)
+	}
+}
+
+// sniffBatchesPerScan bounds how much content sniffing one folder's scan does.
+//
+// The sniff is a queue, not a step of the walk: rows enter it on insert and on
+// a change of mtime or size, and leave it once their type is recorded. So a
+// steady-state scan sniffs only what actually changed, and the very first scan
+// of a large folder converges over a few ticks instead of doing one open per
+// file in a single pass while the daemon is also walking the tree.
+const sniffBatchesPerScan = 10
+
+// sniffFolder fills in detected_type for rows that do not have one yet, and
+// returns how many it filled.
+//
+// Nothing here can fail the scan. A file that cannot be opened -- deleted
+// between the walk and the sniff, unreadable, a dangling symlink -- records
+// filetype.TypeUnknown and leaves the queue, because the alternative is a
+// permanently unreadable file being re-opened on every scan forever.
+func (s *Scanner) sniffFolder(ctx context.Context, folder catalog.FolderConfigRecord) int {
+	total := 0
+	for range sniffBatchesPerScan {
+		if ctx.Err() != nil {
+			return total
+		}
+		files, err := s.cat.FilesNeedingSniff(folder.FolderLabel, 0)
+		if err != nil {
+			s.logger.Warn("querying files needing content sniff",
+				"folder", folder.FolderLabel, "error", err)
+			return total
+		}
+		if len(files) == 0 {
+			return total
+		}
+
+		for i := range files {
+			if ctx.Err() != nil {
+				return total
+			}
+			f := &files[i]
+			abs := filepath.Join(folder.SyncthingPath, f.RelativePath)
+			detected, err := filetype.SniffFile(abs)
+			if err != nil {
+				s.logger.Debug("content sniff failed",
+					"folder", folder.FolderLabel, "path", f.RelativePath, "error", err)
+			}
+			if err := s.cat.SetDetectedType(f.ID, detected); err != nil {
+				s.logger.Warn("recording detected type",
+					"folder", folder.FolderLabel, "path", f.RelativePath, "error", err)
+				// The row stays queued. Returning stops this pass from
+				// spinning over the same unwritable batch ten times.
+				return total
+			}
+			total++
+		}
+	}
+	return total
 }
 
 // scanSkipSuffixes and scanSkipNames are design section 5.9's skip table.
@@ -240,15 +316,24 @@ func (s *Scanner) scanFolder(ctx context.Context, folder catalog.FolderConfigRec
 // into cold storage as files called "IMG_0031.jpg.coldstore-tmp".
 var (
 	scanSkipSuffixes = []string{
-		".tmp",           // conservative; a .tmp in a photo folder is not a photo
-		tmpSuffix,        // *.coldstore-tmp
-		supersededSuffix, // *.coldstore-superseded
+		".tmp",    // conservative; a .tmp in a photo folder is not a photo
+		tmpSuffix, // *.coldstore-tmp
 	}
 	scanSkipNames = []string{".stfolder", ".stignore", ".stversions"}
 )
 
 // skipScanEntry reports whether a file NAME must never be catalogued.
 func skipScanEntry(name string) bool {
+	// CONTAINS, not HasSuffix. asidePath appends ".2", ".3", ... to the
+	// suffix when an aside slot is already taken, so the second collision on
+	// one path produces "IMG_0031.jpg.coldstore-superseded.2" -- which a
+	// HasSuffix test does not match, and which was therefore catalogued as an
+	// ordinary photo, counted against the budget and eventually archived. The
+	// .stignore line the runbook asks for is `*.coldstore-superseded*` for
+	// exactly this reason; this is the same rule, applied here.
+	if strings.Contains(name, supersededSuffix) {
+		return true
+	}
 	for _, suffix := range scanSkipSuffixes {
 		if strings.HasSuffix(name, suffix) {
 			return true

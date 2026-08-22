@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -10,13 +11,62 @@ import (
 // ErrNoSuchJob is returned when a job id has no row.
 var ErrNoSuchJob = errors.New("no such job")
 
-const jobColumns = `id, action, folder_label, state, total, done, failed, error,
+// ErrPairSelectionChanged means a caller preflighted a closed pair selection,
+// but a pairing update added a member before the job transaction began.
+var ErrPairSelectionChanged = errors.New("pair selection changed after preflight")
+
+const jobColumns = `id, action, folder_label, state, total, done, failed, error, payload,
 	created_at, started_at, finished_at`
 
-// CreateJob inserts the job and its items in ONE transaction. Duplicate ids in
-// fileIDs collapse via the (job_id, file_id) primary key and total is set from
-// the count actually inserted. A scan job has total = 1 and no items.
+// CreateJob expands pair groups and inserts the job and its items in ONE
+// transaction. Duplicate ids collapse via the (job_id, file_id) primary key
+// and total is set from the count actually inserted. A scan job has total = 1
+// and no items.
 func (c *Catalog) CreateJob(action, folderLabel string, fileIDs []int64) (int64, error) {
+	return c.createJob(action, folderLabel, fileIDs, false)
+}
+
+// CreateRenameJob writes the one synthetic item and its restart payload in
+// the same statement. Rename jobs deliberately have no job_items rows: the
+// filesystem/catalog sequence is one idempotent operation, not N file moves.
+func (c *Catalog) CreateRenameJob(folderLabel, from, to string) (int64, error) {
+	payload, err := json.Marshal(RenamePayload{From: from, To: to})
+	if err != nil {
+		return 0, fmt.Errorf("encoding rename payload: %w", err)
+	}
+	res, err := c.db.Exec(`INSERT INTO jobs
+		(action, folder_label, total, payload, created_at)
+		VALUES (?, ?, 1, ?, ?)`, JobActionRename, folderLabel, string(payload), time.Now().Unix())
+	if err != nil {
+		return 0, fmt.Errorf("creating rename job: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("creating rename job: %w", err)
+	}
+	return id, nil
+}
+
+// DecodeRenamePayload validates the durable shape before a worker acts on it.
+func DecodeRenamePayload(raw string) (RenamePayload, error) {
+	var payload RenamePayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return payload, fmt.Errorf("invalid rename payload: %w", err)
+	}
+	if payload.From == "" || payload.To == "" {
+		return payload, errors.New("invalid rename payload: from and to are required")
+	}
+	return payload, nil
+}
+
+// CreatePreflightedMoveJob is CreateJob with a closure check for restore
+// selections whose bytes were already approved by the API. It never silently
+// inserts a companion which was absent from that budget preflight.
+func (c *Catalog) CreatePreflightedMoveJob(action, folderLabel string, fileIDs []int64) (int64, error) {
+	return c.createJob(action, folderLabel, fileIDs, true)
+}
+
+func (c *Catalog) createJob(action, folderLabel string, fileIDs []int64, requireClosed bool) (int64, error) {
 	switch action {
 	case JobActionRestore, JobActionArchive, JobActionScan:
 	default:
@@ -43,6 +93,17 @@ func (c *Catalog) CreateJob(action, folderLabel string, fileIDs []int64) (int64,
 	if action == JobActionScan {
 		total = 1
 	} else {
+		// Expansion belongs in the same transaction as job_items. A pairing
+		// write can never land between discovering a companion and committing
+		// the selection, which would enqueue half a Live Photo.
+		expanded, expandErr := expandPairGroups(tx, fileIDs)
+		if expandErr != nil {
+			return 0, fmt.Errorf("creating job items: %w", expandErr)
+		}
+		if requireClosed && !equalIDSets(fileIDs, expanded) {
+			return 0, ErrPairSelectionChanged
+		}
+		fileIDs = expanded
 		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO job_items (job_id, file_id) VALUES (?, ?)`)
 		if err != nil {
 			return 0, fmt.Errorf("creating job items: %w", err)
@@ -69,6 +130,25 @@ func (c *Catalog) CreateJob(action, folderLabel string, fileIDs []int64) (int64,
 		return 0, fmt.Errorf("creating job: commit: %w", err)
 	}
 	return jobID, nil
+}
+
+func equalIDSets(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[int64]struct{}, len(a))
+	for _, id := range a {
+		seen[id] = struct{}{}
+	}
+	if len(seen) != len(b) {
+		return false
+	}
+	for _, id := range b {
+		if _, ok := seen[id]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // NextPendingJob returns the lowest-id job that still has work, or nil.
@@ -152,9 +232,10 @@ func (c *Catalog) CompleteJobItem(jobID, fileID int64, errMsg string) error {
 // does that.
 func (c *Catalog) CompleteJobItemVirtual(jobID int64, errMsg string) error {
 	_, err := c.db.Exec(`
-		UPDATE jobs SET done = done + 1,
-			failed = failed + CASE WHEN ? = '' THEN 0 ELSE 1 END,
-			error = ?
+		UPDATE jobs SET
+			failed = failed + CASE WHEN done < total AND ? <> '' THEN 1 ELSE 0 END,
+			done = CASE WHEN done < total THEN done + 1 ELSE done END,
+			error = CASE WHEN done < total THEN ? ELSE error END
 		WHERE id = ?`, errMsg, errMsg, jobID)
 	return err
 }
@@ -347,7 +428,7 @@ func scanJob(s fileScanner) (*Job, error) {
 	var j Job
 	var startedAt, finishedAt sql.NullInt64
 	err := s.Scan(&j.ID, &j.Action, &j.FolderLabel, &j.State, &j.Total, &j.Done,
-		&j.FailedCount, &j.Error, &j.CreatedAt, &startedAt, &finishedAt)
+		&j.FailedCount, &j.Error, &j.Payload, &j.CreatedAt, &startedAt, &finishedAt)
 	if err != nil {
 		return nil, err
 	}

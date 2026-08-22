@@ -18,6 +18,7 @@ function baseRoutes(folder = aFolderConfig()) {
     { url: "/api/v1/folders", body: [folder] },
     { url: `/api/v1/folders/${folder.folder_label}/persistent`, body: [] },
     { url: "/api/v1/events", body: [] },
+    { url: "/api/v1/tags", body: [] },
   ];
 }
 
@@ -60,6 +61,37 @@ describe("ConfigPanel", () => {
     // folder on its first save.
     expect(put?.body).toEqual({ budget_bytes: 30_000_000_000 });
     expect(onChanged).toHaveBeenCalled();
+  });
+
+  it("should update a cosmetic display name without sending TOML-owned identity fields", async () => {
+    const folder = aFolderConfig();
+    stub = stubFetch([
+      ...baseRoutes(folder),
+      {
+        method: "PUT",
+        url: "/api/v1/folders/CameraRoll",
+        body: { ...folder, display_name: "Family Photos" },
+      },
+    ]);
+    renderWithToasts(
+      <ConfigPanel
+        status={aStatus()}
+        selectedFolder="CameraRoll"
+        onSelectFolder={() => {}}
+        onChanged={() => {}}
+      />,
+    );
+
+    const input = await screen.findByLabelText("Display name");
+    await userEvent.type(input, "Family Photos");
+    await userEvent.tab();
+
+    await waitFor(() =>
+      expect(stub!.calls.find((call) => call.method === "PUT")?.body).toEqual({
+        display_name: "Family Photos",
+      }),
+    );
+    expect(screen.getByText(/stable label CameraRoll/)).toBeInTheDocument();
   });
 
   it("should refuse a budget the server would reject, without asking it", async () => {

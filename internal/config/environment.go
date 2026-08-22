@@ -13,6 +13,18 @@ import (
 // (daemon imports config) and one shared string is not worth a third package.
 const stfolderMarker = ".stfolder"
 
+// writeProbePattern names the file probeWritable creates. It ends in
+// ".coldstore-tmp" on purpose: the probe runs inside every [[folders]].path,
+// which is a live Syncthing folder, and Syncthing's watcher sees the create
+// before the unlink. Every deployment is already told to put `*.coldstore-tmp`
+// in that folder's .stignore for the mover's temp siblings, and daemon's
+// skipScanEntry already refuses to catalogue the suffix, so reusing it means
+// the probe is covered by rules that exist rather than needing a third one
+// nobody was told about. (The daemon package owns the ".coldstore-tmp"
+// constant; config cannot import daemon, and one shared string is not worth a
+// third package -- same reason as stfolderMarker above.)
+const writeProbePattern = ".coldstore-writecheck-*.coldstore-tmp"
+
 // CheckEnvironment inspects the machine for the things Validate cannot know from
 // the file alone, and splits what it finds into two piles.
 //
@@ -52,10 +64,12 @@ func (c *Config) checkColdStorage() error {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("[storage] cold_storage_path %q does not exist. "+
-			"coldstore will not create it: on an unmounted pool that would silently write "+
+			"coldstore will not create it: on an unmounted volume that would silently write "+
 			"the archive and the catalog to the root filesystem. Create it first, e.g.\n"+
-			"    zfs create -o mountpoint=%s tank/coldstore   # or: mkdir -p %s\n"+
-			"    chown coldstore-user %s && chmod 700 %s", path, path, path, path, path)
+			"    mkdir -p %s   # then mount your archive volume there, see docs/deployment.md\n"+
+			"    chown SERVICEUSER %s && chmod 700 %s\n"+
+			"If it IS a mountpoint, the volume is not mounted: findmnt %s",
+			path, path, path, path, path)
 	}
 	if err != nil {
 		return fmt.Errorf("[storage] cold_storage_path %q is not readable: %w", path, err)
@@ -70,7 +84,44 @@ func (c *Config) checkColdStorage() error {
 			path, currentUserHint(), err,
 			writeFailureHint(err, "Chown it to the account in the unit's User= and check its mode."))
 	}
+
+	// Last, and only when asked for: everything above passes on an UNMOUNTED
+	// mountpoint, which is the one failure here that costs data outright.
+	if c.Storage.RequireMountpoint {
+		if err := requireMountpoint(path); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// requireMountpoint is the [storage] require_mountpoint check. See the field's
+// documentation in config.go for why the absence of the path is not the guard
+// it looks like.
+func requireMountpoint(path string) error {
+	state, err := DescribeMount(path)
+	if err != nil {
+		return fmt.Errorf("[storage] cannot determine whether cold_storage_path %q is a "+
+			"mount point, and require_mountpoint is set: %w", path, err)
+	}
+	if state.IsMountPoint {
+		return nil
+	}
+	return fmt.Errorf(`[storage] cold_storage_path %q is not a mount point, and require_mountpoint is set.
+
+The directory exists and is writable, which is exactly what an unmounted volume
+looks like: mount(8) needs the mountpoint directory to exist, so a volume that
+failed to mount leaves an empty writable stub behind on the root filesystem.
+
+Starting here would build a fresh catalog on the root filesystem -- losing the
+budgets and pins the real one holds -- and archive into it, while Syncthing
+propagated every one of those deletions to every device you own.
+
+    findmnt %s
+    systemctl status $(systemd-escape -p --suffix=mount %s)
+
+If cold storage really is meant to be a plain directory on an existing
+filesystem, remove require_mountpoint from [storage].`, path, path, path)
 }
 
 // checkFolder returns a warning string for a folder that is not ready yet, or an
@@ -142,7 +193,7 @@ func writeFailureHint(err error, ownershipFix string) string {
 // ACLs, read-only mounts and systemd's ProtectSystem= sandbox -- which is the most
 // likely reason a production deployment cannot write a path it appears to own.
 func probeWritable(dir string) error {
-	f, err := os.CreateTemp(dir, ".coldstore-writecheck-*")
+	f, err := os.CreateTemp(dir, writeProbePattern)
 	if err != nil {
 		return err
 	}
@@ -153,4 +204,70 @@ func probeWritable(dir string) error {
 
 func currentUserHint() string {
 	return fmt.Sprintf("uid %d", os.Getuid())
+}
+
+// MountState describes whether a path is the root of its own mounted
+// filesystem. It exists because that is the one thing --check most needs to
+// tell an owner about cold storage and could not.
+//
+// coldstore refuses to CREATE cold_storage_path, and the stated protection is
+// that an unmounted volume therefore leaves the daemon with nothing to write
+// to. That holds for a ZFS dataset with a native mountpoint=, which `zfs mount`
+// materialises itself. It does NOT hold for anything mounted from /etc/fstab:
+// mount(8) requires the mountpoint directory to exist, so an unmounted volume
+// leaves behind a real, empty, writable directory on the root filesystem that
+// passes every check in checkColdStorage. The daemon then builds a fresh
+// catalog and archives into the root filesystem while Syncthing propagates each
+// deletion to every device the owner has.
+//
+// Reporting is all this does. A plain directory on an existing filesystem is a
+// supported and documented layout -- it is what the tests and the demo use --
+// so "not a mount point" cannot be an error. It can be printed, which is enough
+// for an owner to notice it on the line above `preflight OK`.
+type MountState struct {
+	IsMountPoint bool
+	FSType       string
+}
+
+// fsTypeNames maps the statfs magic numbers worth naming. An unlisted
+// filesystem reports an empty FSType, which the caller simply omits.
+var fsTypeNames = map[int64]string{
+	0x9123683e: "btrfs",
+	0x2fc12fc1: "zfs",
+	0xef53:     "ext2/3/4",
+	0x58465342: "xfs",
+	0x01021994: "tmpfs",
+	0x6969:     "nfs",
+	0x2011bab0: "exfat",
+	0x4d44:     "vfat",
+	0x794c7630: "overlayfs",
+}
+
+// DescribeMount reports whether path is a mount point by comparing its device
+// id with its parent's -- the same test findmnt makes, and one that needs no
+// /proc/mounts parsing and no privileges.
+func DescribeMount(path string) (MountState, error) {
+	var state MountState
+
+	var self syscall.Stat_t
+	if err := syscall.Stat(path, &self); err != nil {
+		return state, err
+	}
+
+	parent := filepath.Dir(path)
+	if parent == path {
+		state.IsMountPoint = true // "/" is its own parent
+	} else {
+		var up syscall.Stat_t
+		if err := syscall.Stat(parent, &up); err != nil {
+			return state, err
+		}
+		state.IsMountPoint = self.Dev != up.Dev
+	}
+
+	var fs syscall.Statfs_t
+	if err := syscall.Statfs(path, &fs); err == nil {
+		state.FSType = fsTypeNames[int64(fs.Type)]
+	}
+	return state, nil
 }

@@ -12,9 +12,19 @@ A daemon that manages cold storage for Syncthing-synced folders. It monitors fol
 Key packages:
 - `internal/catalog/` -- SQLite-backed file catalog
 - `internal/daemon/` -- scanner, offloader, restorer, quota enforcement
-- `internal/api/` -- REST API server + embedded frontend
 - `internal/config/` -- TOML config parsing
+- `internal/api/` -- REST API server + embedded frontend
 - `internal/thumbnail/` -- thumbnail generation pipeline
+- `internal/filetype/` -- magic-number sniffing; the only way a file with no
+  extension is ever classified
+- `internal/epub/` -- EPUB container reader, shared by the cover thumbnailer and
+  the preview API
+
+External binaries: **ffmpeg** (HEIF/HEIC and video) and **poppler-utils**
+(`pdftocairo`, for PDF thumbnails). Both are runtime-only: the build needs
+neither, and `fresh-clone-build` deliberately installs neither. `pdftoppm` cannot
+write to stdout -- given `-` it creates a file called `-.jpg` -- so the PDF path
+uses `pdftocairo` and must keep doing so.
 
 ## Development
 
@@ -41,6 +51,22 @@ target or CI job -- if you need to, the stub was deleted. Any target that remove
 
 Copy `coldstore.toml.example` to `coldstore.toml` and edit. See `docs/` for detailed documentation.
 
+The current product designs are:
+
+- `docs/interface-refresh.md` — interface, preview and operational-status acceptance;
+- `docs/keymap-design.md` — keyboard grammar and interaction contract; and
+- `docs/tagging-design.md` — verified metadata findings plus the tagging, Live Photo and
+  rename plan; and
+- `docs/access-and-export-interview.md` — plain-language XMP guidance plus the decided
+  Tailscale owner-auth and deferred public-session record.
+
+The operational co-owner procedure is `onboarding.md`. It exposes only Coldstore HTTPS over
+Tailscale, contains no private identifiers, and does not authorize production changes.
+
+Schema numbers in design documents are assigned in landing order and are never reused after
+another branch ships them. Document preview owns migration 6; tagging and rename are planned
+as migrations 7 and 8.
+
 ## Testing
 
 ```bash
@@ -66,6 +92,15 @@ values, a wedged folder, a disabled one, one no longer declared in `coldstore.to
 conflicted file and thumbnail failures. Without it half the UI is unreachable, which is
 how it went unexercised for as long as it did. It refuses to delete a `-root` it did not
 create (marker file `.coldstore-demo`).
+
+Its documents are REAL files -- a hand-assembled PDF with a correct xref table, a
+conforming EPUB whose OPF sits in `OEBPS/`, one deliberately corrupt PDF so the
+failure glyph stays reachable, and one file with no extension at all. They used to
+be counting-byte filler with a `.pdf` name on it, which was fine until the
+generator learned PDF and then made the Playwright suite go red. It also sniffs
+each file the way the scanner does: the Documents folder is seeded DISABLED, so no
+scan ever reaches it, and without that its extension-less file would stay
+unclassified and unpreviewable.
 
 The live tier (`tests/e2e/live_*.go`, tag `e2e_live` **alone**) drives the containerised
 daemon over its published port and two paired Syncthing devices over their REST APIs. It

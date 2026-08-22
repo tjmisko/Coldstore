@@ -41,6 +41,12 @@ coldstore/
       catalog.go                 # SQLite operations
       migrations.go              # Schema
       models.go                  # FileRecord, FolderConfig structs
+      readonly.go                # Immutable/query-only diagnostic open; never migrates
+      diagnostics.go             # Read-only derived-data health aggregates
+    diagnostic/
+      report.go                  # Offline health model and severity/exit policy
+      render.go                  # Human and redacted JSON renderers
+      storage.go                 # Best-effort redacted btrfs membership probe
     thumbnail/thumbnail.go       # Image/video thumbnail generation
     api/
       server.go                  # HTTP server, middleware, static serving
@@ -65,6 +71,13 @@ coldstore/
   coldstore.service              # systemd unit
   Makefile                       # build, dev, install, test
 ```
+
+`coldstore --status` branches before normal environment preflight. It uses an
+inspection-only config load (no service credential environment and no write probes),
+checks the on-disk schema before schema-dependent queries, and opens compatible catalogs
+immutable/query-only. A non-empty WAL is refused rather than ignored or checkpointed.
+Diagnostic wire types intentionally omit credentials, Syncthing IDs, event details/paths
+and job error strings.
 
 ## Storage Infrastructure
 
@@ -101,19 +114,26 @@ Original relative paths are preserved exactly, so restore = move back to `{synct
 
 **`folder_configs`** -- per-folder settings, and the runtime source of truth for
 both folder policy and folder paths:
-- `folder_label`, `syncthing_id`, `syncthing_path` -- refreshed from `coldstore.toml`
-  by startup reconciliation
+- `folder_label` -- permanent identity used by file rows, policy and archive paths.
+  Reconciliation rejects a cleaned path already catalogued under a different label,
+  including rows no longer present in TOML
+- `syncthing_id`, `syncthing_path` -- refreshed from `coldstore.toml` by startup
+  reconciliation; the path may change while `folder_label` stays unchanged
 - `budget_bytes`, `grace_minutes`, `enabled` -- owned by the UI; TOML only seeds them
   when the row is created
 - `present_in_toml` -- 0 once a folder stops being declared. The row is kept, its files
   stay browsable, and it drops out of scanning and enforcement
 - `last_enforced_at`, `wedge_warned_at` -- enforcement bookkeeping
 
+`folder_label` is deliberately not a cosmetic name. The metadata schema's
+`display_name` is the cosmetic alternative once that field is available; versions that
+do not expose it have no supported label-rename operation.
+
 **`persistent_paths`** -- glob patterns for never-offload rules per folder
 
 **`events`** -- audit log, readable through `GET /api/v1/events`. `class=warning`
-excludes the routine per-file `archive`, `restore` and `folder_seeded` rows, which a
-single enforcement pass writes hundreds of.
+excludes routine `archive`, `restore`, `folder_seeded` and `scan_completed` rows;
+failed and incomplete scans remain warnings.
 
 ## API Endpoints
 
@@ -122,6 +142,9 @@ GET    /api/v1/files?folder=X&status=Y&ext=Z&q=search&pinned=1&pin_source=user
                      &ids=1,2,3&sort=mtime&offset=0&limit=50
 GET    /api/v1/files/ids?folder=X&status=Y&...   # {ids, total, truncated}, capped at 20000
 GET    /api/v1/files/{id}/download
+GET    /api/v1/files/{id}/preview                # inline PDF/image/video/text; Range capable
+GET    /api/v1/files/{id}/epub                   # ordered title/spine metadata
+GET    /api/v1/files/{id}/epub/{resource...}     # allowlisted, size-capped book resources
 POST   /api/v1/files/{id}/restore
 POST   /api/v1/files/{id}/archive
 POST   /api/v1/files/{id}/pin
@@ -201,19 +224,33 @@ folder writes one `bulk_eviction` event, whatever caused the pressure.
 
 ## Thumbnail Pipeline
 
-The supported set is defined by `imageExts`, `heifExts` and `videoExts` in
-`internal/thumbnail/thumbnail.go`; `CanThumbnail(ext)` is the single source of truth.
+Categories are registered in ONE place, `extCategories` in
+`internal/thumbnail/thumbnail.go`. `CanThumbnail`, `SupportedExtensions` and
+`Generate`'s dispatch switch all read from it, and the daemon asks
+`SupportedExtensions()` for the list the queue selects on rather than keeping a
+copy -- a second hand-maintained list is how a format ends up supported by the
+generator and never selected by the queue.
 
-- **Images** (`.jpg`, `.jpeg`, `.png`, `.webp`): `imaging` library, 400px longest edge, JPEG q80. Pure Go, no external binary.
+- **Images** (`.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`): `imaging` library, 400px longest edge, JPEG q80. Pure Go, no external binary.
 - **HEIF/HEIC** (`.heif`, `.heic`): `ffmpeg` decodes to PNG on stdout, then the same Go resize path. Requires `ffmpeg` on `PATH`.
 - **Videos** (`.mp4`, `.mov`, `.avi`, `.mkv`, `.webm`): `ffmpeg -vf "thumbnail,scale=400:-1" -frames:v 1`.
-- **Everything else, PDFs included**: no thumbnail. The UI shows a file-type icon.
+- **PDFs** (`.pdf`): `pdftocairo -jpeg -singlefile -scale-to 400 -f N -l N in.pdf -`, then the same Go resize path. Requires `poppler-utils` on `PATH`. **Not `pdftoppm`** -- it cannot write to stdout: given `-` it creates a file called `-.jpg`.
+- **EPUBs** (`.epub`): the declared cover, extracted over `archive/zip` and `encoding/xml` in `internal/epub`. Pure Go, no external binary.
+- **Everything else**: no thumbnail. The UI shows a file-type icon.
 
-**PDFs are not thumbnailed.** Earlier revisions of this document described a
-`pdftoppm -jpeg -f 1 -singlefile -scale-to 400` path for them. That was never
-implemented -- there is no `pdftoppm` call anywhere in the tree, `poppler-utils` is not
-a dependency, and `internal/thumbnail/thumbnail_test.go` asserts
-`CanThumbnail(".pdf") == false`. Books folders will show icons, not page previews.
+**First page with content.** The PDF path renders page 1, measures ink coverage
+on a stride with a 3% border margin ignored, and tries pages 2 and 3 if the page
+is effectively blank -- then keeps page 1 regardless. All three renders share one
+deadline. A document of blank pages is a legitimate document and never fails over
+this. Coverage rather than standard deviation: the two disagree on gradient
+covers, and coverage is the one that behaves on scans.
+
+**Content sniffing.** `extension` and `mime_type` both come from the filename, so
+neither can classify a file that has no extension. `files.detected_type` (schema
+6) holds what a bounded magic-number read of the file's leading bytes says it is,
+filled in by the scanner on insert and whenever mtime or size changes. The
+thumbnail queue matches on `extension IN (...) OR detected_type IN (...)`, which
+is the only way a bookmark export called `reading` is ever reached.
 
 ## Key Edge Cases
 

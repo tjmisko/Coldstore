@@ -6,24 +6,24 @@ import { ToastContext, type Toast, type ToastKind } from "../lib/toast";
  *  action reported rather than on a spy that proves only that something was
  *  called. */
 export interface RecordedToasts {
-  all: Omit<Toast, "id">[];
+  all: (Omit<Toast, "id"> & { durationMs?: number })[];
   messages(): string[];
-  last(): Omit<Toast, "id"> | undefined;
+  last(): (Omit<Toast, "id"> & { durationMs?: number }) | undefined;
 }
 
 export function renderWithToasts(
   ui: ReactElement,
   options?: Omit<RenderOptions, "wrapper">,
 ): ReturnType<typeof render> & { toasts: RecordedToasts } {
-  const all: Omit<Toast, "id">[] = [];
+  const all: (Omit<Toast, "id"> & { durationMs?: number })[] = [];
   const toasts: RecordedToasts = {
     all,
     messages: () => all.map((t) => t.message),
     last: () => all[all.length - 1],
   };
 
-  const show = (kind: ToastKind, message: string) => {
-    all.push({ kind, message });
+  const show = (kind: ToastKind, message: string, durationMs?: number) => {
+    all.push({ kind, message, durationMs });
   };
 
   const wrapper = ({ children }: { children: ReactNode }) => (

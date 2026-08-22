@@ -3053,6 +3053,12 @@ func NewServer(d Deps) *Server
 
 ## 7. Frontend plan
 
+> **Historical section.** This records the implementation plan used to build
+> the first control-plane frontend; it is not the current build or architecture
+> guide. Use the [current Makefile](../Makefile), the
+> [Build Pipeline and Testing Guide](build-and-test.md), and
+> [Frontend Architecture Guide](react-guide.md) for present behavior.
+
 Stack as-is: React 19 with StrictMode on, Vite, Tailwind, no router, no state library. Everything
 below stays inside that.
 
@@ -3112,8 +3118,14 @@ useEffect(() => {
 State is only set inside the async continuation, which is what the rule actually checks, and the
 cancelled flag handles StrictMode's double-mount. **No `eslint-disable`.** Establish this once,
 before writing `useJob` and friends, or every new hook adds another error to an already-red lint.
-Note that `web/node_modules` is not installed in the worktree — `npm run lint` there fails with
-`eslint: command not found`, which is easy to mistake for a clean lint. Run `npm ci` first.
+
+> **Historical dependency note (superseded).** `web/node_modules` happened to
+> be absent from that implementation worktree, so the original instruction was
+> to run `npm ci` before invoking npm scripts directly. Current Make targets that
+> build or test the frontend run the dependency prerequisite, whose lockfile
+> stamp also refreshes a stale install. Follow the
+> [current target table](build-and-test.md#makefile-targets); a direct
+> `npm run lint` still assumes dependencies have already been installed.
 
 ### 7.1 `useSelection` — new hook
 
@@ -3395,8 +3407,14 @@ header. Add that header to `vite.config.ts` behind an env var.
 
 ## 8. Implementation order
 
+> **Historical section.** The steps and per-step proof commands below record
+> how this design landed. They are not the current verification matrix. Use the
+> [current Makefile](../Makefile) and
+> [Build Pipeline and Testing Guide](build-and-test.md) for current build and
+> test commands.
+
 Each step is independently landable and leaves the **whole module** green. "Green" is defined once,
-here, and every step's proof includes it:
+here for this historical sequence, and every step's proof included it:
 
 ```
 go build ./... && go vet ./... && go test ./... && (cd web && npm ci && npm run build)
@@ -3421,12 +3439,19 @@ Steps 1–3 are prerequisites for everything; do not reorder them.
 
 ---
 
-**Step 0 — Unbreak the build and CI.**
+**Step 0 — Unbreak the build and CI.** *(historical; completed and superseded)*
 Fix `tests/e2e/helpers_test.go:145` to pass `env.scanner` to `api.NewServer` (5 args). Add
 `mkdir -p internal/api/dist && touch internal/api/dist/.gitkeep` to the unit and e2e CI jobs, which
 the Makefile does and the workflow does not, so `//go:embed all:dist` fails on a clean checkout. Add
 a `COPY coldstore.toml.example /app/coldstore.toml` to `docker/Dockerfile.test`, which
 `docker/compose.test.yml` invokes with `--config /app/coldstore.toml`.
+
+> **The `mkdir`/`touch` instruction above is historical and must not be
+> reintroduced.** `internal/api/dist/.gitkeep` is now tracked, so a bare checkout
+> already satisfies `//go:embed all:dist`. `make frontend` and `make clean`
+> restore the stub after replacing build output. See
+> [The `dist/` Directory Problem](build-and-test.md#the-dist-directory-problem).
+
 *Proof:* green as defined above, locally and on all CI jobs.
 
 **Step 1 — Migration runner, no new columns.** *(schemaVersion 1)*
@@ -3660,9 +3685,10 @@ enabled and one warning is logged.
 `lib/format.ts` (SI, one copy), `lib/api.ts`, the compliant hook shape retrofitted onto `useStatus`,
 `useFolders`, `usePersistentPaths` and `useFiles`, the `App.tsx` lint fix, the error banner, and the
 `ToastProvider`.
-*Proof:* `npm ci && npm run lint` reports **zero errors and zero warnings**, and `npm run build`
-succeeds. Manually: stop the daemon, load the UI, see "coldstore API unreachable" instead of a blank
-pane.
+*Landing proof (historical):* `npm ci && npm run lint` reported **zero errors and zero warnings**,
+and `npm run build` succeeded. Current builds use the Makefile dependency prerequisite described in
+[the build guide](build-and-test.md#build-pipeline-walkthrough). Manually: stop the daemon, load the
+UI, see "coldstore API unreachable" instead of a blank pane.
 
 **Step 12 — Frontend control plane, and the last deletions.** *(landed; see §7.9 for what was
 deliberately not built, and note the proof below is now two suites: `make test-web` — vitest and

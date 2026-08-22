@@ -14,12 +14,46 @@
 # Validate a config without starting the daemon:
 #
 #     coldstore --config /etc/coldstore/coldstore.toml --check
+#
+# Inspect archive health without starting the daemon or writing to the catalog:
+#
+#     coldstore --config /etc/coldstore/coldstore.toml --status
+#     coldstore --config /etc/coldstore/coldstore.toml --status --json
 
 [storage]
 # Must already exist, be a directory, and be writable by the user in the systemd
 # unit. coldstore deliberately does NOT create it: on a pool that has not mounted
 # yet, creating it would silently write the whole archive to the root filesystem.
+#
+# THAT PROTECTION IS NOT A MOUNT CHECK. mount(8) requires the mountpoint
+# directory to exist, so an fstab volume (btrfs, ext4, xfs, a legacy ZFS
+# dataset) that failed to mount leaves an empty writable directory here on the
+# ROOT filesystem, and every check coldstore makes passes. The archive then goes
+# to root while Syncthing propagates each deletion to every device you own.
+#
+# The guards are require_mountpoint below and RequiresMountsFor= in the systemd
+# unit. Set BOTH: RequiresMountsFor= does nothing for a daemon started by hand
+# or for a volume unmounted after boot, and require_mountpoint cannot stop
+# systemd launching a daemon that will then exit 1 once a minute forever. Only a
+# ZFS dataset with a native mountpoint= is self-protecting, because zfs mount
+# creates the directory itself.
+#
+# This is also the tier that needs redundancy: once a file is offloaded, the
+# copy under this path is the ONLY copy that still exists anywhere. The
+# Syncthing folders are replicated to every device; this is replicated to
+# nothing. See docs/deployment.md, "Cold storage filesystem".
 cold_storage_path = "/srv/coldstore"
+
+# Refuse to start, and refuse every offload, unless cold_storage_path is its own
+# mount point. TURN THIS ON if cold storage is a separate volume -- which it is
+# in every deployment the runbook describes.
+#
+# It is off by default only because a plain directory on an existing filesystem
+# is a supported layout, and is what the tests and `make demo` use. Restore is
+# deliberately not covered: it reads FROM cold storage, so an unmounted volume
+# fails the open and nothing is lost.
+#
+# require_mountpoint = true
 
 [daemon]
 # WARNING: 0 means "use the default", not 0. Go cannot tell an explicit `0` from an
@@ -29,6 +63,13 @@ cold_storage_path = "/srv/coldstore"
 # See docs/deployment.md, "Zero means default, not zero".
 scan_interval_minutes = 15
 catalog_sync_interval_minutes = 30
+# Concurrent thumbnail decoders. The Go image path decodes a whole frame into
+# memory -- a 48 MP JPEG is ~190 MB of RGBA while being resized -- so on a small
+# box with little or no swap, use 1. See docs/deployment.md, "What actually gets
+# a thumbnail": the allowlist is jpg/png/webp/gif, heic/heif, common video, pdf
+# and epub. PDFs need poppler-utils installed (`pdftocairo`); everything else
+# needs only ffmpeg, and epub needs nothing. A file with NO extension is reached
+# by its content: the scanner sniffs each new or changed file once.
 thumbnail_workers = 2
 grace_period_minutes = 30
 
@@ -52,28 +93,38 @@ grace_period_minutes = 30
 #         ssh -N -L 8090:127.0.0.1:8090 you@this-host
 #     then open http://127.0.0.1:8090 on your laptop.
 #
-# To reach the UI from a phone or laptop on your LAN, do BOTH of these:
+# Three authentication shapes are supported:
 #
-#   1. Set listen_addr to this machine's LAN address and port. Use the actual
-#      interface address, e.g. "192.168.1.10:8090" -- NOT "0.0.0.0:8090", which
-#      also listens on any VPN, container bridge or tethered interface the box
-#      may grow later.
-#   2. Set a username and password (see below).
+#   * Local/SSH tunnel: keep loopback and omit auth_mode and credentials.
+#   * Basic Auth: set both credentials below. An explicit auth_mode = "basic" is
+#     accepted, but omitted auth_mode still infers Basic Auth for compatibility.
+#   * Tailscale Serve identity: keep loopback, set auth_mode = "tailscale" and
+#     list the exact allowed Tailscale logins. Reach this listener only through a
+#     private Tailscale Serve HTTPS proxy; never through Funnel.
 #
-# coldstore REFUSES TO START if listen_addr is anything other than loopback and
-# either credential is empty. There is no flag to skip that check. The two safe
-# shapes are cheap, and an unauthenticated delete button on a home LAN is not a
-# tradeoff anyone makes on purpose.
+# Tailscale identity mode REFUSES a non-loopback listener. Serve strips forged
+# Tailscale-User-Login headers and inserts its authenticated identity, but a
+# direct client could forge that header if this raw backend were network-visible.
 # ---------------------------------------------------------------------------
 listen_addr = "127.0.0.1:8090"
 
-# HTTP Basic Auth. REQUIRED for any non-loopback listen_addr; optional (and off)
-# on loopback. Both keys must be set or neither -- half a credential disables auth
-# silently, so coldstore refuses that too.
+# Selected private HTTPS shape. Replace the examples with exact login names from
+# the Tailscale admin console; do not put real account identifiers in this tracked
+# example. Requests with a missing or unlisted Tailscale-User-Login are rejected.
+# Browser mutations also must be same-origin, and mutation logs name the admitted
+# Tailscale login. Tagged source devices do not receive Serve identity headers.
+#
+# auth_mode = "tailscale"
+# tailscale_allowed_users = ["owner@example.com", "co-owner@example.com"]
+#
+# Do not leave Basic Auth credentials in the file or service environment when
+# auth_mode = "tailscale". Coldstore rejects that ambiguous configuration.
+#
+# HTTP Basic Auth. REQUIRED for a non-loopback listener and optional on loopback.
+# Both keys must be set or neither; half a credential is a startup error.
 #
 # Basic auth is cleartext. That is an accepted tradeoff for a LAN-only daemon:
-# there is no TLS, no reverse proxy and no session layer here by design. Do not
-# port-forward this to the internet.
+# do not port-forward this to the internet.
 #
 # PREFER THE ENVIRONMENT over the keys below, so your password is not in the file
 # you are most likely to paste into a bug report or a chat window:
@@ -86,6 +137,7 @@ listen_addr = "127.0.0.1:8090"
 # The shipped unit already has EnvironmentFile=-/etc/coldstore/coldstore.env.
 # COLDSTORE_USERNAME and COLDSTORE_PASSWORD override anything set here.
 #
+# auth_mode = "basic"
 # username = "coldstore"
 # password = "put-a-long-random-password-here"
 
@@ -97,9 +149,13 @@ api_url = "http://127.0.0.1:8384"
 api_key = ""
 
 # A [[folders]] block DECLARES a folder. Its label and path are infrastructure:
-# adding a folder means editing this file and restarting the daemon, and the
-# label is the key everything else hangs off, so it must be unique and the path
-# must be absolute.
+# adding a folder means editing this file and restarting the daemon. The label
+# is the permanent identifier that files, policy and archive paths hang off.
+# Once coldstore has catalogued it, NEVER edit the label to rename the folder;
+# startup and --check reject another label claiming the catalogued path. A path
+# may move while its label stays unchanged. `display_name` is the cosmetic name
+# alternative in versions that expose it; until then, leave the label unchanged.
+# Labels must be unique and paths must be absolute.
 #
 # EVERY MANAGED FOLDER MUST BE "Send & Receive" IN SYNCTHING. coldstore frees
 # space by deleting files from this folder and letting Syncthing propagate the

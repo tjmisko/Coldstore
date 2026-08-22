@@ -160,14 +160,13 @@ func TestShouldServeWithoutChallengeWhenNoCredentialsAreConfigured(t *testing.T)
 	}
 }
 
-func TestShouldServeWithoutChallengeWhenOnlyOneCredentialIsConfigured(t *testing.T) {
-	// This is the combination config.ValidateServerBinding rejects at load. The
-	// test pins the reason: a half-configured credential leaves the mux bare, so
-	// the config layer -- not this one -- has to be what stops it.
+func TestShouldFailClosedWhenOnlyOneCredentialReachesTheHandler(t *testing.T) {
+	// Config validation rejects this before startup. The handler also fails
+	// closed so a future alternate construction path cannot expose the mux.
 	srv, _, _ := setupTestServer(t)
 	srv.cfg.Server.Username = authUser
 
-	if w := do(t, srv, nil); w.Code != http.StatusOK {
-		t.Fatalf("status = %d; Handler() is expected to fall back to the bare mux", w.Code)
+	if w := do(t, srv, nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 for invalid authentication configuration", w.Code)
 	}
 }

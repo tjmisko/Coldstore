@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { applyFilter, fileByName, openFolder, openView } from "./helpers";
+import { applyFilter, fileByName, openFolder, openView, selectRow } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -99,7 +99,7 @@ test("restores a selection as a job and repaints the rows as synced and pinned",
   expect(first.status).toBe("archived");
 
   for (const file of [first, second]) {
-    await page.locator(`tr[data-file-id="${file.id}"] input[type=checkbox]`).click();
+    await selectRow(page, file.id);
   }
   await expect(page.locator("[data-selection-count]")).toHaveText("2 selected");
 
@@ -124,7 +124,7 @@ test("refuses a restore that would blow the budget and says what it would cost",
   const rows = page.locator("tr[data-file-id]");
   await expect(rows.first()).toBeVisible();
 
-  await rows.first().locator("input[type=checkbox]").click();
+  await rows.first().locator("label").first().click();
   await page.locator("[data-selection-bar]").getByRole("button", { name: "Restore", exact: true }).click();
 
   const dialog = page.getByRole("dialog");
@@ -222,4 +222,60 @@ test("shows warning-class activity for the selected folder", async ({ page }) =>
   // One enforcement pass writes hundreds of archive rows; without the class
   // filter the wedge warning would never appear in the last ten.
   await expect(activity).not.toContainText("archive\n");
+});
+
+test.describe("on a phone-sized viewport", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("does not park the sidebar toggle on top of the folder name", async ({ page }) => {
+    // The toggle is `fixed top-3 left-3 md:hidden` and the heading had no left
+    // inset below that breakpoint, so "CameraRoll" rendered as "meraRoll".
+    await page.locator('[data-folder-nav="CameraRoll"]').click();
+
+    const toggle = page.getByRole("button", { name: "Toggle sidebar" });
+    const heading = page.getByRole("heading", { name: "CameraRoll", level: 2 });
+    await expect(heading).toBeVisible();
+
+    const toggleBox = await toggle.boundingBox();
+    const headingBox = await heading.boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(headingBox).not.toBeNull();
+    expect(headingBox!.x).toBeGreaterThanOrEqual(toggleBox!.x + toggleBox!.width);
+  });
+
+  test("should let a touch device select a photo when nothing is selected yet", async ({ page }) => {
+    // The tile checkbox used to be `opacity-0 group-hover:opacity-100`. A phone
+    // has no hover, so it never appeared -- and the `anySelected` escape hatch
+    // that also reveals it could not be reached, because reaching it required
+    // selecting something first. The gallery's entire multi-select feature was
+    // dead on the device the photos are browsed from.
+    await page.locator('[data-folder-nav="CameraRoll"]').click();
+    const tile = page.locator("[data-file-id]").first();
+    await expect(tile).toBeVisible();
+
+    const box = tile.locator('input[type="checkbox"]');
+    const opacity = await box.evaluate((el) => {
+      const label = el.closest("label")!;
+      return window.getComputedStyle(label).opacity;
+    });
+    expect(Number(opacity)).toBeGreaterThan(0.25);
+
+    // And it actually selects, with no hover anywhere in this test. The tap
+    // lands on the label, which is what a thumb hits -- the input itself is
+    // sr-only so that the box can be drawn at a size a thumb can find.
+    await tile.locator("label").first().click();
+    await expect(box).toBeChecked();
+    await expect(page.locator("[data-selection-count]")).toContainText("1 selected");
+  });
+
+  test("should give the tile checkbox a touch-sized hit target", async ({ page }) => {
+    await page.locator('[data-folder-nav="CameraRoll"]').click();
+    const label = page.locator("[data-file-id]").first().locator("label").first();
+
+    // The native 13px box was unhittable with a thumb. 36px is the padded label.
+    const box = await label.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(32);
+    expect(box!.height).toBeGreaterThanOrEqual(32);
+  });
 });

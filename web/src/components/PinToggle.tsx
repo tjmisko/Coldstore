@@ -29,18 +29,29 @@ export function PinToggle({ file, onPin, compact = false }: PinToggleProps) {
         e.stopPropagation();
         onPin(!file.pinned);
       }}
-      className={`rounded ${compact ? "p-1 bg-black/50" : "p-1.5 hover:bg-neutral-700"} ${
+      className={`rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
+        compact ? "p-1.5 bg-ground/55 backdrop-blur-[2px]" : "p-1.5 hover:bg-raised-hover"
+      } ${
         file.pinned
-          ? file.pin_source === "restore"
-            ? "text-sky-300"
-            : "text-indigo-300"
-          : `text-neutral-500 hover:text-neutral-200 ${compact ? "opacity-0 group-hover:opacity-100 focus:opacity-100" : ""}`
+          ? "text-held"
+          : // An unpinned pin stays out of the way on a pointer device, but a
+            // touch device has no hover to reveal it with -- the same defect
+            // that made gallery selection unreachable on a phone. The media
+            // query is what keeps the photo clean on a desktop without
+            // stranding the control on a phone.
+            `text-ink-faint hover:text-ink ${compact ? "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-70" : ""}`
       }`}
     >
       <svg
         className="w-4 h-4"
         viewBox="0 0 24 24"
-        fill={file.pinned ? "currentColor" : "none"}
+        // Both kinds of pin wear the held hue, because both mean the same
+        // thing: this file is being kept off the array. They differ by fill,
+        // not by shade -- a solid pin is one the owner pressed, an outlined one
+        // is a pin coldstore added on restore. Opacity alone was not a legible
+        // difference, and two separate hues (the old sky/indigo pair) implied
+        // two meanings where there is one.
+        fill={file.pinned && file.pin_source !== "restore" ? "currentColor" : "none"}
         stroke="currentColor"
         strokeWidth={1.8}
         aria-hidden="true"

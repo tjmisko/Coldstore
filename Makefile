@@ -1,4 +1,4 @@
-.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend
+.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend icons
 
 BINARY := coldstore
 BUILD_DIR := ./cmd/coldstore
@@ -12,9 +12,23 @@ BUILD_DIR := ./cmd/coldstore
 # one documented build command working on a tree that has never been built.
 # It is skipped when node_modules already exists, so an incremental build is
 # still just vite.
-deps:
-	cd web && { [ -d node_modules ] || npm ci; }
+deps: web/node_modules/.package-lock.json
 	@$(MAKE) --no-print-directory node-modules-boundary
+
+# npm writes .package-lock.json inside node_modules to describe the tree it
+# actually installed, so it is the honest stamp for "these deps are current".
+#
+# The previous guard was `[ -d node_modules ] || npm ci`, which only ever fired
+# on a tree that had never been built. A checkout that HAD been built and then
+# pulled new dependencies kept its old node_modules forever: `make test-web`
+# died with `vitest: command not found` months after vitest was added, and
+# `make frontend` was worse -- it succeeded, and shipped a bundle built against
+# a dependency tree nobody could name. CI never sees this, because CI always
+# starts from a clean clone; only a long-lived working copy hits it, which is
+# every machine that actually builds a release.
+web/node_modules/.package-lock.json: web/package-lock.json
+	cd web && npm ci
+	@touch $@
 
 # `go build ./...` walks into web/node_modules, and npm packages do ship Go
 # source -- eslint pulls in `flatted`, which carries a golang/ directory, so a
@@ -28,12 +42,22 @@ node-modules-boundary:
 
 frontend: deps
 	cd web && npm run build
-	rm -rf internal/api/dist
-	cp -r web/dist internal/api/dist
+	mkdir -p internal/api/dist
+	find internal/api/dist -mindepth 1 -delete
+	cp -r web/dist/. internal/api/dist/
 	touch internal/api/dist/.gitkeep
 
 build: frontend
 	go build -o $(BINARY) $(BUILD_DIR)
+
+# Regenerates the raster app icons from the SVG sources in web/icons/. The PNGs
+# are committed, so this is a manual step after editing the mark -- ImageMagick
+# is NOT a build dependency and no other target depends on this one.
+icons:
+	magick -background none web/icons/app-icon.svg -resize 180x180 png:web/public/apple-touch-icon.png
+	magick -background none web/icons/app-icon.svg -resize 192x192 png:web/public/icon-192.png
+	magick -background none web/icons/app-icon.svg -resize 512x512 png:web/public/icon-512.png
+	magick -background none web/icons/app-icon-maskable.svg -resize 512x512 png:web/public/icon-maskable-512.png
 
 # The Go binary alone, with whatever is currently in internal/api/dist. This is
 # what docker/Dockerfile.test copies; the live suite asserts nothing about the
@@ -102,7 +126,7 @@ demo: binary
 
 clean:
 	rm -f $(BINARY)
-	rm -rf internal/api/dist
+	find internal/api/dist -mindepth 1 -delete
 	mkdir -p internal/api/dist
 	touch internal/api/dist/.gitkeep
 

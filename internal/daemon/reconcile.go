@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
 
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
@@ -27,18 +28,17 @@ import (
 // policy table must not start enforcing against whatever happens to be in the
 // database.
 func ReconcileFolders(cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) error {
+	identities, err := cat.ListFolderIdentities()
+	if err != nil {
+		return fmt.Errorf("listing folder identities before reconciliation: %w", err)
+	}
+	if err := ValidateFolderIdentityChanges(cfg, identities); err != nil {
+		return err
+	}
+
 	declared := make([]string, 0, len(cfg.Folders))
 
 	for _, f := range cfg.Folders {
-		if f.Label == "" || f.Path == "" {
-			return fmt.Errorf("folder declaration missing label or path (label %q, path %q)",
-				f.Label, f.Path)
-		}
-		if f.BudgetBytes <= 0 {
-			return fmt.Errorf("folder %q has a non-positive budget (%d bytes)",
-				f.Label, f.BudgetBytes)
-		}
-
 		// Already defaulted to 30 by config.setDefaults.
 		seedGrace := cfg.Daemon.GracePeriodMinutes
 
@@ -92,5 +92,45 @@ func ReconcileFolders(cfg *config.Config, cat *catalog.Catalog, logger *slog.Log
 			"folder", fc.FolderLabel, "path", fc.SyncthingPath)
 	}
 
+	return nil
+}
+
+// ValidateFolderIdentityChanges rejects a TOML declaration that assigns an
+// already-catalogued path to a different label. Labels key file rows, archive
+// paths, policy and persistent globs, so changing one is not a cosmetic rename:
+// it creates a second folder while stranding everything under the original.
+//
+// Both sides are cleaned before comparison so a trailing slash or a path such
+// as /srv/sync/old/../Photos cannot bypass the invariant. A path move under the
+// same label remains valid, as does removing a folder from TOML; removed
+// catalog rows still reserve their identity in case they are later restored.
+func ValidateFolderIdentityChanges(cfg *config.Config, identities []catalog.FolderIdentity) error {
+	// Validate the entire declaration set before reconciliation writes its
+	// first row. Config.Load already enforces these basics in production, but
+	// keeping the boundary self-contained prevents partial writes from direct
+	// callers and tests.
+	for _, f := range cfg.Folders {
+		if f.Label == "" || f.Path == "" {
+			return fmt.Errorf("folder declaration missing label or path (label %q, path %q)",
+				f.Label, f.Path)
+		}
+		if f.BudgetBytes <= 0 {
+			return fmt.Errorf("folder %q has a non-positive budget (%d bytes)",
+				f.Label, f.BudgetBytes)
+		}
+	}
+
+	for _, f := range cfg.Folders {
+		declaredPath := filepath.Clean(f.Path)
+		for _, identity := range identities {
+			if identity.FolderLabel == f.Label || filepath.Clean(identity.SyncthingPath) != declaredPath {
+				continue
+			}
+			return fmt.Errorf("folder %q declares path %q, but that path is already catalogued under label %q; "+
+				"folder labels are permanent identifiers. Restore label %q in coldstore.toml, or use a different path; "+
+				"display_name is the cosmetic alternative when this version exposes it",
+				f.Label, declaredPath, identity.FolderLabel, identity.FolderLabel)
+		}
+	}
 	return nil
 }

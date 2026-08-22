@@ -60,12 +60,42 @@ func NewServer(d Deps) *Server {
 }
 
 func (s *Server) Handler() http.Handler {
-	if s.cfg.Server.Username != "" && s.cfg.Server.Password != "" {
-		return s.basicAuth(s.mux)
+	next := s.auditMutations(s.mux)
+	switch s.cfg.Server.AuthenticationMode() {
+	case config.AuthModeBasic:
+		if s.cfg.Server.Username == "" || s.cfg.Server.Password == "" ||
+			len(s.cfg.Server.TailscaleAllowedUsers) != 0 {
+			return invalidAuthConfiguration()
+		}
+		return s.basicAuth(next)
+	case config.AuthModeTailscale:
+		loopback, err := config.IsLoopbackListenAddr(s.cfg.Server.ListenAddr)
+		if err != nil || !loopback || len(s.cfg.Server.TailscaleAllowedUsers) == 0 ||
+			s.cfg.Server.Username != "" || s.cfg.Server.Password != "" {
+			return invalidAuthConfiguration()
+		}
+		return s.tailscaleAuth(s.requireSameOriginMutations(next))
+	case config.AuthModeNone:
+		if s.cfg.Server.AuthMode != "" || s.cfg.Server.Username != "" ||
+			s.cfg.Server.Password != "" || len(s.cfg.Server.TailscaleAllowedUsers) != 0 {
+			return invalidAuthConfiguration()
+		}
+		// Reaching the unauthenticated shape with a non-loopback listen_addr is
+		// impossible in a daemon started through main: config validation refuses
+		// it at load.
+		return withRequestIdentity(next, requestIdentity{
+			Provider: config.AuthModeNone,
+			Login:    "loopback",
+		})
+	default:
+		return invalidAuthConfiguration()
 	}
-	// Reaching here with a non-loopback listen_addr is impossible in a daemon
-	// started through main: config.ValidateServerBinding refuses it at load.
-	return s.mux
+}
+
+func invalidAuthConfiguration() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusServiceUnavailable, "server authentication configuration is invalid")
+	})
 }
 
 // basicAuth guards the whole mux, the SPA and the thumbnail tree included.
@@ -98,19 +128,22 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		next.ServeHTTP(w, r)
+		withRequestIdentity(next, requestIdentity{
+			Provider: config.AuthModeBasic,
+			Login:    user,
+		}).ServeHTTP(w, r)
 	})
 }
 
 func (s *Server) ListenAndServe(addr string) error {
-	authenticated := s.cfg.Server.Username != "" && s.cfg.Server.Password != ""
-	if !authenticated {
+	authMode := s.cfg.Server.AuthenticationMode()
+	if authMode == config.AuthModeNone {
 		// config.ValidateServerBinding has already established that this is a
 		// loopback bind, so the exposure is limited to this machine.
 		s.logger.Warn("API server starting without authentication; reachable only from this host",
 			"addr", addr)
 	}
-	s.logger.Info("API server starting", "addr", addr, "authenticated", authenticated)
+	s.logger.Info("API server starting", "addr", addr, "auth_mode", authMode)
 
 	srv := &http.Server{
 		Addr:    addr,

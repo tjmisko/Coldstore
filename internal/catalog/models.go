@@ -31,6 +31,7 @@ const (
 	JobActionRestore = "restore"
 	JobActionArchive = "archive"
 	JobActionScan    = "scan"
+	JobActionRename  = "rename"
 
 	JobStatePending = "pending"
 	JobStateRunning = "running"
@@ -60,11 +61,35 @@ type FileRecord struct {
 	ThumbAttempts    int        `json:"thumb_attempts"`
 	ThumbLastAttempt *int64     `json:"thumb_last_attempt,omitempty"`
 	ThumbError       string     `json:"thumb_error,omitempty"`
+
+	// DetectedType is the content-sniffed type: what the file's leading bytes
+	// say it is, as opposed to MimeType, which is only what its extension
+	// claims. Empty means the scanner has not sniffed this row yet;
+	// filetype.TypeUnknown means it did and recognised nothing.
+	DetectedType string `json:"detected_type,omitempty"`
+
+	Description       string   `json:"description"`
+	CapturedLocal     string   `json:"captured_local"`
+	CapturedOffsetMin *int     `json:"captured_offset_minutes"`
+	CapturedSource    string   `json:"captured_source"`
+	GPSLat            *float64 `json:"gps_lat"`
+	GPSLon            *float64 `json:"gps_lon"`
+	GPSAltitudeM      *float64 `json:"gps_altitude_m,omitempty"`
+	GPSAccuracyM      *float64 `json:"gps_accuracy_m,omitempty"`
+	GPSSource         string   `json:"gps_source"`
+	PairKey           string   `json:"pair_key"`
+	PairSource        string   `json:"pair_source"`
+	MetaScannedAt     *int64   `json:"meta_scanned_at"`
+	MetaAttempts      int      `json:"meta_attempts"`
+	MetaLastAttempt   *int64   `json:"meta_last_attempt,omitempty"`
+	MetaError         string   `json:"meta_error,omitempty"`
+	Tags              []string `json:"tags"`
 }
 
 type FolderConfigRecord struct {
 	ID             int64  `json:"id"`
 	FolderLabel    string `json:"folder_label"`
+	DisplayName    string `json:"display_name"`
 	SyncthingID    string `json:"syncthing_id"`
 	SyncthingPath  string `json:"syncthing_path"`
 	BudgetBytes    int64  `json:"budget_bytes"`
@@ -143,9 +168,18 @@ type Job struct {
 	Done        int    `json:"done"`
 	FailedCount int    `json:"failed_count"` // column `failed`
 	Error       string `json:"error"`        // job-level reason, "" normally
+	Payload     string `json:"-"`            // rename-only durable JSON
 	CreatedAt   int64  `json:"created_at"`
 	StartedAt   *int64 `json:"started_at"`  // null, never omitted
 	FinishedAt  *int64 `json:"finished_at"` // null, never omitted
+}
+
+// RenamePayload is persisted in jobs.payload. Paths are slash-separated,
+// cleaned relative paths beneath the folder root; validation is repeated by
+// the mover when a restarted worker consumes the payload.
+type RenamePayload struct {
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 type JobFailure struct {

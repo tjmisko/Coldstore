@@ -33,12 +33,40 @@ const maxPageLimit = 500
 // It reports false when it has already answered the request.
 func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalog.FileQuery, bool) {
 	v := r.URL.Query()
+	rawTags := v["tag"]
+	tags, err := catalog.NormalizeTagFilters(rawTags)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return catalog.FileQuery{}, false
+	}
+	if len(tags) > catalog.MaxTagFilters {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("at most %d tag filters per request", catalog.MaxTagFilters))
+		return catalog.FileQuery{}, false
+	}
+	near, err := parseNear(v.Get("near"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return catalog.FileQuery{}, false
+	}
 	q := catalog.FileQuery{
-		Folder:    v.Get("folder"),
-		Status:    catalog.FileStatus(v.Get("status")),
-		Extension: v.Get("ext"),
-		Search:    v.Get("q"),
-		PinSource: v.Get("pin_source"),
+		Folder:       v.Get("folder"),
+		Status:       catalog.FileStatus(v.Get("status")),
+		Extension:    v.Get("ext"),
+		Search:       v.Get("q"),
+		PinSource:    v.Get("pin_source"),
+		CapturedFrom: v.Get("captured_from"),
+		CapturedTo:   v.Get("captured_to"),
+		Near:         near,
+		Tags:         tags,
+	}
+	for name, value := range map[string]string{
+		"captured_from": q.CapturedFrom,
+		"captured_to":   q.CapturedTo,
+	} {
+		if value != "" && !validCaptureDay(value) {
+			writeError(w, http.StatusBadRequest, name+" must be a real date in YYYY-MM-DD form")
+			return q, false
+		}
 	}
 
 	switch v.Get("pinned") {
@@ -60,6 +88,41 @@ func parseFileFilters(w http.ResponseWriter, r *http.Request, idCap int) (catalo
 		q.Conflicted = true
 	default:
 		writeError(w, http.StatusBadRequest, `conflict must be "1" or "0"`)
+		return q, false
+	}
+
+	switch v.Get("undated") {
+	case "", "0":
+	case "1":
+		q.Undated = true
+	default:
+		writeError(w, http.StatusBadRequest, `undated must be "1" or "0"`)
+		return q, false
+	}
+
+	switch v.Get("untagged") {
+	case "":
+	case "0":
+		value := false
+		q.Untagged = &value
+	case "1":
+		value := true
+		q.Untagged = &value
+	default:
+		writeError(w, http.StatusBadRequest, `untagged must be "1" or "0"`)
+		return q, false
+	}
+
+	switch v.Get("described") {
+	case "":
+	case "0":
+		value := false
+		q.Described = &value
+	case "1":
+		value := true
+		q.Described = &value
+	default:
+		writeError(w, http.StatusBadRequest, `described must be "1" or "0"`)
 		return q, false
 	}
 
@@ -167,12 +230,18 @@ func (s *Server) handleListFileIDs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
-	idStr := r.PathValue("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
+// resolveFileBytes finds the file a request names and the path its bytes are
+// at, answering the request itself and returning false if it cannot.
+//
+// An ARCHIVED file resolves to its cold-storage path and is served straight
+// from there. Reading a file out of cold storage does not change its state, so
+// previewing and downloading an archived file never triggers a restore --
+// browsing the archive without un-archiving it comes free.
+func (s *Server) resolveFileBytes(w http.ResponseWriter, r *http.Request) (*catalog.FileRecord, string, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid file id")
-		return
+		return nil, "", false
 	}
 
 	// 404 means "no such file id" and nothing else. Collapsing every error
@@ -182,14 +251,13 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, catalog.ErrNoSuchFile) {
 			writeError(w, http.StatusNotFound, "file not found")
-			return
+			return nil, "", false
 		}
-		s.logger.Error("reading file for download", "id", id, "error", err)
+		s.logger.Error("reading file record", "id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to read file")
-		return
+		return nil, "", false
 	}
 
-	var filePath string
 	switch file.Status {
 	case catalog.StatusSynced:
 		// cat.FolderPath, not cfg.Folders: it resolves disabled and orphaned
@@ -199,30 +267,39 @@ func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 			// Same distinction one level down: no folder row is a real 409,
 			// but a database that cannot be read is not a folder that is
 			// merely unmounted.
-			s.logger.Error("reading folder for download",
+			s.logger.Error("reading folder for file bytes",
 				"folder", file.FolderLabel, "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to read folder")
-			return
+			return nil, "", false
 		}
 		if err != nil {
-			s.logger.Warn("cannot resolve folder for download",
+			s.logger.Warn("cannot resolve folder for file bytes",
 				"folder", file.FolderLabel, "error", err)
 			writeError(w, http.StatusConflict,
 				fmt.Sprintf("folder %q is not currently available", file.FolderLabel))
-			return
+			return nil, "", false
 		}
-		filePath = filepath.Join(folderPath, file.RelativePath)
+		filePath := filepath.Join(folderPath, file.RelativePath)
 		// http.ServeFile would answer a vanished path with a 404 and an HTML
 		// body. 404 is reserved for "no such file id".
 		if _, err := os.Stat(filePath); err != nil {
 			writeError(w, http.StatusConflict,
 				fmt.Sprintf("folder %q is not currently available", file.FolderLabel))
-			return
+			return nil, "", false
 		}
+		return file, filePath, true
 	case catalog.StatusArchived:
-		filePath = filepath.Join(s.cfg.Storage.ColdStoragePath, "archive", file.FolderLabel, file.RelativePath)
+		return file, filepath.Join(s.cfg.Storage.ColdStoragePath, "archive",
+			file.FolderLabel, file.RelativePath), true
 	default:
 		writeError(w, http.StatusConflict, fmt.Sprintf("file status is %s", file.Status))
+		return nil, "", false
+	}
+}
+
+func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
+	file, filePath, ok := s.resolveFileBytes(w, r)
+	if !ok {
 		return
 	}
 

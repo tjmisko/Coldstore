@@ -12,9 +12,9 @@ export type PinSource = "user" | "restore";
 /** Sort keys GET /api/v1/files understands. "pinned_at" is ascending -- oldest
  *  pin first -- because the auto-pins an owner has forgotten are the ones the
  *  wedge banner sends them to triage. */
-export type FileSort = "mtime" | "size" | "name" | "pinned_at";
+export type FileSort = "mtime" | "size" | "name" | "pinned_at" | "captured";
 
-export type JobAction = "restore" | "archive" | "scan";
+export type JobAction = "restore" | "archive" | "scan" | "rename";
 export type JobState = "pending" | "running" | "done" | "failed";
 
 export interface ApiError {
@@ -46,11 +46,62 @@ export interface FileRecord {
   thumb_attempts: number;
   thumb_last_attempt?: number;
   thumb_error?: string;
+  /** What the file's leading bytes say it is, as opposed to `mime_type`, which
+   *  is only what its extension claims. Absent on a row the scanner has not
+   *  sniffed yet. It is the ONLY thing that can classify a file with no
+   *  extension -- a bookmark export called "reading" has an empty `extension`
+   *  and an empty `mime_type`. */
+  detected_type?: string;
+  description: string;
+  /** Naive camera-local wall clock; empty when the file recorded none. */
+  captured_local: string;
+  /** Recorded UTC offset in minutes, or null when the file did not carry one. */
+  captured_offset_minutes: number | null;
+  captured_source: string;
+  /** WGS84 coordinates. Zero is valid; null means unknown. */
+  gps_lat: number | null;
+  gps_lon: number | null;
+  gps_altitude_m?: number;
+  gps_accuracy_m?: number;
+  gps_source: string;
+  pair_key: string;
+  pair_source: string;
+  meta_scanned_at: number | null;
+  meta_attempts: number;
+  meta_last_attempt?: number;
+  meta_error?: string;
+  /** Hydrated by the catalog as an empty array until tags are applied. */
+  tags: string[];
+}
+
+/** PATCH /api/v1/files/{id}; omitted fields are untouched. */
+export interface UpdateFileRequest {
+  description?: string;
+  captured_local?: string;
+  gps_lat?: number;
+  gps_lon?: number;
+}
+
+/** One entry of an EPUB's reading order. `path` is the archive ENTRY NAME,
+ *  already resolved against the package document's directory, and is appended
+ *  to the resource route verbatim. The server validates it again on the way
+ *  back in -- a path component from a URL never gets to skip that. */
+export interface EpubSection {
+  path: string;
+  /** A human label when the book's guide supplies one, else "". */
+  label: string;
+}
+
+/** GET /api/v1/files/{id}/epub */
+export interface EpubSpine {
+  title: string;
+  sections: EpubSection[];
 }
 
 export interface FolderConfig {
   id: number;
   folder_label: string;
+  display_name: string;
   syncthing_id: string;
   syncthing_path: string;
   budget_bytes: number;
@@ -60,12 +111,17 @@ export interface FolderConfig {
   last_enforced_at: number | null;
 }
 
-/** PUT /api/v1/folders/{label} accepts only these three fields, all optional.
+/** PUT /api/v1/folders/{label} accepts only these UI-owned fields, all optional.
  *  syncthing_id and syncthing_path are TOML-owned and are ignored. */
 export interface UpdateFolderRequest {
   budget_bytes?: number;
   grace_minutes?: number;
   enabled?: boolean;
+  display_name?: string;
+}
+
+export interface RenamePathResponse extends JobCreated {
+  warnings: string[];
 }
 
 export interface PersistentPath {
@@ -88,6 +144,7 @@ export interface FolderCounts {
 
 export interface FolderStatus {
   label: string;
+  display_name: string;
   /** On-device footprint: synced + archiving + restoring. pinned_bytes is a
    *  SUBSET of this, never an addend. */
   synced_size_bytes: number;
@@ -128,6 +185,57 @@ export interface BulkPinResponse {
   /** One entry per folder the selection touched. */
   folders: FolderStatus[];
   warning: string | null;
+}
+
+/** One uniform tag change over a set of files. The server returns grouped
+ * changes in TagUndo so heterogeneous starting states can be restored exactly. */
+export interface TagFileMutation {
+  ids: number[];
+  add?: string[];
+  remove?: string[];
+}
+
+export interface BulkTagUniformRequest extends TagFileMutation {
+  changes?: never;
+}
+
+export interface BulkTagExactRequest {
+  changes: TagFileMutation[];
+  ids?: never;
+  add?: never;
+  remove?: never;
+}
+
+export type BulkTagRequest = BulkTagUniformRequest | BulkTagExactRequest;
+
+/** Directly replay this as `api.bulkTags(result.undo)`. */
+export interface TagUndo {
+  changes: TagFileMutation[];
+}
+
+export interface BulkTagResponse {
+  updated: number;
+  created: string[];
+  undo: TagUndo;
+}
+
+/** GET /api/v1/tags. `count` is exact assignments; `descendant_count`
+ * includes assignments anywhere below this materialised-path node. */
+export interface Tag {
+  id: number;
+  name: string;
+  count: number;
+  descendant_count: number;
+}
+
+export interface TagRenameResponse {
+  merged: boolean;
+  files_affected: number;
+}
+
+export interface TagDeleteResponse {
+  deleted: number;
+  files_affected: number;
 }
 
 export interface JobFailure {

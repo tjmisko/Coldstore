@@ -1,6 +1,9 @@
 import type {
   BulkPinResponse,
+  BulkTagRequest,
+  BulkTagResponse,
   CatalogEvent,
+  EpubSpine,
   FileIDsResponse,
   FileRecord,
   FileSort,
@@ -12,8 +15,13 @@ import type {
   PersistentPath,
   PinResponse,
   PinSource,
+  RenamePathResponse,
   StatusResponse,
+  Tag,
+  TagDeleteResponse,
+  TagRenameResponse,
   UpdateFolderRequest,
+  UpdateFileRequest,
 } from "../types/api";
 
 /** ApiRequestError carries the status AND the decoded error body.
@@ -89,6 +97,23 @@ export interface FileFilters {
   pinSource?: PinSource;
   /** Unresolved section 4.1b conflicts only. */
   conflict?: boolean;
+  /** Repeated filters compose with AND; each path includes its descendants. */
+  tags?: string[];
+  /** True selects untagged files; false selects files carrying any tag. */
+  untagged?: boolean;
+  /** True selects non-empty descriptions; false selects empty descriptions. */
+  described?: boolean;
+  capturedFrom?: string;
+  capturedTo?: string;
+  /** Metadata was scanned successfully but contained no capture date. */
+  undated?: boolean;
+  near?: NearFilter;
+}
+
+export interface NearFilter {
+  lat: number;
+  lon: number;
+  radiusKm: number;
 }
 
 /** fileFilterParams is shared by GET /files and GET /files/ids, which is the
@@ -103,6 +128,15 @@ export function fileFilterParams(filters: FileFilters): URLSearchParams {
   if (filters.pinned !== undefined) params.set("pinned", filters.pinned ? "1" : "0");
   if (filters.pinSource) params.set("pin_source", filters.pinSource);
   if (filters.conflict) params.set("conflict", "1");
+  for (const tag of filters.tags ?? []) params.append("tag", tag);
+  if (filters.untagged !== undefined) params.set("untagged", filters.untagged ? "1" : "0");
+  if (filters.described !== undefined) params.set("described", filters.described ? "1" : "0");
+  if (filters.capturedFrom) params.set("captured_from", filters.capturedFrom);
+  if (filters.capturedTo) params.set("captured_to", filters.capturedTo);
+  if (filters.undated) params.set("undated", "1");
+  if (filters.near) {
+    params.set("near", `${filters.near.lat},${filters.near.lon},${filters.near.radiusKm}`);
+  }
   return params;
 }
 
@@ -129,14 +163,34 @@ export const api = {
   /** filesByIDs backs post-job reconciliation. The server caps `ids` at 500,
    *  so callers chunk; it ignores every other filter, and returns exactly the
    *  ids that still exist. */
-  filesByIDs: (ids: number[]) =>
-    apiFetch<FileRecord[]>(`/api/v1/files?ids=${ids.join(",")}`),
+  filesByIDs: (ids: number[], init?: RequestInit) =>
+    apiFetch<FileRecord[]>(`/api/v1/files?ids=${ids.join(",")}`, init),
 
   fileIDs: (filters: FileFilters) =>
     apiFetch<FileIDsResponse>(`/api/v1/files/ids?${fileFilterParams(filters)}`),
 
   downloadUrl: (id: number) => `/api/v1/files/${id}/download`,
+
+  /** The INLINE route. downloadUrl sets Content-Disposition: attachment
+   *  unconditionally, so pointing a reader or an iframe at it makes the
+   *  browser save the file instead of showing it. This one states an explicit
+   *  Content-Type and sends nosniff. Archived files stream straight out of
+   *  cold storage; previewing one does not restore it. */
+  previewUrl: (id: number) => `/api/v1/files/${id}/preview`,
+
   thumbnailUrl: (thumbnailPath: string) => `/api/v1/thumbnails/${thumbnailPath}`,
+
+  /** The reading order of an EPUB, extracted server-side by the same parser
+   *  that finds its cover. Nothing is unzipped in the browser. */
+  epubSpine: (id: number, init?: RequestInit) =>
+    apiFetch<EpubSpine>(`/api/v1/files/${id}/epub`, init),
+
+  /** One resource out of an EPUB. `resource` is an archive entry name, encoded
+   *  segment by segment so a "/" inside it stays a path separator and
+   *  everything else -- spaces, "#", "?" -- does not change what is asked
+   *  for. The server validates the decoded name against the archive root. */
+  epubResourceUrl: (id: number, resource: string) =>
+    `/api/v1/files/${id}/epub/${resource.split("/").map(encodeURIComponent).join("/")}`,
 
   pin: (id: number, pinned: boolean) =>
     apiFetch<PinResponse>(`/api/v1/files/${id}/pin`, { method: pinned ? "POST" : "DELETE" }),
@@ -148,11 +202,49 @@ export const api = {
       body: JSON.stringify({ ids, pinned }),
     }),
 
+  bulkTags: (request: BulkTagRequest) =>
+    apiFetch<BulkTagResponse>("/api/v1/files/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+
+  tags: (
+    params: { folder?: string; prefix?: string; limit?: number },
+    init?: RequestInit,
+  ) => {
+    const search = new URLSearchParams();
+    if (params.folder) search.set("folder", params.folder);
+    if (params.prefix) search.set("prefix", params.prefix);
+    if (params.limit) search.set("limit", String(params.limit));
+    return apiFetch<Tag[]>(`/api/v1/tags?${search}`, init);
+  },
+
+  renameTag: (name: string, nextName: string) =>
+    apiFetch<TagRenameResponse>(`/api/v1/tags/${encodeURIComponent(name)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nextName }),
+    }),
+
+  deleteTag: (name: string, cascade = false) =>
+    apiFetch<TagDeleteResponse>(
+      `/api/v1/tags/${encodeURIComponent(name)}${cascade ? "?cascade=1" : ""}`,
+      { method: "DELETE" },
+    ),
+
   restore: (id: number) =>
     apiFetch<FileRecord>(`/api/v1/files/${id}/restore`, { method: "POST" }),
 
   archive: (id: number) =>
     apiFetch<FileRecord>(`/api/v1/files/${id}/archive`, { method: "POST" }),
+
+  updateFile: (id: number, patch: UpdateFileRequest) =>
+    apiFetch<FileRecord>(`/api/v1/files/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
 
   resolve: (id: number, keep: "device" | "archive") =>
     apiFetch<FileRecord>(`/api/v1/files/${id}/resolve`, {
@@ -168,6 +260,13 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
+    }),
+
+  renamePath: (label: string, from: string, to: string) =>
+    apiFetch<RenamePathResponse>(`/api/v1/folders/${encodeURIComponent(label)}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to }),
     }),
 
   persistentPaths: (label: string) =>

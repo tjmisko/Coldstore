@@ -1,8 +1,9 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
-import { aStatus } from "./test/fixtures";
+import { aFile, aStatus } from "./test/fixtures";
 import { stubFetch } from "./test/harness";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
@@ -51,5 +52,100 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "CameraRoll", level: 2 })).toBeInTheDocument();
+  });
+
+  it("should name the tab after the selected folder instead of Vite's scaffold title", async () => {
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+
+    render(<App />);
+
+    // The shipped build said "web" in every tab, because index.html still
+    // carried the `npm create vite` default.
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+    expect(document.title).toBe("CameraRoll — Coldstore");
+  });
+
+  it("should render a cosmetic folder name while keeping the stable label in selectors", async () => {
+    stub = stubFetch([
+      {
+        url: "/api/v1/status",
+        body: aStatus({
+          folders: [{ ...aStatus().folders[0], display_name: "Family Photos" }],
+        }),
+      },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Family Photos", level: 2 }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('[data-folder-nav="CameraRoll"]')).toHaveTextContent(
+      "Family Photos",
+    );
+    expect(document.title).toBe("Family Photos — Coldstore");
+  });
+
+  it("should name the tab Settings when the config view is showing", async () => {
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Settings/ }));
+
+    expect(document.title).toBe("Settings — Coldstore");
+  });
+
+  it("should replace the finder with a preview when Enter opens its result", async () => {
+    const file = aFile({ id: 44, filename: "concert.jpg", relative_path: "events/concert.jpg" });
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [file] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+
+    fireEvent.keyDown(window, { key: "F10" });
+    const input = await screen.findByRole("textbox", { name: "Find a file" });
+    await screen.findByRole("option", { name: /concert.jpg/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(await screen.findByRole("dialog", { name: "Preview concert.jpg" })).toBeInTheDocument();
+    expect(document.querySelector('[data-finder-open-preview="44"] [data-preview-image]')).not.toBeNull();
+    expect(document.querySelector("[data-fuzzy-finder]")).toBeNull();
+  });
+
+  it("should switch to Files and focus the complete finder result with Ctrl-g", async () => {
+    const file = aFile({ id: 45, filename: "far-away.jpg", relative_path: "events/far-away.jpg" });
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [file] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+
+    fireEvent.keyDown(window, { key: "F10" });
+    const input = await screen.findByRole("textbox", { name: "Find a file" });
+    await screen.findByRole("option", { name: /far-away.jpg/ });
+    fireEvent.keyDown(input, { key: "g", ctrlKey: true });
+
+    await waitFor(() => {
+      const target = document.querySelector<HTMLElement>('tr[data-file-id="45"]');
+      expect(target).toHaveAttribute("data-cursor", "true");
+      expect(target).toBe(document.activeElement);
+    });
+    expect(document.querySelector('[data-view-nav="files"]')).toHaveClass("bg-raised-hover");
+    expect(document.querySelector("[data-fuzzy-finder]")).toBeNull();
   });
 });

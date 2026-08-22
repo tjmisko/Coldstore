@@ -25,3 +25,7 @@ coldstore-demo.toml
 # Deployment survey for this specific installation: LAN addresses, Syncthing
 # device and folder IDs, backup locations. This repo is public -- keep it local.
 docs/first-deploy.md
+
+# Step-by-step checklist for this specific installation: LAN address, Syncthing
+# folder IDs, real paths and budgets. Same reason as first-deploy.md.
+docs/deploy-checklist.md

@@ -17,7 +17,11 @@ main.tsx
   StrictMode
     App                                   (web/src/App.tsx)
       ToastProvider                       (components/ToastProvider.tsx)
+       KeymapProvider                     (components/KeymapProvider.tsx)
         Shell
+        |
+        |-- useKeymapLayer("global") ----> views, folders, palette, finder, ?
+        |-- CommandPalette / FuzzyFinder / Cheatsheet   (portalled overlays)
         |
         |-- useStatus() -----------------> GET /api/v1/status, polled every 10 s
         |
@@ -38,12 +42,15 @@ main.tsx
             |   |-- FilterBar             (components/FilterBar.tsx)
             |   |-- Tile grid: checkbox, PinToggle, status badges
             |   |-- Lightbox              (components/Lightbox.tsx)
+            |   |   +-- PreviewSurface --> image / video / DocumentReader
             |   +-- SelectionBar          (components/SelectionBar.tsx)
             |
             |-- FileBrowser               (components/FileBrowser.tsx)
             |   |-- useFileWorkspace({folder, filterKey, sort:"name"})
             |   |-- FilterBar
             |   |-- <table>: checkbox column, pin column, per-row actions
+            |   |-- Lightbox
+            |   |   +-- PreviewSurface --> image / video / DocumentReader
             |   +-- SelectionBar
             |
             +-- ConfigPanel               (components/ConfigPanel.tsx)
@@ -66,7 +73,9 @@ guard is what makes it terminate.
 ```
 components/   what the owner sees
 hooks/        what the components run on
-lib/          what the hooks are built from: api.ts, format.ts, toast.ts
+keymap/       the input engine: no React, no DOM, unit-tested as pure functions
+lib/          what the hooks are built from: api.ts, format.ts, toast.ts,
+              keymapContext.ts, preview.ts, zLayers.ts
 types/api.ts  the mirrored API contract (design section 6.13)
 ```
 
@@ -85,6 +94,36 @@ numbers can only ask "are you sure?".
 `api.*` are thin typed wrappers, one per endpoint. `fileFilterParams` is shared
 by `GET /files` and `GET /files/ids` on purpose: "select all in folder" must
 resolve the same set the grid is showing, or a job acts on files nobody saw.
+
+The download and preview URLs are deliberately different. `downloadUrl` always
+requests an attachment; `previewUrl` serves an explicit inline content type with
+`nosniff`, including straight from cold storage. EPUB reading uses the related
+spine and resource endpoints, so the browser never downloads and unzips the
+whole book merely to inspect it.
+
+### `lib/preview.ts` + `components/PreviewSurface.tsx`
+
+`resolvePreview(file)` is the single classification point between file metadata
+and rendering. A browser-decodable image uses the original, HEIC/HEIF/AVIF uses
+the JPEG thumbnail with a visible degraded-preview notice, video uses a `<video>`
+with `preload="metadata"`, and PDF, EPUB and text route to the document readers.
+Missing files and unsupported formats produce an explicit unavailable decision,
+not a broken image. `detected_type` is what makes extension-less files such as
+bookmark exports classifiable at all.
+
+`PreviewSurface` only renders that decision. It does not infer type from the
+presence of a thumbnail: videos, opaque image formats and PDFs can all have
+thumbnails, and treating that as "render the original in an `<img>`" downloads
+the wrong bytes and draws a broken image.
+
+PDF, EPUB and text sit behind the one `React.lazy` boundary in
+`components/readers/index.tsx`. `PdfReader` uses the self-hosted pdf.js worker,
+standard fonts and WASM assets; `EpubReader` renders server-extracted spine
+resources in an iframe with neither `allow-scripts` nor `allow-same-origin`;
+`TextReader` fetches the capped inline body and reports the truncation header.
+The app warms these chunks when the browser is idle. Splitting keeps pdf.js off
+the first-render path, although every emitted asset still becomes part of the
+embedded Go binary.
 
 ### `lib/format.ts`
 
@@ -196,6 +235,10 @@ sixty rows have ever been rendered.
 unticking a photo deselects the range. Selecting it instead would turn a
 correction into a re-selection.
 
+`selectExactly` replaces the whole set, and exists for visual mode: every motion
+redraws the highlighted span, and a span that could only ever grow would leave
+the files behind the cursor selected when the owner reversed direction.
+
 ### `useJob` / `useJobRunner` (`hooks/useJob.ts`)
 
 `useJob` polls `GET /jobs/{id}` on a chained `setTimeout` -- not `setInterval`, so
@@ -264,16 +307,97 @@ OFFSET-paged infinite scroll then shows one twice and drops the other. A camera
 roll copied off a card shares one mtime across hundreds of files, so ties are the
 norm.
 
+## The keyboard
+
+`docs/keymap-design.md` is the design; this is where it touches the React tree.
+
+`web/src/keymap/` is a vim input engine with **no React import and no DOM
+access**: token normalisation, motion arithmetic, a binding trie, the state
+machine, the binding table, the fuzzy scorer and the ex-command parser. The
+grammar is where the bugs are, and `step(state, input, bindings)` tested as a
+fold over a token list costs a millisecond per case instead of a jsdom render.
+Counts multiply (`2d3j` is `d6j`), `0` is a motion until a count buffer is
+non-empty, an operator waits for a range and cancels on anything else, and an
+ambiguous prefix returns its timeout as a **number** so nothing here reads a
+clock.
+
+`KeymapProvider` owns the app's **only** `keydown` listener. There used to be
+three -- `Gallery`, `Lightbox` and `ConfirmDialog` -- of which one had an "am I
+typing?" guard, inline. Scope decides who gets a key now; document order used
+to, which is why Escape closed the lightbox and the dialog on top of it in one
+press.
+
+Two things in the provider look odd and are deliberate:
+
+- The machine lives in a **ref**, and the pending indicator is written straight
+  to the DOM. A keystroke must not re-render five hundred tiles to redraw four
+  characters in a corner, and the machine is not React state -- it is a value a
+  listener folds over.
+- Layers are ordered by an explicit `SCOPE_PRIORITY`, not by registration order.
+  React mounts children before parents, so "last registered is on top" is true
+  for an overlay opened later and false on first paint.
+
+`useGridKeymap` is the whole keyboard behaviour of a file list, shared by Gallery
+and FileBrowser. A table is a grid one column wide, so `columns` is the only
+difference between them and `d3j` has one implementation. The cursor is one
+index, and the effect that follows it writes DOM focus from it -- never reads it
+back -- so the drawn cursor and `document.activeElement` cannot disagree.
+FileBrowser rows are `tabIndex={-1}`: five hundred rows in the tab order is its
+own accessibility failure.
+
+`useBulkActions` came out of `SelectionBar` so the keyboard could reuse it. An
+operator queues the **same** job a button does, with the same budget pre-flight,
+the same progress readout and the same post-job repaint. Two implementations of
+"archive these ids" is how one of them ends up without the `res.ok` check.
+Operators over more than `CONFIRM_ABOVE` files confirm first; the bar's buttons
+do not, because they sit beside a visible count and `dG` does not.
+
+The `?` cheatsheet is generated from the binding table. A hand-written one drifts
+within a week, and a cheatsheet that lies is worse than none.
+
+### Overlays
+
+`components/Portal.tsx`, `hooks/useFocusTrap.ts`, `hooks/useScrollLock.ts` and
+`lib/zLayers.ts` did not exist before the palette needed them: `createPortal`
+appeared zero times, every overlay was an inline `fixed inset-0` div inside an
+`overflow-hidden` ancestor, and the z ladder was hand-rolled with the hamburger
+and the lightbox already tied at 50.
+
+`Portal` renders into `document.body` rather than a host div it creates, because
+a host needs an effect to append it and a state write to render into it, and
+`react-hooks/set-state-in-effect` is not negotiable here. `zLayers` is applied as
+an inline `style`, so the design refresh moving every colour does not have to
+grep for `z-[70]`.
+
+The focus trap restores focus to whatever had it, which is what makes `:` then
+Escape put the cursor back on the tile it was on.
+
 ## Lightbox
 
-Opens on a plain click; ctrl/cmd-click toggles selection and shift-click extends
-the range instead. The tile is a `<div role="button">`, not a `<button>`: a
+Gallery opens the lightbox on a plain tile click; ctrl/cmd-click toggles
+selection and shift-click extends the range instead. FileBrowser opens the same
+lightbox from its filename button. A plain row click only moves the cursor, so
+the checkbox, pin and row actions never also open a preview. In either view,
+`<CR>`/`o` and the context menu's Open action enter the same preview flow.
+
+It registers the `lightbox` scope, which is **not** exclusive: `q` and `i` are
+its own, and `d`, `p`, `y`, `j` and `G` fall through to the same paths the grid
+uses. That is the point of having a grammar rather than a switch statement per
+component. `Space` no longer toggles the metadata panel -- it is the leader now
+-- so `i` does. The tile is a `<div role="button">`, not a `<button>`: a
 checkbox and a pin toggle inside a button are nested interactive elements, which
 is invalid HTML and made a click on the checkbox also open the lightbox.
 
 The lightbox prefetches the next page when the user is within five items of the
 end, and routes Pin, Restore and Archive through the parent's actions, so a
 change made here repaints the grid behind it without a refetch.
+
+Both views own an index into their currently loaded file page and pass that page,
+the shared `FileActions` and the shared `BulkActions` to `Lightbox`. Lightbox
+calls `resolvePreview` for the current record and hands the result to
+`PreviewSurface`; arrows and motions change the index without creating a second
+rendering path. Archived originals and documents stream from cold storage for
+preview without changing the file status or implicitly restoring them.
 
 ## Dev proxy
 
@@ -299,6 +423,7 @@ Two environment variables matter here:
 
 | Tier | Command | What it proves |
 |---|---|---|
+| Pure | `make test-web` | The keymap grammar: counts, operators, motions, visual mode, the trie, the scorer, the ex-line parser. No DOM at all |
 | Unit / component | `make test-web` | Query building, selection semantics, bar arithmetic, repaint rules, dialog wording, the error banner. jsdom, stubbed `fetch`, no daemon |
 | Browser | `make test-playwright` | The embedded bundle, driven in Chromium against the real daemon over a freshly seeded demo installation |
 

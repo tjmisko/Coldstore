@@ -19,9 +19,34 @@ Documentation=https://github.com/tjmisko/coldstore
 After=network-online.target syncthing.service
 Wants=network-online.target
 
-# The real dependency is the storage, not the network. A boot that starts
-# coldstore before the pool is mounted makes the daemon exit 1: cold_storage_path
-# is missing and coldstore deliberately will not create it.
+# The real dependency is the storage, not the network.
+#
+#   *** ON AN FSTAB MOUNT THIS DIRECTIVE IS THE ONLY THING PROTECTING THE ***
+#   *** ARCHIVE. DO NOT REMOVE IT AND DO NOT TYPO THE PATH.              ***
+#
+# The often-quoted protection -- "coldstore will not create cold_storage_path,
+# so an unmounted volume just makes it exit 1" -- is true only when the path can
+# be absent. mount(8) requires the mountpoint DIRECTORY to exist, so an fstab
+# volume that failed to mount leaves an empty, writable directory on the ROOT
+# filesystem. config.CheckEnvironment finds it present, a directory and
+# writable, and passes. The daemon then builds a fresh catalog there, discards
+# the budgets and pins the real catalog held, and archives into the root
+# filesystem while Syncthing propagates every deletion to every device the owner
+# has. When the volume is finally mounted those copies are shadowed and gone.
+#
+# A ZFS dataset with a native mountpoint= does not have this problem: zfs mount
+# creates the directory itself, so an unmounted pool really does leave the path
+# absent. btrfs, ext4, xfs and legacy ZFS datasets all do have it.
+#
+# Confirm the directive resolved to the mount you meant, not to -.mount:
+#
+#     systemctl show coldstore -p Requires | tr ' ' '\n' | grep '\.mount'
+#
+# Note that RequiresMountsFor adds Requires=, so a FAILED mount cancels this
+# unit's start job with "dependency failed" -- and Restart= does NOT apply to
+# that. A boot with a dead archive volume leaves coldstore inactive until a
+# human looks, which is the correct outcome and is not what the "retry forever"
+# comment further down describes. Look at the .mount unit, not this one.
 #
 # RequiresMountsFor works by finding the .mount UNIT that provides the path. That
 # covers fstab entries, automounts, and ZFS datasets with mountpoint=legacy.
@@ -33,7 +58,7 @@ Wants=network-online.target
 # to infer from the path and the ordering silently resolves to the nearest
 # existing mount (usually -.mount, i.e. /). Find out which case you are in:
 #
-#     findmnt -no SOURCE,FSTYPE /srv/coldstore        # zfs at all?
+#     findmnt -no SOURCE,FSTYPE /srv/coldstore        # mounted at all? zfs?
 #     zfs get -H -o value mountpoint tank/coldstore   # a path = native, or 'legacy'
 #
 # A native mountpoint means uncommenting the two lines below as well. 'legacy'
@@ -55,6 +80,11 @@ RequiresMountsFor=/srv/coldstore
 # transient ordering problem into a service that stays down until someone logs
 # in -- exactly the outcome config.CheckEnvironment goes out of its way to avoid
 # by making a missing folder path a warning rather than an error.
+#
+# This retry loop covers the daemon EXITING non-zero. It does not cover the
+# start job being cancelled because RequiresMountsFor's .mount unit failed; see
+# the note up there. Both are deliberate, and they are different failures with
+# different places to look.
 #
 # So: retry forever, once a minute. A genuine config error still surfaces
 # immediately and loudly at the top of `systemctl status coldstore`, one journal

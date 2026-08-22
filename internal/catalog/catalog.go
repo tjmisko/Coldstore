@@ -37,6 +37,12 @@ const maxThumbnailAttempts = 3
 // materialises when the caller does not say.
 const defaultThumbnailLimit = 200
 
+// defaultSniffLimit caps how many files one FilesNeedingSniff call
+// materialises. Content sniffing opens a file per row, so the cap is what
+// keeps the first scan of a large folder from turning into tens of thousands
+// of opens in a single pass.
+const defaultSniffLimit = 2000
+
 // idChunkSize caps how many ids go into a single IN (...) clause.
 const idChunkSize = 500
 
@@ -46,7 +52,10 @@ const idChunkSize = 500
 const fileColumns = `id, folder_label, relative_path, filename, extension, mime_type,
 	size_bytes, file_mtime, file_atime, first_seen, archived_at, status,
 	thumbnail_path, content_hash, pinned, pinned_at, pin_source, last_seen,
-	thumb_attempts, thumb_last_attempt, thumb_error`
+	thumb_attempts, thumb_last_attempt, thumb_error, detected_type,
+	description, captured_local, captured_offset_minutes, captured_source,
+	gps_lat, gps_lon, gps_altitude_m, gps_accuracy_m, gps_source,
+	pair_key, pair_source, meta_scanned_at, meta_attempts, meta_last_attempt, meta_error`
 
 type Catalog struct {
 	db *sql.DB
@@ -134,6 +143,19 @@ func (c *Catalog) UpsertFile(f *FileRecord, scanGeneration int64) (conflict bool
 			file_mtime = CASE WHEN files.status = 'archived' THEN files.file_mtime ELSE excluded.file_mtime END,
 			file_atime = CASE WHEN files.status = 'archived' THEN files.file_atime ELSE excluded.file_atime END,
 			mime_type  = CASE WHEN files.status = 'archived' THEN files.mime_type  ELSE excluded.mime_type  END,
+			-- The sniffed type describes bytes, so it survives everything
+			-- except the bytes changing. Clearing it back to '' is what puts
+			-- the row into FilesNeedingSniff again; without this arm a file
+			-- replaced in place would keep the type of whatever used to be
+			-- there. An archived row's bytes are in cold storage and cannot
+			-- have changed under a scan of the syncthing folder, so it keeps
+			-- what it has.
+			detected_type = CASE
+				WHEN files.status = 'archived' THEN files.detected_type
+				WHEN files.file_mtime <> excluded.file_mtime THEN ''
+				WHEN files.size_bytes <> excluded.size_bytes THEN ''
+				ELSE files.detected_type
+			END,
 			last_seen  = excluded.last_seen,
 			status = CASE
 				WHEN files.status = 'missing' THEN 'synced'
@@ -171,22 +193,37 @@ func (c *Catalog) AdoptDeviceCopy(id, sizeBytes int64, mtime, atime time.Time) (
 func (c *Catalog) GetFile(folder, relPath string) (*FileRecord, error) {
 	row := c.db.QueryRow(`SELECT `+fileColumns+`
 		FROM files WHERE folder_label = ? AND relative_path = ?`, folder, relPath)
-	return scanFile(row)
+	file, err := scanFile(row)
+	if err != nil {
+		return nil, err
+	}
+	return c.hydrateFile(file)
 }
 
 // GetFileByID retrieves a file by its ID.
 func (c *Catalog) GetFileByID(id int64) (*FileRecord, error) {
 	row := c.db.QueryRow(`SELECT `+fileColumns+` FROM files WHERE id = ?`, id)
-	return scanFile(row)
+	file, err := scanFile(row)
+	if err != nil {
+		return nil, err
+	}
+	return c.hydrateFile(file)
 }
 
 type FileQuery struct {
-	Folder    string
-	Status    FileStatus
-	Extension string
-	Search    string
-	Pinned    *bool
-	PinSource string
+	Folder       string
+	Status       FileStatus
+	Extension    string
+	Search       string
+	Pinned       *bool
+	PinSource    string
+	CapturedFrom string
+	CapturedTo   string
+	Undated      bool
+	Near         *NearFilter
+	Tags         []string
+	Untagged     *bool
+	Described    *bool
 	// Conflicted selects rows with an UNRESOLVED section 4.1b conflict: a
 	// 'conflict' event newer than the last 'conflict_resolved' event for the
 	// same (folder, path). It is the only filter backed by the events table,
@@ -228,8 +265,40 @@ func (q FileQuery) filter() (string, []any) {
 		args = append(args, q.Extension)
 	}
 	if q.Search != "" {
-		clause.WriteString(" AND filename LIKE ?")
-		args = append(args, "%"+q.Search+"%")
+		textPattern := "%" + escapeLike(q.Search) + "%"
+		tagPattern := "%" + escapeLike(strings.ToLower(q.Search)) + "%"
+		clause.WriteString(` AND (
+			filename LIKE ? ESCAPE '\'
+			OR relative_path LIKE ? ESCAPE '\'
+			OR description LIKE ? ESCAPE '\'
+			OR EXISTS (
+				SELECT 1 FROM file_tags qft JOIN tags qt ON qt.id = qft.tag_id
+				WHERE qft.file_id = files.id AND qt.name_fold LIKE ? ESCAPE '\'
+			)
+		)`)
+		args = append(args, textPattern, textPattern, textPattern, tagPattern)
+	}
+	for _, fold := range q.Tags {
+		clause.WriteString(` AND EXISTS (
+			SELECT 1 FROM file_tags tft JOIN tags tt ON tt.id = tft.tag_id
+			WHERE tft.file_id = files.id
+			  AND (tt.name_fold = ? OR tt.name_fold LIKE ? ESCAPE '\')
+		)`)
+		args = append(args, fold, tagSubtreePattern(fold))
+	}
+	if q.Untagged != nil {
+		if *q.Untagged {
+			clause.WriteString(" AND NOT EXISTS (SELECT 1 FROM file_tags uft WHERE uft.file_id = files.id)")
+		} else {
+			clause.WriteString(" AND EXISTS (SELECT 1 FROM file_tags uft WHERE uft.file_id = files.id)")
+		}
+	}
+	if q.Described != nil {
+		if *q.Described {
+			clause.WriteString(" AND description <> ''")
+		} else {
+			clause.WriteString(" AND description = ''")
+		}
 	}
 	if q.Pinned != nil {
 		clause.WriteString(" AND pinned = ?")
@@ -239,8 +308,24 @@ func (q FileQuery) filter() (string, []any) {
 		clause.WriteString(" AND pin_source = ?")
 		args = append(args, q.PinSource)
 	}
+	if q.CapturedFrom != "" {
+		clause.WriteString(" AND captured_local <> '' AND captured_local >= ?")
+		args = append(args, q.CapturedFrom)
+	}
+	if q.CapturedTo != "" {
+		clause.WriteString(" AND captured_local <> '' AND captured_local <= ?")
+		args = append(args, q.CapturedTo+" 23:59:59.999")
+	}
+	if q.Undated {
+		// An empty capture value is not enough: until the extractor has looked,
+		// empty means unknown rather than "looked and found no date".
+		clause.WriteString(" AND captured_local = '' AND meta_scanned_at IS NOT NULL")
+	}
 	if q.Conflicted {
 		clause.WriteString(conflictedClause)
+	}
+	if q.Near != nil {
+		q.Near.appendBounds(&clause, &args)
 	}
 	return clause.String(), args
 }
@@ -268,6 +353,14 @@ const conflictedClause = `
 
 // ListFiles queries files with filtering, sorting, and pagination.
 func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
+	var err error
+	q, err = normalizeSearchFilters(q)
+	if err != nil {
+		return nil, err
+	}
+	if q.Near != nil && len(q.IDs) == 0 && !q.Near.valid() {
+		return nil, ErrInvalidNear
+	}
 	where, args := q.filter()
 	query := `SELECT ` + fileColumns + ` FROM files WHERE 1=1` + where
 
@@ -277,7 +370,14 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	// records: the SelectionBar patched 50 rows after a bulk restore and the
 	// rest went on rendering as archived. The caller caps the id list.
 	if len(q.IDs) > 0 {
-		return c.queryFiles(query+" ORDER BY id ASC", args...)
+		files, err := c.queryFiles(query+" ORDER BY id ASC", args...)
+		if err != nil {
+			return nil, err
+		}
+		if err := c.hydrateFileTags(files); err != nil {
+			return nil, err
+		}
+		return files, nil
 	}
 
 	// Every sort ends in `id ASC`. Without a total order, two rows that tie on
@@ -286,6 +386,8 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	// and drops the other. Ties are the norm here, not the exception: a camera
 	// roll copied off a card shares one mtime across hundreds of files.
 	switch {
+	case q.SortBy == "captured":
+		query += " ORDER BY CASE WHEN captured_local = '' THEN 1 ELSE 0 END, captured_local DESC, id ASC"
 	case q.SortBy == "size":
 		query += " ORDER BY size_bytes DESC, id ASC"
 	case q.SortBy == "name":
@@ -303,20 +405,51 @@ func (c *Catalog) ListFiles(q FileQuery) ([]FileRecord, error) {
 	if limit <= 0 {
 		limit = 50
 	}
+	if q.Near != nil {
+		files, err := c.queryFiles(query, args...)
+		if err != nil {
+			return nil, err
+		}
+		files = filterFilesNear(files, *q.Near)
+		start := max(0, min(q.Offset, len(files)))
+		end := min(start+limit, len(files))
+		files = files[start:end]
+		if err := c.hydrateFileTags(files); err != nil {
+			return nil, err
+		}
+		return files, nil
+	}
 	query += " LIMIT ? OFFSET ?"
 	args = append(args, limit, q.Offset)
 
-	return c.queryFiles(query, args...)
+	files, err := c.queryFiles(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.hydrateFileTags(files); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 // ListFileIDs backs "select all in folder". It applies the same filters as
 // ListFiles, ignores sort/offset/limit, orders by id ASC, and returns at most
 // capacity ids together with the true total. ids is always non-nil.
 func (c *Catalog) ListFileIDs(q FileQuery, capacity int) (ids []int64, total int64, err error) {
+	q, err = normalizeSearchFilters(q)
+	if err != nil {
+		return nil, 0, err
+	}
 	if capacity <= 0 {
 		capacity = 20000
 	}
+	if q.Near != nil && len(q.IDs) == 0 && !q.Near.valid() {
+		return nil, 0, ErrInvalidNear
+	}
 	where, args := q.filter()
+	if q.Near != nil && len(q.IDs) == 0 {
+		return c.listFileIDsNear(where, args, *q.Near, capacity)
+	}
 
 	if err := c.db.QueryRow(`SELECT COUNT(*) FROM files WHERE 1=1`+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("counting files: %w", err)
@@ -652,14 +785,14 @@ func (c *Catalog) FolderLabelsForIDs(ids []int64) ([]string, error) {
 	return labels, nil
 }
 
-// CountEvictionsUpTo reports how many files the daemon would have to offload
-// out of a folder, oldest first, to free the given number of bytes. capped is
+// CountEvictionsUpTo reports how many physical files the daemon would have to
+// offload, in oldest-group-first order, to free the given bytes. Pair groups
+// are indivisible: their synced bytes and file counts are accumulated together. capped is
 // true when the scan hit its 50,000-row ceiling before reaching the target.
 //
-// protected is called with each candidate's relative path and reports whether
-// the offloader would refuse to evict that file for good; the row is then
-// counted neither towards the running total nor towards count. Pass nil to
-// count every unpinned synced row.
+// protected is called with each synced member's relative path and reports
+// whether the offloader would refuse to evict it for good; one protected
+// member excludes the complete group. Pass nil for no extra protection.
 //
 // The predicate is a parameter rather than another WHERE clause because the
 // one thing that protects a file permanently -- a persistent glob (design
@@ -681,35 +814,57 @@ func (c *Catalog) CountEvictionsUpTo(folder string, bytes int64,
 	}
 	const scanCap = 50000
 
-	rows, err := c.db.Query(`
-		SELECT relative_path, size_bytes FROM files
+	seeds, err := c.queryFiles(`SELECT `+fileColumns+` FROM files
 		WHERE folder_label = ? AND status = 'synced' AND pinned = 0
 		ORDER BY MAX(file_mtime, file_atime) ASC
 		LIMIT ?`, folder, scanCap)
 	if err != nil {
 		return 0, false, err
 	}
-	defer rows.Close()
+	ids := make([]int64, 0, len(seeds))
+	for _, seed := range seeds {
+		ids = append(ids, seed.ID)
+	}
+	expanded, err := c.ExpandPairGroups(ids)
+	if err != nil {
+		return 0, false, err
+	}
+	files, err := c.FilesByIDs(expanded)
+	if err != nil {
+		return 0, false, err
+	}
 
 	var running int64
-	var scanned int
-	for rows.Next() {
-		var relPath string
-		var size int64
-		if err := rows.Scan(&relPath, &size); err != nil {
-			return 0, false, err
+	for _, group := range orderedPairGroups(files) {
+		eligible := true
+		var groupBytes int64
+		groupCount := 0
+		for _, file := range group.files {
+			switch file.Status {
+			case StatusArchived:
+				continue
+			case StatusSynced:
+				if file.Pinned || (protected != nil && protected(file.RelativePath)) {
+					eligible = false
+				}
+				groupBytes += file.SizeBytes
+				groupCount++
+			default:
+				// The mover refuses missing and transient members before
+				// moving anything, so the estimate must not count this group.
+				eligible = false
+			}
 		}
-		scanned++
-		if protected != nil && protected(relPath) {
+		if !eligible || groupCount == 0 {
 			continue
 		}
-		running += size
-		count++
+		running += groupBytes
+		count += groupCount
 		if running >= bytes {
-			return count, false, rows.Err()
+			return count, false, nil
 		}
 	}
-	return count, scanned == scanCap, rows.Err()
+	return count, len(seeds) == scanCap, nil
 }
 
 // FolderCounts returns the per-status file tally for a folder.
@@ -733,24 +888,69 @@ func (c *Catalog) FolderCounts(folder string) (FolderCounts, error) {
 	return fc, err
 }
 
-// OffloadCandidates returns unpinned synced files in a folder, oldest first by
-// max(mtime, atime), capped at limit rows. A limit of zero or less means
-// defaultOffloadCandidateLimit. The cap is mandatory and there is deliberately
-// no unbounded variant: without it a 50,000-file camera roll materialises
-// 50,000 records on every tick.
+// OffloadCandidates returns the first stable candidate page. Quota enforcement
+// uses OffloadCandidatePage directly so protected rows in this page cannot hide
+// eligible rows that follow it.
+func (c *Catalog) OffloadCandidates(folder string, limit int) ([]FileRecord, error) {
+	files, _, err := c.OffloadCandidatePage(folder, limit, 0)
+	return files, err
+}
+
+// OffloadCandidatePage seeds from unpinned synced rows after a stable keyset
+// cursor, expands every selected pair group, and returns complete groups ordered
+// by their newest member's max(mtime, atime). Expansion may exceed limit because
+// truncating a group would recreate the split bug. next is the final SEED id,
+// not an expanded companion id; pass it back unchanged to fetch the next page.
+// A zero next means no seed rows were returned.
 //
-// Persistent-glob filtering and the grace cutoff happen in the caller, in Go:
+// Returned companion rows can be pinned or already archived so the caller can
+// apply policy to the group as a unit. Persistent-glob filtering and the grace cutoff happen in the caller, in Go:
 // file_mtime and file_atime are TEXT columns, so comparing a bound Go time
 // against them is a string comparison with a timezone-dependent result.
-func (c *Catalog) OffloadCandidates(folder string, limit int) ([]FileRecord, error) {
+// The cursor therefore compares against the still-present catalog row by id;
+// archiving it changes status but not its ordering fields, so pages cannot skip
+// when earlier rows disappear from the synced predicate.
+func (c *Catalog) OffloadCandidatePage(folder string, limit int, afterID int64) (
+	files []FileRecord, next int64, err error) {
+
 	if limit <= 0 {
 		limit = defaultOffloadCandidateLimit
 	}
-	return c.queryFiles(`SELECT `+fileColumns+`
-		FROM files
-		WHERE folder_label = ? AND status = 'synced' AND pinned = 0
-		ORDER BY MAX(file_mtime, file_atime) ASC
-		LIMIT ?`, folder, limit)
+	where := `folder_label = ? AND status = 'synced' AND pinned = 0`
+	args := []any{folder}
+	if afterID > 0 {
+		where += ` AND (
+			MAX(file_mtime, file_atime) > (SELECT MAX(file_mtime, file_atime) FROM files WHERE id = ?)
+			OR (MAX(file_mtime, file_atime) = (SELECT MAX(file_mtime, file_atime) FROM files WHERE id = ?)
+				AND id > ?))`
+		args = append(args, afterID, afterID, afterID)
+	}
+	args = append(args, limit)
+	seeds, err := c.queryFiles(`SELECT `+fileColumns+`
+		FROM files WHERE `+where+`
+		ORDER BY MAX(file_mtime, file_atime) ASC, id ASC
+		LIMIT ?`, args...)
+	if err != nil || len(seeds) == 0 {
+		return seeds, 0, err
+	}
+	next = seeds[len(seeds)-1].ID
+	ids := make([]int64, 0, len(seeds))
+	for _, seed := range seeds {
+		ids = append(ids, seed.ID)
+	}
+	expanded, err := c.ExpandPairGroups(ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	files, err = c.FilesByIDs(expanded)
+	if err != nil {
+		return nil, 0, err
+	}
+	ordered := make([]FileRecord, 0, len(files))
+	for _, group := range orderedPairGroups(files) {
+		ordered = append(ordered, group.files...)
+	}
+	return ordered, next, nil
 }
 
 // FileCount returns the total number of files matching the given status (or all if empty).
@@ -784,27 +984,83 @@ func (c *Catalog) UpdateThumbnailPath(id int64, thumbPath string) error {
 //
 // As with OffloadCandidates the cap is mandatory and there is no unbounded
 // variant to reach for by accident.
+//
+// It matches on extension alone, which cannot reach a file that has none. See
+// FilesNeedingThumbnailsByType.
 func (c *Catalog) FilesNeedingThumbnails(extensions []string, limit int) ([]FileRecord, error) {
-	if len(extensions) == 0 {
+	return c.FilesNeedingThumbnailsByType(extensions, nil, limit)
+}
+
+// FilesNeedingThumbnailsByType is FilesNeedingThumbnails with a second arm
+// matching on the content-sniffed type. A file qualifies on EITHER its
+// extension or its detected type; passing nil for detectedTypes gives the
+// extension-only behaviour.
+//
+// That second arm is what makes an extension-less file reachable at all. Both
+// extension and mime_type are derived from the filename, so a bookmark export
+// called "reading" has an empty extension and an empty mime_type, and is
+// invisible to an extension-keyed predicate no matter how many formats the
+// generator learns. detected_type comes from the bytes.
+func (c *Catalog) FilesNeedingThumbnailsByType(extensions, detectedTypes []string, limit int) ([]FileRecord, error) {
+	if len(extensions) == 0 && len(detectedTypes) == 0 {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = defaultThumbnailLimit
 	}
 
-	args := make([]any, 0, len(extensions)+2)
-	for _, ext := range extensions {
-		args = append(args, ext)
+	args := make([]any, 0, len(extensions)+len(detectedTypes)+2)
+	var arms []string
+	if len(extensions) > 0 {
+		arms = append(arms, `extension IN (`+placeholders(len(extensions))+`)`)
+		for _, ext := range extensions {
+			args = append(args, ext)
+		}
+	}
+	if len(detectedTypes) > 0 {
+		arms = append(arms, `detected_type IN (`+placeholders(len(detectedTypes))+`)`)
+		for _, t := range detectedTypes {
+			args = append(args, t)
+		}
 	}
 	args = append(args, maxThumbnailAttempts, limit)
 
 	return c.queryFiles(`SELECT `+fileColumns+`
 		FROM files
-		WHERE thumbnail_path = '' AND extension IN (`+placeholders(len(extensions))+`)
+		WHERE thumbnail_path = '' AND (`+strings.Join(arms, " OR ")+`)
 		AND status IN ('synced', 'archived')
 		AND thumb_attempts < ?
 		ORDER BY file_mtime DESC
 		LIMIT ?`, args...)
+}
+
+// FilesNeedingSniff returns rows in one folder whose detected_type has never
+// been filled in, capped at limit. Empty means "not sniffed"; a sniff that
+// recognised nothing writes filetype.TypeUnknown instead, so a file the
+// scanner cannot identify leaves this queue after one read rather than being
+// re-opened on every scan for the life of the installation.
+//
+// Only synced rows: an archived file's bytes live in cold storage and the
+// scanner walks the syncthing folder, so it has no path to read. Archived rows
+// keep whatever type they were sniffed as before they were offloaded.
+func (c *Catalog) FilesNeedingSniff(folder string, limit int) ([]FileRecord, error) {
+	if limit <= 0 {
+		limit = defaultSniffLimit
+	}
+	return c.queryFiles(`SELECT `+fileColumns+`
+		FROM files
+		WHERE detected_type = '' AND status = 'synced' AND folder_label = ?
+		ORDER BY id
+		LIMIT ?`, folder, limit)
+}
+
+// SetDetectedType records the result of a content sniff.
+func (c *Catalog) SetDetectedType(id int64, detected string) error {
+	if detected == "" {
+		return errors.New("refusing to store an empty detected_type: it would re-queue the file forever")
+	}
+	_, err := c.db.Exec(`UPDATE files SET detected_type = ? WHERE id = ?`, detected, id)
+	return err
 }
 
 // RecordThumbnailFailure increments a file's attempt counter and records why
@@ -840,7 +1096,7 @@ func (c *Catalog) ResetThumbnailFailures(folder string) (int64, error) {
 // ---------------------------------------------------------------------------
 
 const folderConfigColumns = `id, folder_label, syncthing_id, syncthing_path, budget_bytes,
-	grace_minutes, enabled, present_in_toml, wedge_warned_at, last_enforced_at`
+	grace_minutes, enabled, present_in_toml, wedge_warned_at, last_enforced_at, display_name`
 
 // ReconcileFolderFromTOML upserts the infrastructure fields of a folder
 // declared in coldstore.toml. budget/grace/enabled are written ONLY when the
@@ -899,6 +1155,14 @@ func (c *Catalog) MarkFoldersAbsentFromTOML(declared []string) error {
 // grace_minutes alone. Returns false if no row with that label exists.
 func (c *Catalog) UpdateFolderPolicy(label string, budgetBytes *int64, graceMinutes *int,
 	enabled *bool) (found bool, err error) {
+	return c.UpdateFolderSettings(label, budgetBytes, graceMinutes, enabled, nil)
+}
+
+// UpdateFolderSettings extends UpdateFolderPolicy with the UI-owned cosmetic
+// display name. The stable TOML label and both Syncthing fields remain
+// impossible to write through this path.
+func (c *Catalog) UpdateFolderSettings(label string, budgetBytes *int64, graceMinutes *int,
+	enabled *bool, displayName *string) (found bool, err error) {
 
 	var exists int
 	err = c.db.QueryRow(`SELECT 1 FROM folder_configs WHERE folder_label = ?`, label).Scan(&exists)
@@ -922,6 +1186,10 @@ func (c *Catalog) UpdateFolderPolicy(label string, budgetBytes *int64, graceMinu
 	if enabled != nil {
 		sets = append(sets, "enabled = ?")
 		args = append(args, boolToInt(*enabled))
+	}
+	if displayName != nil {
+		sets = append(sets, "display_name = ?")
+		args = append(args, *displayName)
 	}
 	if len(sets) == 0 {
 		return true, nil
@@ -1066,8 +1334,8 @@ func (c *Catalog) LogEvent(eventType, folder, path, details string) error {
 	return err
 }
 
-// EventClassWarning selects every event type EXCEPT the three routine
-// per-file ones. A single enforcement pass writes hundreds of archive rows, so
+// EventClassWarning selects every event type EXCEPT routine archive/restore,
+// folder-seeding and successful-scan records. A single enforcement pass writes hundreds of archive rows, so
 // an unfiltered "last 10 events for this folder" would never once show the
 // wedge warning or the cold-storage warning -- the things the list exists to
 // show (design section 6.12). Section 5.11's stray-archive report is the third
@@ -1075,8 +1343,9 @@ func (c *Catalog) LogEvent(eventType, folder, path, details string) error {
 // is written today.
 const EventClassWarning = "warning"
 
-// routineEventTypes are the types EventClassWarning filters out.
-var routineEventTypes = []string{"archive", "restore", "folder_seeded"}
+// routineEventTypes are the types EventClassWarning filters out. Failed and
+// incomplete scans are deliberately absent: they are health warnings.
+var routineEventTypes = []string{"archive", "restore", "folder_seeded", "scan_completed"}
 
 // ListEvents reads the audit log newest first. folder and eventType are exact
 // matches and are ignored when empty; class is either "" or EventClassWarning.
@@ -1156,11 +1425,15 @@ type fileScanner interface{ Scan(dest ...any) error }
 func scanFile(s fileScanner) (*FileRecord, error) {
 	var f FileRecord
 	var archivedAt sql.NullTime
-	var pinnedAt, lastAttempt sql.NullInt64
+	var pinnedAt, thumbLastAttempt, capturedOffset, metaScannedAt, metaLastAttempt sql.NullInt64
+	var gpsLat, gpsLon, gpsAltitude, gpsAccuracy sql.NullFloat64
 	err := s.Scan(&f.ID, &f.FolderLabel, &f.RelativePath, &f.Filename, &f.Extension,
 		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FileAtime, &f.FirstSeen, &archivedAt,
 		&f.Status, &f.ThumbnailPath, &f.ContentHash, &f.Pinned, &pinnedAt, &f.PinSource,
-		&f.LastSeen, &f.ThumbAttempts, &lastAttempt, &f.ThumbError)
+		&f.LastSeen, &f.ThumbAttempts, &thumbLastAttempt, &f.ThumbError, &f.DetectedType,
+		&f.Description, &f.CapturedLocal, &capturedOffset, &f.CapturedSource,
+		&gpsLat, &gpsLon, &gpsAltitude, &gpsAccuracy, &f.GPSSource,
+		&f.PairKey, &f.PairSource, &metaScannedAt, &f.MetaAttempts, &metaLastAttempt, &f.MetaError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoSuchFile
 	}
@@ -1173,9 +1446,32 @@ func scanFile(s fileScanner) (*FileRecord, error) {
 	if pinnedAt.Valid {
 		f.PinnedAt = &pinnedAt.Int64
 	}
-	if lastAttempt.Valid {
-		f.ThumbLastAttempt = &lastAttempt.Int64
+	if thumbLastAttempt.Valid {
+		f.ThumbLastAttempt = &thumbLastAttempt.Int64
 	}
+	if capturedOffset.Valid {
+		offset := int(capturedOffset.Int64)
+		f.CapturedOffsetMin = &offset
+	}
+	if gpsLat.Valid {
+		f.GPSLat = &gpsLat.Float64
+	}
+	if gpsLon.Valid {
+		f.GPSLon = &gpsLon.Float64
+	}
+	if gpsAltitude.Valid {
+		f.GPSAltitudeM = &gpsAltitude.Float64
+	}
+	if gpsAccuracy.Valid {
+		f.GPSAccuracyM = &gpsAccuracy.Float64
+	}
+	if metaScannedAt.Valid {
+		f.MetaScannedAt = &metaScannedAt.Int64
+	}
+	if metaLastAttempt.Valid {
+		f.MetaLastAttempt = &metaLastAttempt.Int64
+	}
+	f.Tags = make([]string, 0)
 	return &f, nil
 }
 
@@ -1201,7 +1497,8 @@ func scanFolderConfig(s fileScanner) (*FolderConfigRecord, error) {
 	var fc FolderConfigRecord
 	var wedgeWarnedAt, lastEnforcedAt sql.NullInt64
 	err := s.Scan(&fc.ID, &fc.FolderLabel, &fc.SyncthingID, &fc.SyncthingPath, &fc.BudgetBytes,
-		&fc.GraceMinutes, &fc.Enabled, &fc.PresentInTOML, &wedgeWarnedAt, &lastEnforcedAt)
+		&fc.GraceMinutes, &fc.Enabled, &fc.PresentInTOML, &wedgeWarnedAt, &lastEnforcedAt,
+		&fc.DisplayName)
 	if err != nil {
 		return nil, err
 	}
