@@ -34,6 +34,11 @@ docs/deploy-checklist.md
 # Coldstore. It records real folder IDs and paths once the blanks are filled.
 docs/syncthing-coldstore-migration.md
 
+# Live deployment inputs and generated drop-in bundles contain personal
+# principals, device IDs and host paths. The repository is public.
+/coldstore.toml.live
+/deploy/microserver-live/
+
 # Local secret material must never be tracked or make release builds appear
 # dirty. Service credentials belong outside the repository in production.
 /.secrets

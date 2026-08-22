@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,8 +25,13 @@ func main() {
 	checkOnly := flag.Bool("check", false, "validate the config and the machine, print the result, and exit")
 	statusOnly := flag.Bool("status", false, "print an offline, read-only archive health report and exit")
 	jsonOutput := flag.Bool("json", false, "with --status, emit structured JSON")
+	renameFolderLabel := flag.String("rename-folder-label", "",
+		"offline catalog identity migration in OLD=NEW form (service must be stopped)")
+	renameFolderBudget := flag.String("rename-folder-budget", "",
+		"temporary positive budget for --rename-folder-label (for example 2TB)")
 	flag.Parse()
-	if err := validateModeFlags(*scanOnce, *checkOnly, *statusOnly, *jsonOutput); err != nil {
+	if err := validateModeFlags(*scanOnce, *checkOnly, *statusOnly, *jsonOutput,
+		*renameFolderLabel, *renameFolderBudget); err != nil {
 		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
 		os.Exit(diagnostic.ExitFailure)
 	}
@@ -66,6 +72,25 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 
+	var renameOld, renameNew string
+	var renameBudgetBytes int64
+	if *renameFolderLabel != "" {
+		renameOld, renameNew, err = parseFolderLabelRename(*renameFolderLabel)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+			os.Exit(1)
+		}
+		renameBudgetBytes, err = config.ParseBudget(*renameFolderBudget)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: --rename-folder-budget: %v\n", err)
+			os.Exit(1)
+		}
+		if err := refuseRunningDaemon(cfg.Server.ListenAddr); err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	warnings, err := cfg.CheckEnvironment()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
@@ -76,6 +101,31 @@ func main() {
 	}
 
 	dbPath := cfg.Storage.ColdStoragePath + "/catalog.db"
+	if *renameFolderLabel != "" {
+		cat, err := catalog.Open(dbPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: opening catalog for folder-label migration: %v\n", err)
+			os.Exit(1)
+		}
+		defer cat.Close()
+
+		result, err := daemon.MigrateFolderLabel(cfg, cat, renameOld, renameNew, renameBudgetBytes)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: folder-label migration failed: %v\n", err)
+			os.Exit(1)
+		}
+		movedRoots := "none (no source directories existed)"
+		if len(result.MovedRoots) != 0 {
+			movedRoots = strings.Join(result.MovedRoots, ", ")
+		}
+		fmt.Printf("folder-label migration complete: %s -> %s\n", renameOld, renameNew)
+		fmt.Printf("catalog rows      files=%d persistent_paths=%d events=%d jobs=%d\n",
+			result.Catalog.Files, result.Catalog.PersistentPaths,
+			result.Catalog.Events, result.Catalog.Jobs)
+		fmt.Printf("moved data roots  %s\n", movedRoots)
+		fmt.Printf("new budget        %s (%d bytes)\n", *renameFolderBudget, renameBudgetBytes)
+		return
+	}
 	if *checkOnly {
 		if err := checkCatalogFolderIdentities(cfg, dbPath); err != nil {
 			fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
@@ -173,20 +223,48 @@ func main() {
 	}
 }
 
-func validateModeFlags(scan, check, status, jsonOutput bool) error {
+func validateModeFlags(scan, check, status, jsonOutput bool, renameSpec, renameBudget string) error {
 	modes := 0
-	for _, selected := range []bool{scan, check, status} {
+	for _, selected := range []bool{scan, check, status, renameSpec != ""} {
 		if selected {
 			modes++
 		}
 	}
 	if modes > 1 {
-		return fmt.Errorf("--scan, --check and --status are mutually exclusive")
+		return fmt.Errorf("--scan, --check, --status and --rename-folder-label are mutually exclusive")
 	}
 	if jsonOutput && !status {
 		return fmt.Errorf("--json requires --status")
 	}
+	if renameSpec == "" && renameBudget != "" {
+		return fmt.Errorf("--rename-folder-budget requires --rename-folder-label")
+	}
+	if renameSpec != "" && renameBudget == "" {
+		return fmt.Errorf("--rename-folder-label requires --rename-folder-budget")
+	}
 	return nil
+}
+
+func parseFolderLabelRename(spec string) (string, string, error) {
+	oldLabel, newLabel, ok := strings.Cut(spec, "=")
+	if !ok || oldLabel == "" || newLabel == "" || strings.Contains(newLabel, "=") {
+		return "", "", fmt.Errorf("--rename-folder-label must be exactly OLD=NEW")
+	}
+	return oldLabel, newLabel, nil
+}
+
+// The migration is an offline maintenance operation. A successful connection
+// to the configured listener is strong evidence that the daemon was not
+// stopped; refusing here prevents the common operator error. The catalog also
+// rejects in-flight file moves and jobs as a second, state-based guard.
+func refuseRunningDaemon(listenAddr string) error {
+	conn, err := net.DialTimeout("tcp", listenAddr, 300*time.Millisecond)
+	if err != nil {
+		return nil
+	}
+	conn.Close()
+	return fmt.Errorf("a process is listening at %s; stop coldstore before --rename-folder-label",
+		listenAddr)
 }
 
 func writeStatus(ctx context.Context, w io.Writer, cfg *config.Config, dbPath string, jsonOutput bool) (int, error) {

@@ -284,7 +284,9 @@ func TestReconcileFoldersShouldRejectALabelRenameBeforeWritingAnything(t *testin
 	if err == nil {
 		t.Fatal("renaming Photos to Pictures while retaining its path must be rejected")
 	}
-	for _, want := range []string{"Pictures", "/srv/sync/Photos", "Photos", "permanent", "display_name"} {
+	for _, want := range []string{
+		"Pictures", "/srv/sync/Photos", "Photos", "stable", "--rename-folder-label", "display_name",
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want recovery detail %q", err, want)
 		}
@@ -325,7 +327,7 @@ func TestReconcileFoldersShouldRejectALabelAndPathRenameWithTheSameSyncthingID(t
 	}
 	for _, want := range []string{
 		"Pictures", "ph5wp-hswbp", "/srv/sync/Camera Roll (Tristan)",
-		"Photos", "/srv/sync/Photos", "permanent", "display_name",
+		"Photos", "/srv/sync/Photos", "stable", "--rename-folder-label", "display_name",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want recovery detail %q", err, want)

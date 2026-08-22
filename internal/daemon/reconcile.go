@@ -129,14 +129,16 @@ func ValidateFolderIdentityChanges(cfg *config.Config, identities []catalog.Fold
 			}
 			if filepath.Clean(identity.SyncthingPath) == declaredPath {
 				return fmt.Errorf("folder %q declares path %q, but that path is already catalogued under label %q; "+
-					"folder labels are permanent identifiers. Restore label %q in coldstore.toml, or use a different path; "+
-					"display_name is the cosmetic alternative when this version exposes it",
+					"folder labels are stable catalog identifiers. Restore label %q for normal startup, or stop the "+
+					"service and use --rename-folder-label for an intentional identity migration; display_name is "+
+					"the cosmetic alternative",
 					f.Label, declaredPath, identity.FolderLabel, identity.FolderLabel)
 			}
 			if f.SyncthingID != "" && identity.SyncthingID != "" && f.SyncthingID == identity.SyncthingID {
 				return fmt.Errorf("folder %q declares Syncthing ID %q and path %q, but that Syncthing ID is already "+
-					"catalogued under label %q at path %q; folder labels are permanent identifiers. Restore label %q "+
-					"in coldstore.toml; display_name is the cosmetic alternative when this version exposes it",
+					"catalogued under label %q at path %q; folder labels are stable catalog identifiers. Restore label %q "+
+					"for normal startup, or stop the service and use --rename-folder-label for an intentional identity "+
+					"migration; display_name is the cosmetic alternative",
 					f.Label, f.SyncthingID, declaredPath, identity.FolderLabel,
 					filepath.Clean(identity.SyncthingPath), identity.FolderLabel)
 			}

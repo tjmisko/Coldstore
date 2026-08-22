@@ -150,12 +150,13 @@ api_key = ""
 
 # A [[folders]] block DECLARES a folder. Its label and path are infrastructure:
 # adding a folder means editing this file and restarting the daemon. The label
-# is the permanent identifier that files, policy and archive paths hang off.
-# Once coldstore has catalogued it, NEVER edit the label to rename the folder;
-# startup and --check reject another label claiming the catalogued path. A path
-# may move while its label stays unchanged. `display_name` is the cosmetic name
-# alternative in versions that expose it; until then, leave the label unchanged.
-# Labels must be unique and paths must be absolute.
+# is the stable identifier that files, policy and archive paths hang off. NEVER
+# edit only the label to rename a catalogued folder: startup and --check reject
+# another label claiming its path or Syncthing ID. Use `display_name` for a
+# cosmetic change. A deliberate identity migration requires the service to be
+# stopped, a verified backup, and the explicit --rename-folder-label maintenance
+# command documented in docs/deployment.md. Labels must be unique and paths
+# must be absolute.
 #
 # EVERY MANAGED FOLDER MUST BE "Send & Receive" IN SYNCTHING. coldstore frees
 # space by deleting files from this folder and letting Syncthing propagate the

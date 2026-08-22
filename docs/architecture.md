@@ -114,9 +114,11 @@ Original relative paths are preserved exactly, so restore = move back to `{synct
 
 **`folder_configs`** -- per-folder settings, and the runtime source of truth for
 both folder policy and folder paths:
-- `folder_label` -- permanent identity used by file rows, policy and archive paths.
-  Reconciliation rejects a cleaned path or non-empty Syncthing ID already catalogued
-  under a different label, including rows no longer present in TOML
+- `folder_label` -- stable identity used by file rows, policy and archive paths.
+  Ordinary reconciliation rejects a cleaned path or non-empty Syncthing ID already
+  catalogued under a different label, including rows no longer present in TOML. An
+  intentional rename uses the explicit offline `--rename-folder-label` migration,
+  which rewrites every dependent catalog row and both label-keyed data roots
 - `syncthing_id`, `syncthing_path` -- refreshed from `coldstore.toml` by startup
   reconciliation; the path may change while `folder_label` stays unchanged. Non-empty
   Syncthing IDs must be unique across declarations

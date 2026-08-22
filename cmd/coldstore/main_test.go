@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,23 +165,54 @@ func TestStatusFlagsShouldRemainAdditiveAndRejectAmbiguousModes(t *testing.T) {
 	for _, tc := range []struct {
 		name                      string
 		scan, check, status, json bool
+		renameSpec, renameBudget  string
 		wantErr                   bool
 	}{
-		{"daemon", false, false, false, false, false},
-		{"scan", true, false, false, false, false},
-		{"check", false, true, false, false, false},
-		{"status human", false, false, true, false, false},
-		{"status json", false, false, true, true, false},
-		{"json alone", false, false, false, true, true},
-		{"scan and status", true, false, true, false, true},
-		{"check and status", false, true, true, false, true},
+		{"daemon", false, false, false, false, "", "", false},
+		{"scan", true, false, false, false, "", "", false},
+		{"check", false, true, false, false, "", "", false},
+		{"status human", false, false, true, false, "", "", false},
+		{"status json", false, false, true, true, "", "", false},
+		{"rename", false, false, false, false, "Photos=CameraRollTristan", "2TB", false},
+		{"json alone", false, false, false, true, "", "", true},
+		{"scan and status", true, false, true, false, "", "", true},
+		{"check and status", false, true, true, false, "", "", true},
+		{"rename and check", false, true, false, false, "Photos=CameraRollTristan", "2TB", true},
+		{"rename without budget", false, false, false, false, "Photos=CameraRollTristan", "", true},
+		{"budget without rename", false, false, false, false, "", "2TB", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateModeFlags(tc.scan, tc.check, tc.status, tc.json)
+			err := validateModeFlags(tc.scan, tc.check, tc.status, tc.json,
+				tc.renameSpec, tc.renameBudget)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("validateModeFlags error = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseFolderLabelRenameShouldRequireOneCompleteMapping(t *testing.T) {
+	oldLabel, newLabel, err := parseFolderLabelRename("Photos=CameraRollTristan")
+	if err != nil || oldLabel != "Photos" || newLabel != "CameraRollTristan" {
+		t.Fatalf("parseFolderLabelRename = %q, %q, %v", oldLabel, newLabel, err)
+	}
+	for _, invalid := range []string{"", "Photos", "=CameraRollTristan", "Photos=", "A=B=C"} {
+		if _, _, err := parseFolderLabelRename(invalid); err == nil {
+			t.Errorf("parseFolderLabelRename(%q) succeeded, want an error", invalid)
+		}
+	}
+}
+
+func TestFolderLabelMigrationShouldRefuseAListeningDaemon(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	if err := refuseRunningDaemon(listener.Addr().String()); err == nil ||
+		!strings.Contains(err.Error(), "stop coldstore") {
+		t.Fatalf("refuseRunningDaemon error = %v, want the offline refusal", err)
 	}
 }
 

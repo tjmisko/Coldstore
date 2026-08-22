@@ -26,7 +26,7 @@ It builds to nine decisions:
 | T5 | Coldstore **never writes into a Syncthing folder**. No XMP sidecars, no in-place EXIF edits. Portability is served by an export to cold storage. |
 | T6 | Search extends the existing `q` predicate and adds an index-backed `tag=` filter. **No FTS5** — it would change the build tags of every CI job for a corpus that does not need it. |
 | T7 | Tag writes do **not** take the `Mover` mutex, because a tag changes nothing quota enforcement reads. The moment a tag gates offloading, that stops being true. |
-| T8 | "Rename a folder" means renaming a **directory inside** a Syncthing folder. It rewrites three trees and two columns and runs as a durable job. The coldstore folder **label** is not renameable; a cosmetic `display_name` is offered instead. |
+| T8 | "Rename a folder" in the UI means renaming a **directory inside** a Syncthing folder. It rewrites three trees and two columns and runs as a durable job. A cosmetic folder-name change uses `display_name`; a real folder-label identity migration is offline and CLI-only. |
 | T9 | Live Photos are a first-class **pair group**. A member is never archived, restored or renamed alone. |
 | T10 | Metadata reading is **hybrid**: pure Go for the bulk capture-time and GPS path, `ffprobe` for QuickTime, and `exiftool` **as a subprocess** — never as an import — for the Live Photo still probe only. |
 | T11 | Tagging registers `t` / `T` as operators in the existing grammar. Because an operator carries a **range but not an argument**, the active tagging paths are picker and repeat. |
@@ -1523,7 +1523,7 @@ prevent.
 | | What it is | Verdict |
 |---|---|---|
 | **(a)** A directory **inside** a Syncthing folder: `CameraRoll/2024/01` → `CameraRoll/2024/Iceland` | A real filesystem rename that Syncthing propagates to every device | **Build it.** This is what the owner asked for. |
-| **(b)** The coldstore **folder label**: `CameraRoll` → `Photos` | A join key in five tables and a path component in two on-disk trees | **Refuse it.** Offer `display_name` instead (6.5). |
+| **(b)** The coldstore **folder label**: `CameraRoll` → `Photos` | A join key in five tables and a path component in two on-disk trees | **Refuse config-only/UI edits.** Use `display_name` for cosmetics, or the explicit offline migration for a real identity change (6.4). |
 | **(c)** The folder's **path on disk**: `/home/u/CameraRoll` → `/srv/photos` | Owned by Syncthing and by `coldstore.toml` | **Already works, needs no code.** (6.6) |
 
 ### 6.2 What a directory rename has to rewrite
@@ -1621,7 +1621,7 @@ is `'basename'` **breaks the pairing** — so a single-file rename inside such a
 renames the whole group (keeping the shared stem) or is refused with a `409` explaining
 which files it would separate. Renaming the whole group is the default.
 
-### 6.4 Why the label is not renameable, and the shipped identity guard
+### 6.4 Why normal label edits are refused, and the offline migration
 
 `folder_label` is the join key in `files`, `folder_configs`, `persistent_paths`, `jobs` and
 `events.folder`, and it is a path component in `archive/{label}/` and `thumbnails/{label}/`.
@@ -1644,6 +1644,12 @@ belongs to an existing `folder_configs` row under a **different** label, coldsto
 with a recovery-oriented message naming both labels. The ID check also covers an attempted
 rename that moves the filesystem path in the same edit. Failing closed is the right severity:
 the alternative is a silently duplicated catalog that gets worse every tick.
+
+An intentional identity change uses `--rename-folder-label OLD=NEW` while the daemon is
+stopped, with a replacement config and an explicit temporary budget. That command moves the
+two label-keyed data roots and rewrites `files`, `folder_configs`, `persistent_paths`,
+`events.folder`, `jobs.folder_label`, and stored thumbnail paths while preserving file IDs,
+tags, pins and metadata. It is deliberately unavailable through the UI and ordinary startup.
 
 ### 6.5 `display_name` — the safe version of what was asked for
 
@@ -1911,7 +1917,7 @@ mode renders permanently, leaving it nothing to toggle. Shadowing a binding whos
 the shadowing scope already delivers removes no capability. Recorded here because a reader
 scanning for collisions will find this one and try to be helpful.
 
-**17. Allowing the coldstore folder label to be renamed.**
+**17. Allowing the coldstore folder label to be renamed in the UI.**
 Rejected — section 6.4. It is a join key in five tables and a path component in two on-disk
-trees, and it is TOML-owned, so any UI rename is undone at the next restart in the worst
-possible way. `display_name` gives the owner what they actually wanted with none of it.
+trees, and it is TOML-owned, so an ordinary UI/config rename strands state. `display_name`
+handles cosmetic changes; the rare real identity change is an offline CLI migration.
