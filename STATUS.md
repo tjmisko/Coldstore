@@ -118,6 +118,9 @@ already-offloaded archive rows.
   selected least-privilege path is a revocable share of the server machine, restricted to
   TCP 443 and the Coldstore Serve proxy. SSH, Syncthing, raw port 8090 and every other server
   service remain out of scope. `onboarding.md` is the runbook.
+- Owner-provided preflight on 2026-08-21 confirmed Tailscale 1.102.3, no existing Serve or
+  Funnel configuration, and the expected `401` Basic challenge from the loopback Coldstore
+  listener. Tailnet policy review is the next gate; no Serve configuration has been applied.
 - Public-domain, zero-install guest access is deferred. If selected later, it requires a
   domain/proxy trust boundary, session authentication, app-enforced authorization, CSRF
   defense and rate limiting.

@@ -67,6 +67,12 @@ Share it with the co-owner using the password manager's secure-sharing feature.
 
 ## Phase 1 — preflight on the server
 
+**Completed from owner-provided output on 2026-08-21:** Tailscale 1.102.3 is installed;
+`tailscale serve status` and `tailscale funnel status` both report no configuration; and an
+unauthenticated HEAD request to the loopback Coldstore listener returns `401 Unauthorized`
+with `WWW-Authenticate: Basic realm="coldstore"`. No private host or tailnet identifiers are
+recorded here.
+
 Run these read-only checks and review their output before changing anything:
 
 ```bash
