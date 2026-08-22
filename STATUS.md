@@ -111,6 +111,9 @@ already-offloaded archive rows.
   scoped API bearer tokens without changing the Tailscale transport.
 - An authenticated remote owner receives the same full web UI/API as at home, including all
   existing mutating operations. No read-only remote owner role is planned for v1.
+- Two co-owners will share the existing Basic Auth credential, already stored in the owner's
+  password manager. Per-person attribution and revocation are deferred to later identities
+  or tokens.
 - Public-domain, zero-install guest access is deferred. If selected later, it requires a
   domain/proxy trust boundary, session authentication, app-enforced authorization, CSRF
   defense and rate limiting.

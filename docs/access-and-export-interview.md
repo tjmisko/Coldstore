@@ -8,8 +8,10 @@ records decisions; it does not authorize deployment, public exposure, or product
 The owner has stated these requirements:
 
 - coldstore must work from an iPhone, Linux, macOS and probably Windows;
-- access away from home would be useful, but is not required for v1; and
-- Tailscale is already installed for another project on several owner devices; and
+- access away from home would be useful, but is not required for v1;
+- Tailscale is already installed for another project on several owner devices;
+- two co-owners will share full control through one existing Basic Auth credential, which is
+  already stored in the owner's password manager; and
 - the earlier interface interview asked for the possibility of guest access from another
   person's device. Zero-install public guest access is deferred beyond v1 by the private
   Tailscale decision.
@@ -27,7 +29,7 @@ The owner selected this v1 direction on 2026-08-21:
 - defer XMP export implementation and retain it as a portability follow-up;
 - use Tailscale Serve as the private HTTPS path for the owner's devices;
 - keep the Go server on loopback and require the existing Basic Auth through Serve;
-- do not trust Tailscale identity headers for v1 authorization; and
+- do not trust Tailscale identity headers for v1 authorization;
 - expose the same owner web UI and API remotely that are available at home, including all
   existing mutating operations; and
 - defer public-domain guest sessions until zero-install guest access is required.
@@ -202,13 +204,17 @@ The browser sends the same username/password on every request. It is small and u
 CLI/runbook compatibility, but browser logout is poor, every user effectively shares one
 credential, and individual sessions or guests cannot be revoked. Keep it as a compatibility
 path; do not use it as the public guest model. The owner selected it behind Tailscale for v1.
+Two co-owners will share the existing full-control credential, already kept in the owner's
+password manager. Changing or revoking it affects both people at once, and requests cannot be
+attributed to one co-owner by Basic Auth alone; those are accepted v1 limitations.
 
 ### Tailscale identity
 
 Tailscale authenticates the device/user before traffic reaches Serve, which can add verified
-identity headers for a loopback backend. For private owner-only v1 this may remove the need
-for a new coldstore login/session entirely. Coldstore would still need explicit mapping from
-the Tailscale identity to owner permissions, and Basic Auth can remain for existing tools.
+identity headers for a loopback backend. For a later private co-owner model this may remove
+the need for a new coldstore login/session entirely. Coldstore would still need explicit
+mapping from the Tailscale identity to owner permissions, and Basic Auth can remain for
+existing tools.
 
 ### Opaque server-side session cookie
 
@@ -304,7 +310,8 @@ The first four questions choose v1. The rest specify public sessions only if nee
 ### Identity and permissions
 
 8. Is there exactly one owner/admin identity?
-   - **Provisional answer:** yes.
+   - **Answer:** no. There are two co-owners with full control. They will share the existing
+     Basic Auth credential, which is already stored in the owner's password manager.
 9. Should guests see the entire library, selected folders/albums, or explicit shared items?
    - **Answer:** pending.
 10. May guests download originals and full-resolution video, or only browse derivatives?
@@ -334,6 +341,7 @@ provisional recommendation appears above.
 | XMP export in v1 | Pending | Provisionally defer |
 | V1 network path | Decided | Tailscale Serve to the loopback backend |
 | V1 application auth | Decided | Retain Basic Auth through Serve |
+| V1 full-control principals | Decided | Two co-owners sharing one stored credential |
 | Later token upgrade | Direction set | Opaque browser sessions; scoped API tokens if needed |
 | Zero-install guests in v1 | Decided | Deferred beyond v1 |
 | Remote owner mutation | Decided | Full existing web UI/API, including mutations |

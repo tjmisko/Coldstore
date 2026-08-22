@@ -168,8 +168,11 @@ tokens without replacing the Tailscale transport.
 
 This is full owner access, not a remote viewer. After Tailscale and Basic Auth succeed, the
 existing web UI/API retains archive, restore, rename, tagging, configuration and every other
-current operation. That is intentional, so every admitted tailnet device and the Basic Auth
-credential remain part of the control-plane trust boundary.
+current operation. Two co-owners will share the existing credential, which is already stored
+in the owner's password manager. That is intentional, so every admitted tailnet device and
+both credential holders remain part of the control-plane trust boundary. Basic Auth cannot
+attribute actions to one co-owner or revoke them independently; accept that limitation for
+v1 and use separate identities/tokens if it becomes unacceptable.
 
 ### Candidate future public guest ingress — deferred
 
