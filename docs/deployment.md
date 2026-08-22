@@ -166,6 +166,11 @@ and separate owner approval are required before changing the host. Public guest 
 application sessions are deferred; future browser sessions can use opaque revocable cookie
 tokens without replacing the Tailscale transport.
 
+This is full owner access, not a remote viewer. After Tailscale and Basic Auth succeed, the
+existing web UI/API retains archive, restore, rename, tagging, configuration and every other
+current operation. That is intentional, so every admitted tailnet device and the Basic Auth
+credential remain part of the control-plane trust boundary.
+
 ### Candidate future public guest ingress — deferred
 
 For ordinary-browser guests, the preferred candidate is a DNS-only public hostname at

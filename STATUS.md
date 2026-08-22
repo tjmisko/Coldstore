@@ -109,6 +109,8 @@ already-offloaded archive rows.
 - Keep the backend loopback-only, do not enable Funnel, and do not trust Tailscale identity
   headers for v1. A future token upgrade can add opaque browser sessions and separately
   scoped API bearer tokens without changing the Tailscale transport.
+- An authenticated remote owner receives the same full web UI/API as at home, including all
+  existing mutating operations. No read-only remote owner role is planned for v1.
 - Public-domain, zero-install guest access is deferred. If selected later, it requires a
   domain/proxy trust boundary, session authentication, app-enforced authorization, CSRF
   defense and rate limiting.

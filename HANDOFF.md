@@ -26,6 +26,7 @@ documents and tagging-design branches are already integrated; do not merge them 
 5. The owner selected Tailscale Serve plus Basic Auth for v1. Prepare a loopback-only,
    no-Funnel runbook; do not deploy it without separate approval. Public guest sessions are
    deferred, with opaque browser tokens and scoped API tokens available as later upgrades.
+   Remote owner access deliberately retains the full existing mutating web UI/API.
 6. Treat every production/deployment checkbox as owner-mediated. No host access or rollout
    was authorized during this integration.
 

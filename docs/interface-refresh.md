@@ -29,8 +29,10 @@ acceptance contract after those decisions are made.
 **V1 decision, 2026-08-21:** use Tailscale Serve for private HTTPS access from the owner's
 devices, proxy only to the loopback listener, and retain Basic Auth as the application gate.
 The owner already has Tailscale on several machines. Do not use Funnel, expose the raw port,
-or trust Serve identity headers for v1. Public-domain, zero-install guest access and its
-session/authorization work are deferred; B2, B3, B6, B7 and B9 are not v1 blockers.
+or trust Serve identity headers for v1. An authenticated remote owner receives the same full
+web UI/API and mutating operations available at home; there is no reduced remote role.
+Public-domain, zero-install guest access and its session/authorization work are deferred;
+B2, B3, B6, B7 and B9 are not v1 blockers.
 
 The current loopback SSH tunnel is the safe interim owner path. Tailscale Serve is also a
 good private owner/admin path, but it cannot satisfy the guest requirement without making

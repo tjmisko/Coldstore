@@ -160,7 +160,8 @@ Use `docs/access-and-export-interview.md` to record the owner choices that gate 
 - [ ] Add an owner-facing Tailscale Serve runbook that proxies HTTPS only to the loopback
       listener, retains Basic Auth, does not enable Funnel and includes a rollback command.
 - [ ] After separate owner approval, verify the private URL from iPhone, macOS, Linux and
-      Windows where available, including one off-LAN connection. Do not expose the raw port.
+      Windows where available, including one off-LAN connection and the existing mutating
+      owner API. Do not expose the raw port or create a reduced remote-only API.
 - [x] Reconcile the existing contradictory Cloudflare Tunnel guidance before choosing a
       provider or topology.
 - [x] Document certificate renewal, DNS ownership, proxy trust boundaries, request-size/range

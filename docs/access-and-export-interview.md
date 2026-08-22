@@ -28,6 +28,8 @@ The owner selected this v1 direction on 2026-08-21:
 - use Tailscale Serve as the private HTTPS path for the owner's devices;
 - keep the Go server on loopback and require the existing Basic Auth through Serve;
 - do not trust Tailscale identity headers for v1 authorization; and
+- expose the same owner web UI and API remotely that are available at home, including all
+  existing mutating operations; and
 - defer public-domain guest sessions until zero-install guest access is required.
 
 This path supports all named operating systems, can provide away-from-home access, and does
@@ -163,7 +165,9 @@ installation. The backend must remain loopback-only if identity headers are trus
 
 **Selected for v1.** The owner already uses Tailscale on several machines. This path supports
 every named platform, supplies optional away-from-home access, avoids router port forwarding,
-and does not make coldstore public. Basic Auth remains a separate application gate.
+and does not make coldstore public. Basic Auth remains a separate application gate. An
+authenticated owner receives the existing full web UI/API; v1 does not introduce a reduced
+remote role.
 
 ### Option C — public domain plus Caddy
 
@@ -284,7 +288,7 @@ The first four questions choose v1. The rest specify public sessions only if nee
    - **Answer:** yes. Tailscale may provide the bonus remote path.
 4. Should owner actions such as archive, restore, rename and configuration be available away
    from home, or should remote access be browse/download only?
-   - **Answer:** pending.
+   - **Answer:** allow everything available at home. Use the existing web UI/API unchanged.
 
 ### Network ownership
 
@@ -332,7 +336,7 @@ provisional recommendation appears above.
 | V1 application auth | Decided | Retain Basic Auth through Serve |
 | Later token upgrade | Direction set | Opaque browser sessions; scoped API tokens if needed |
 | Zero-install guests in v1 | Decided | Deferred beyond v1 |
-| Remote owner mutation | Pending | — |
+| Remote owner mutation | Decided | Full existing web UI/API, including mutations |
 | Public domain/proxy | Deferred | Revisit when zero-install guests are required |
 | Session implementation | Pending | Opaque server-side cookie if public access wins |
 | Guest resource scope | Pending | — |
