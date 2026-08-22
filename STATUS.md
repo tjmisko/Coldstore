@@ -103,12 +103,15 @@ already-offloaded archive rows.
 ## Access and authority
 
 - Current access is the safe interim state: loopback + Basic Auth + SSH tunnel.
-- The desired permanent path is browser-native HTTPS, supports guests and does not require a
-  VPN client.
-- Public ingress requires a selected domain/proxy trust boundary plus session authentication,
-  CSRF defense, rate limiting and a private backend listener.
-- The owner has not selected or authorized a topology. Do not implement provider-specific
-  deployment or expose the raw port by assumption.
+- The owner selected Tailscale Serve plus Basic Auth for v1 private access. Tailscale is
+  already installed for another project on several owner devices. The selected topology is
+  not yet deployed or authorized for deployment.
+- Keep the backend loopback-only, do not enable Funnel, and do not trust Tailscale identity
+  headers for v1. A future token upgrade can add opaque browser sessions and separately
+  scoped API bearer tokens without changing the Tailscale transport.
+- Public-domain, zero-install guest access is deferred. If selected later, it requires a
+  domain/proxy trust boundary, session authentication, app-enforced authorization, CSRF
+  defense and rate limiting.
 - Agents have no production-host authority. Ask for output and require separate approval for
   deployment, restarts, migrations, budget changes and archive/restore actions.
 
@@ -123,8 +126,8 @@ already-offloaded archive rows.
 
 ### Product and operations
 
-- Select and threat-model permanent HTTPS ingress, then implement session auth only against
-  that explicit topology.
+- Prepare the loopback-only Tailscale Serve runbook, then complete an owner-approved
+  cross-platform/off-LAN verification. Public session auth is deferred beyond v1.
 - Run Playwright and the live Syncthing tier in a listener-capable environment.
 - Benchmark PDF thumbnail generation on the actual two-core host from owner-provided output.
 - Complete the owner-mediated backup, deployment, throwaway quota, snapshot and Syncthing

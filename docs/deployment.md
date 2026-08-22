@@ -149,7 +149,24 @@ separate public guest surface is implemented:
 A home LAN daemon does not need an identity system. It does need to be impossible
 to leave open by accident, which is what the rest of this section is about.
 
-### Candidate public guest ingress — not yet selected or deployed
+### Selected v1 remote path — Tailscale Serve, not yet deployed
+
+The owner selected Tailscale Serve for private HTTPS access from their iPhone, macOS, Linux
+and Windows devices, with Basic Auth retained as a second application gate. Tailscale is
+already installed for another project on several owner devices. The intended shape is:
+
+```text
+owner browser -> private Tailscale HTTPS -> Tailscale Serve -> 127.0.0.1:8090
+                                                       -> coldstore Basic Auth
+```
+
+Keep `listen_addr` on loopback. Do not enable Tailscale Funnel, do not expose the raw port,
+and do not trust Tailscale identity headers for v1 authorization. A reviewed command/runbook
+and separate owner approval are required before changing the host. Public guest access and
+application sessions are deferred; future browser sessions can use opaque revocable cookie
+tokens without replacing the Tailscale transport.
+
+### Candidate future public guest ingress — deferred
 
 For ordinary-browser guests, the preferred candidate is a DNS-only public hostname at
 Caddy, forwarding only TCP 80/443 to Caddy while coldstore remains on

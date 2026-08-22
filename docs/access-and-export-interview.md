@@ -9,9 +9,10 @@ The owner has stated these requirements:
 
 - coldstore must work from an iPhone, Linux, macOS and probably Windows;
 - access away from home would be useful, but is not required for v1; and
+- Tailscale is already installed for another project on several owner devices; and
 - the earlier interface interview asked for the possibility of guest access from another
-  person's device. Whether zero-install guest access is still a v1 requirement needs to be
-  confirmed.
+  person's device. Zero-install public guest access is deferred beyond v1 by the private
+  Tailscale decision.
 
 Two unrelated decisions appear beside each other in the tasklist:
 
@@ -21,13 +22,13 @@ Two unrelated decisions appear beside each other in the tasklist:
    whether that person is an owner or a read-only guest. It becomes load-bearing only if
    coldstore is reachable beyond a private network.
 
-The provisional v1 direction, subject to the interview below, is:
+The owner selected this v1 direction on 2026-08-21:
 
 - defer XMP export implementation and retain it as a portability follow-up;
-- use a private access path for the owner's devices rather than exposing coldstore publicly;
-- prefer Tailscale Serve if installing Tailscale on the owner's devices is acceptable;
-- keep the Go server on loopback and retain Basic Auth compatibility; and
-- defer public-domain guest sessions until zero-install guest access is actually required.
+- use Tailscale Serve as the private HTTPS path for the owner's devices;
+- keep the Go server on loopback and require the existing Basic Auth through Serve;
+- do not trust Tailscale identity headers for v1 authorization; and
+- defer public-domain guest sessions until zero-install guest access is required.
 
 This path supports all named operating systems, can provide away-from-home access, and does
 not make a destructive archive control plane public merely to satisfy v1.
@@ -160,8 +161,9 @@ Trade-off: every user/device must join or be shared into the tailnet. It is exce
 the owner's devices, but awkward for a casual guest who should open a normal link with no
 installation. The backend must remain loopback-only if identity headers are trusted.
 
-**Provisional v1 recommendation.** It supports every named platform, supplies optional
-away-from-home access, avoids router port forwarding, and does not make coldstore public.
+**Selected for v1.** The owner already uses Tailscale on several machines. This path supports
+every named platform, supplies optional away-from-home access, avoids router port forwarding,
+and does not make coldstore public. Basic Auth remains a separate application gate.
 
 ### Option C — public domain plus Caddy
 
@@ -195,7 +197,7 @@ as a shortcut around authorization.
 The browser sends the same username/password on every request. It is small and useful for
 CLI/runbook compatibility, but browser logout is poor, every user effectively shares one
 credential, and individual sessions or guests cannot be revoked. Keep it as a compatibility
-path; do not use it as the public guest model.
+path; do not use it as the public guest model. The owner selected it behind Tailscale for v1.
 
 ### Tailscale identity
 
@@ -230,6 +232,23 @@ proxying to coldstore. This can avoid storing owner passwords in coldstore and c
 but it adds another service or provider. Coldstore must still enforce owner versus read-only
 guest permissions rather than trusting hidden buttons or proxy method filters.
 
+### What “token-based later” should mean
+
+Yes, Basic Auth can be upgraded without changing the Tailscale network path. There are two
+different token uses:
+
+- **Browser sessions:** after login, use a random opaque token in a secure cookie. Keep its
+  role, expiry and revocation state in SQLite. Do not put a bearer token or JWT in browser
+  local storage; a cookie can be `HttpOnly`, while JavaScript-readable storage cannot.
+- **CLI/API clients:** if Basic Auth becomes limiting, issue separately named bearer tokens
+  with a hash stored server-side, an expiry, explicit scopes and individual revocation. Send
+  them only over HTTPS in the `Authorization` header.
+
+Tailscale device/user identity is a third kind of authentication and can also be evaluated
+later. For v1, Coldstore does not consume Serve's identity headers: Tailscale controls network
+membership and Basic Auth controls the application. This keeps the first rollout small and
+allows session or API tokens to be added without making the backend public.
+
 ## Part 5 — proposed application session if public access is selected
 
 The conservative design is:
@@ -256,13 +275,13 @@ The first four questions choose v1. The rest specify public sessions only if nee
 ### V1 boundary
 
 1. Are you willing to install Tailscale on your own iPhone, Mac, Linux and Windows devices?
-   - **Answer:** pending.
+   - **Answer:** yes. It is already installed for another project on several machines.
 2. Must a guest be able to open coldstore in v1 without installing anything or joining an
    account/network?
-   - **Answer:** pending.
+   - **Answer:** no for v1. Public zero-install guest access is deferred.
 3. For v1, is “works at home from all of my devices” sufficient, with away access treated as
    a bonus rather than a release requirement?
-   - **Provisional answer:** yes.
+   - **Answer:** yes. Tailscale may provide the bonus remote path.
 4. Should owner actions such as archive, restore, rename and configuration be available away
    from home, or should remote access be browse/download only?
    - **Answer:** pending.
@@ -309,10 +328,12 @@ provisional recommendation appears above.
 | Decision | State | Owner answer |
 |---|---|---|
 | XMP export in v1 | Pending | Provisionally defer |
-| V1 network path | Pending | Provisionally Tailscale Serve |
-| Zero-install guests in v1 | Pending | — |
+| V1 network path | Decided | Tailscale Serve to the loopback backend |
+| V1 application auth | Decided | Retain Basic Auth through Serve |
+| Later token upgrade | Direction set | Opaque browser sessions; scoped API tokens if needed |
+| Zero-install guests in v1 | Decided | Deferred beyond v1 |
 | Remote owner mutation | Pending | — |
-| Public domain/proxy | Pending | Deferred unless guests require it |
+| Public domain/proxy | Deferred | Revisit when zero-install guests are required |
 | Session implementation | Pending | Opaque server-side cookie if public access wins |
 | Guest resource scope | Pending | — |
 | Guest download/video permission | Pending | — |

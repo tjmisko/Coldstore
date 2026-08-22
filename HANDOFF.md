@@ -7,6 +7,7 @@ Read these before changing anything:
 3. `docs/interface-refresh.md` — interface, preview, access and status-CLI decisions.
 4. `docs/keymap-design.md` — keyboard grammar and interaction contract.
 5. `docs/tagging-design.md` — verified metadata findings and tagging/rename plan.
+6. `docs/access-and-export-interview.md` — owner answers for Tailscale, auth and XMP.
 
 Work in `.worktrees/feat/interface-refresh` on `feat/interface-refresh`. The keyboard,
 documents and tagging-design branches are already integrated; do not merge them again.
@@ -22,8 +23,9 @@ documents and tagging-design branches are already integrated; do not merge them 
    only unfinished part of `TASKLIST.md` item 8.
 4. Tagging implementation issues #1–#14 are complete locally. The unfiled XMP export
    follow-up, GitHub tracker bookkeeping and external verification/deployment gates remain.
-5. Leave ingress/session-auth work at its decision gate until the owner selects a domain,
-   proxy and trust boundary. Do not expose the raw control-plane listener.
+5. The owner selected Tailscale Serve plus Basic Auth for v1. Prepare a loopback-only,
+   no-Funnel runbook; do not deploy it without separate approval. Public guest sessions are
+   deferred, with opaque browser tokens and scoped API tokens available as later upgrades.
 6. Treat every production/deployment checkbox as owner-mediated. No host access or rollout
    was authorized during this integration.
 

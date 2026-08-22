@@ -146,25 +146,33 @@ it was a real half-archive data bug.
 - [x] Test UUID collisions, edited `IMG_E...` variants, AAE membership, exact-one-member
       budgets, bulk job totals, restore expansion and 20,000-ID chunking.
 
-## P1 — permanent browser access without a VPN client
+## P1 — private cross-platform access; public guest access deferred
 
-### 11. Select and threat-model the ingress
+### 11. Prepare the selected v1 Tailscale ingress
 
 Use `docs/access-and-export-interview.md` to record the owner choices that gate this section.
 
 - [x] Treat the current loopback SSH tunnel as the safe interim state.
-- [ ] Select a domain-backed HTTPS path that works in a normal browser and supports guests
-      without installing a VPN client.
+- [x] Select Tailscale Serve plus Basic Auth for v1 owner access. Public-domain,
+      zero-install guest access is deferred until it becomes a real requirement.
 - [x] Keep the coldstore listener private; do not expose the raw Basic Auth port directly to
       the public internet.
+- [ ] Add an owner-facing Tailscale Serve runbook that proxies HTTPS only to the loopback
+      listener, retains Basic Auth, does not enable Funnel and includes a rollback command.
+- [ ] After separate owner approval, verify the private URL from iPhone, macOS, Linux and
+      Windows where available, including one off-LAN connection. Do not expose the raw port.
 - [x] Reconcile the existing contradictory Cloudflare Tunnel guidance before choosing a
       provider or topology.
 - [x] Document certificate renewal, DNS ownership, proxy trust boundaries, request-size/range
       behavior for large media and an emergency disable procedure.
 
-### 12. Build session authentication if public ingress wins
+### 12. Deferred — build session authentication only if public ingress later wins
 
-- [ ] Add owner password-to-HMAC-session exchange with `HttpOnly`, `SameSite=Lax`, `Path=/`
+These are future public/guest requirements, not v1 blockers. A later token upgrade can use
+opaque, revocable server-side browser sessions and separately scoped API bearer tokens;
+Tailscale plus Basic Auth does not prevent either migration.
+
+- [ ] Add owner password-to-opaque-session exchange with `HttpOnly`, `SameSite=Lax`, `Path=/`
       cookie, plus individually revocable and expiring read-only guest grants.
 - [ ] Enforce guest authorization on every API, thumbnail, preview and download route; proxy
       method filtering and hidden frontend controls are defence in depth, not authorization.
