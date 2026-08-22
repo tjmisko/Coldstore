@@ -27,7 +27,8 @@ documents and tagging-design branches are already integrated; do not merge them 
    no-Funnel runbook; do not deploy it without separate approval. Public guest sessions are
    deferred, with opaque browser tokens and scoped API tokens available as later upgrades.
    Two co-owners share one stored Basic Auth credential, and remote access deliberately
-   retains the full existing mutating web UI/API.
+   retains the full existing mutating web UI/API. The second co-owner will use a separate
+   Tailscale account and has not been onboarded; prefer a revocable server-machine share.
 6. Treat every production/deployment checkbox as owner-mediated. No host access or rollout
    was authorized during this integration.
 

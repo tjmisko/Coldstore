@@ -12,6 +12,8 @@ The owner has stated these requirements:
 - Tailscale is already installed for another project on several owner devices;
 - two co-owners will share full control through one existing Basic Auth credential, which is
   already stored in the owner's password manager; and
+- the second co-owner is not yet onboarded to Tailscale and will use a separate Tailscale
+  account rather than sharing the first owner's account; and
 - the earlier interface interview asked for the possibility of guest access from another
   person's device. Zero-install public guest access is deferred beyond v1 by the private
   Tailscale decision.
@@ -165,6 +167,12 @@ Trade-off: every user/device must join or be shared into the tailnet. It is exce
 the owner's devices, but awkward for a casual guest who should open a normal link with no
 installation. The backend must remain loopback-only if identity headers are trusted.
 
+For the second co-owner, prefer sharing the server machine with their separate Tailscale
+account rather than inviting that account into the whole tailnet. Tailscale documents device
+sharing as the fit for a fixed number of machines: the recipient sees only the shared machine,
+can remain in their own tailnet, and the share can be revoked independently. The access-control
+policy must still limit the reachable server services to the scope the owner approves.
+
 **Selected for v1.** The owner already uses Tailscale on several machines. This path supports
 every named platform, supplies optional away-from-home access, avoids router port forwarding,
 and does not make coldstore public. Basic Auth remains a separate application gate. An
@@ -312,6 +320,8 @@ The first four questions choose v1. The rest specify public sessions only if nee
 8. Is there exactly one owner/admin identity?
    - **Answer:** no. There are two co-owners with full control. They will share the existing
      Basic Auth credential, which is already stored in the owner's password manager.
+   - The second co-owner is not yet enrolled. They will use a separate Tailscale account;
+     sharing the server machine is the provisional least-privilege onboarding path.
 9. Should guests see the entire library, selected folders/albums, or explicit shared items?
    - **Answer:** pending.
 10. May guests download originals and full-resolution video, or only browse derivatives?
@@ -342,6 +352,8 @@ provisional recommendation appears above.
 | V1 network path | Decided | Tailscale Serve to the loopback backend |
 | V1 application auth | Decided | Retain Basic Auth through Serve |
 | V1 full-control principals | Decided | Two co-owners sharing one stored credential |
+| Second co-owner Tailscale identity | Decided | Separate account; onboarding still pending |
+| Tailscale sharing scope | Pending | Provisionally share only the server machine |
 | Later token upgrade | Direction set | Opaque browser sessions; scoped API tokens if needed |
 | Zero-install guests in v1 | Decided | Deferred beyond v1 |
 | Remote owner mutation | Decided | Full existing web UI/API, including mutations |
@@ -356,6 +368,8 @@ provisional recommendation appears above.
 - [Adobe XMP overview](https://www.adobe.com/products/xmp.html)
 - [Tailscale supported installations](https://tailscale.com/docs/install)
 - [Tailscale Serve and identity headers](https://tailscale.com/docs/features/tailscale-serve)
+- [Tailscale machine sharing](https://tailscale.com/kb/1084/sharing)
+- [Tailscale user invitations versus machine sharing](https://tailscale.com/docs/reference/inviting-vs-sharing)
 - [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https)
 - [Caddy reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy)
 - [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)

@@ -114,6 +114,9 @@ already-offloaded archive rows.
 - Two co-owners will share the existing Basic Auth credential, already stored in the owner's
   password manager. Per-person attribution and revocation are deferred to later identities
   or tokens.
+- The second co-owner is not yet onboarded and will use a separate Tailscale account. The
+  provisional least-privilege path is a revocable share of the server machine rather than
+  membership in unrelated tailnet resources; exact network-service scope remains open.
 - Public-domain, zero-install guest access is deferred. If selected later, it requires a
   domain/proxy trust boundary, session authentication, app-enforced authorization, CSRF
   defense and rate limiting.

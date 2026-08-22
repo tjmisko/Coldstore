@@ -174,6 +174,12 @@ both credential holders remain part of the control-plane trust boundary. Basic A
 attribute actions to one co-owner or revoke them independently; accept that limitation for
 v1 and use separate identities/tokens if it becomes unacceptable.
 
+The second co-owner is not yet onboarded and will use a separate Tailscale account. Prefer a
+revocable share of this server machine over inviting that account into the whole tailnet;
+restrict the tailnet policy to only the server services the owner approves. The runbook must
+cover creating, testing and revoking that share without recording account identifiers in
+tracked documentation.
+
 ### Candidate future public guest ingress — deferred
 
 For ordinary-browser guests, the preferred candidate is a DNS-only public hostname at
