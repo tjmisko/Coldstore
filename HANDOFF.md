@@ -8,6 +8,7 @@ Read these before changing anything:
 4. `docs/keymap-design.md` — keyboard grammar and interaction contract.
 5. `docs/tagging-design.md` — verified metadata findings and tagging/rename plan.
 6. `docs/access-and-export-interview.md` — owner answers for Tailscale, auth and XMP.
+7. `onboarding.md` — Coldstore-only Tailscale Serve and co-owner onboarding runbook.
 
 Work in `.worktrees/feat/interface-refresh` on `feat/interface-refresh`. The keyboard,
 documents and tagging-design branches are already integrated; do not merge them again.

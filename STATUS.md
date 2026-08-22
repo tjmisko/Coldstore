@@ -115,8 +115,9 @@ already-offloaded archive rows.
   password manager. Per-person attribution and revocation are deferred to later identities
   or tokens.
 - The second co-owner is not yet onboarded and will use a separate Tailscale account. The
-  provisional least-privilege path is a revocable share of the server machine rather than
-  membership in unrelated tailnet resources; exact network-service scope remains open.
+  selected least-privilege path is a revocable share of the server machine, restricted to
+  TCP 443 and the Coldstore Serve proxy. SSH, Syncthing, raw port 8090 and every other server
+  service remain out of scope. `onboarding.md` is the runbook.
 - Public-domain, zero-install guest access is deferred. If selected later, it requires a
   domain/proxy trust boundary, session authentication, app-enforced authorization, CSRF
   defense and rate limiting.

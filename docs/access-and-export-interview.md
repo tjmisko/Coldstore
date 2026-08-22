@@ -14,6 +14,8 @@ The owner has stated these requirements:
   already stored in the owner's password manager; and
 - the second co-owner is not yet onboarded to Tailscale and will use a separate Tailscale
   account rather than sharing the first owner's account; and
+- that co-owner's Tailscale reachability is limited to Coldstore HTTPS, not SSH, Syncthing,
+  the raw backend port or any other server service; and
 - the earlier interface interview asked for the possibility of guest access from another
   person's device. Zero-install public guest access is deferred beyond v1 by the private
   Tailscale decision.
@@ -353,7 +355,7 @@ provisional recommendation appears above.
 | V1 application auth | Decided | Retain Basic Auth through Serve |
 | V1 full-control principals | Decided | Two co-owners sharing one stored credential |
 | Second co-owner Tailscale identity | Decided | Separate account; onboarding still pending |
-| Tailscale sharing scope | Pending | Provisionally share only the server machine |
+| Tailscale sharing scope | Decided | Shared server machine, TCP 443/Coldstore only |
 | Later token upgrade | Direction set | Opaque browser sessions; scoped API tokens if needed |
 | Zero-install guests in v1 | Decided | Deferred beyond v1 |
 | Remote owner mutation | Decided | Full existing web UI/API, including mutations |

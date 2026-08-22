@@ -157,10 +157,10 @@ Use `docs/access-and-export-interview.md` to record the owner choices that gate 
       zero-install guest access is deferred until it becomes a real requirement.
 - [x] Keep the coldstore listener private; do not expose the raw Basic Auth port directly to
       the public internet.
-- [ ] Add an owner-facing Tailscale Serve runbook that proxies HTTPS only to the loopback
+- [x] Add an owner-facing Tailscale Serve runbook that proxies HTTPS only to the loopback
       listener, retains Basic Auth, does not enable Funnel and includes rollback/revocation.
       Cover sharing the server with the second co-owner's separate Tailscale account without
-      admitting that account to unrelated tailnet resources.
+      admitting that account to unrelated tailnet resources. See `onboarding.md`.
 - [ ] After separate owner approval, verify the private URL from iPhone, macOS, Linux and
       Windows where available, including one off-LAN connection and the existing mutating
       owner API. Do not expose the raw port or create a reduced remote-only API.

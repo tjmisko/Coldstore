@@ -176,8 +176,9 @@ v1 and use separate identities/tokens if it becomes unacceptable.
 
 The second co-owner is not yet onboarded and will use a separate Tailscale account. Prefer a
 revocable share of this server machine over inviting that account into the whole tailnet;
-restrict the tailnet policy to only the server services the owner approves. The runbook must
-cover creating, testing and revoking that share without recording account identifiers in
+restrict the tailnet policy to TCP 443, which serves only the reviewed Coldstore proxy. Do
+not grant SSH, Syncthing, the raw backend port or any other server service. `onboarding.md`
+covers creating, testing and revoking the share without recording account identifiers in
 tracked documentation.
 
 ### Candidate future public guest ingress — deferred
