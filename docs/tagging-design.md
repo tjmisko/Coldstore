@@ -6,6 +6,10 @@ everywhere else. It does **not** supersede `docs/control-plane-design.md`; that 
 global invariants (section 0) still hold, and section 0 below states the three of them this
 work comes closest to breaking.
 
+Implementation status: issues #1–#14 are implemented locally on `feat/interface-refresh`;
+the XMP export follow-up remains unfiled. None of these schema or daemon changes has been
+deployed to production.
+
 It builds to nine decisions:
 
 | ID | Decision |
@@ -384,6 +388,9 @@ offloader both know the group is a guess.
 - `IMG_E1234` pairs with `IMG_1234` — strip a leading `E` after the `IMG_` prefix when
   matching, but keep both files' own stems for the key so an edited pair and its original
   form one group of up to four files.
+- A numeric collision suffix such as `(2)` widens candidate discovery **only for content-ID
+  comparison**. It never authorizes degraded basename grouping; absent matching identifiers,
+  `IMG_1234.HEIC` and `IMG_1234(2).MOV` remain unpaired rather than guessed.
 - Capture times, when both are known, must be within 60 seconds. This is what stops
   `notes.txt` and `notes.mov` in a Documents folder being called a Live Photo.
 
@@ -395,7 +402,9 @@ whole point of doing the probe.
 **What breaks basename matching, and why the content identifier is preferred:** an import
 that renumbers on collision, a user rename of one member, a folder merge that puts two
 devices' `IMG_1234` in one directory, and any tool that re-encodes the video to `.mp4` with a
-different stem. The content identifier survives all of these; the stem survives none of them.
+different stem. The content identifier survives these as file data, while bounded candidate
+discovery still has to bring the right records together for comparison; the stem itself
+survives none of them.
 
 The renumbering case is worth spelling out, because it does not merely fail to pair — **it
 pairs the wrong files**. A documented real collision has the true pair being `IMG_1234.HEIC`
@@ -412,11 +421,12 @@ evidence of a bug in this code.
 
 **The rule the rest of the system obeys:** `ExpandPairGroups(ids []int64) []int64` is a
 single catalog primitive, and **every** entry point that selects files for a move calls it:
-`OffloadCandidates` (so the byte arithmetic counts the whole group), the archive and restore
-job enqueue path, and the rename job. Additionally, `Mover.archiveLocked` writes a
-`pair_split` warning event if it is ever asked to archive a file whose group contains a
-`synced` sibling — belt and braces, because a single primitive that one caller forgets to
-call is the failure mode this feature has.
+bounded keyset scanning builds the globally ordered offload candidate set, byte arithmetic
+counts the whole group, archive/restore enqueue expands it, and rename preserves it. If a
+later member move fails, the mover compensates already-moved members in reverse order and
+restores exact pin state. Multi-file filesystem changes cannot be atomic across a process
+crash or visible between individual renames, so startup recovery and a `pair_split` warning
+on failed compensation remain required backstops.
 
 ### 1.7 XMP sidecars — read never, write never, export yes (T5)
 
@@ -453,8 +463,9 @@ Four reasons, in descending order of severity:
 4. **It is not needed for the feature.** Nothing in the owner's request requires the tag to
    live in the file. It requires the tag to be fast to apply and reliable to find.
 
-**Portability is served by export, not by sync.** `coldstore tags export` (and
-`POST /api/v1/tags/export`) writes XMP sidecars — `dc:subject`, `lr:hierarchicalSubject`,
+**Portability will be served by export, not by sync.** The planned, currently unfiled
+`coldstore tags export` command (and `POST /api/v1/tags/export`) will write XMP sidecars —
+`dc:subject`, `lr:hierarchicalSubject`,
 `dc:description`, plus the coldstore-derived capture and GPS values — into
 `{cold_storage_path}/sidecars/{folder}/{relative_path}.xmp`, a tree that mirrors
 `archive/` and `thumbnails/` and is **outside every Syncthing folder**. The catalog itself
@@ -677,7 +688,7 @@ for archived files out of cold storage as well as on-device files, it is cancell
 has a three-strikes failure budget (`thumb_attempts`, `RecordThumbnailFailure`,
 `ResetThumbnailFailures` on a manual rescan).
 
-Add a sibling `Daemon.extractMetadata` with:
+The implementation adds a sibling `Daemon.extractMetadata` with:
 
 - Its own queue predicate: `Catalog.FilesNeedingMetadata(exts, limit)` selecting
   `meta_scanned_at IS NULL AND meta_attempts < 3 AND status IN ('synced','archived')`.
@@ -744,9 +755,9 @@ file twice.
 connection by default and the DSN does not enable them, so the clause would parse, be
 stored, and do nothing. Referential integrity is maintained explicitly — and there is very
 little to maintain, because `files` rows are **never deleted** (a vanished file becomes
-`status = 'missing'`; the only `DELETE FROM` statements in the tree are on
-`persistent_paths`, `jobs` and `job_items`). Deleting a tag deletes its `file_tags` rows in
-the same transaction.
+`status = 'missing'`). Deletion is limited to explicit transactional cleanup of tags and
+their `file_tags` links, plus operational `persistent_paths`, `jobs` and `job_items` rows.
+Deleting a tag deletes its `file_tags` rows in the same transaction.
 
 **Two name columns.** `name` is what the owner typed and what the UI renders.
 `name_fold` is `strings.ToLower` of it and carries the UNIQUE constraint, so `Iceland` and
@@ -869,11 +880,12 @@ CREATE INDEX idx_files_pair ON files(folder_label, pair_key);
 ALTER TABLE folder_configs ADD COLUMN display_name TEXT NOT NULL DEFAULT '';
 ```
 
-### 2.5 Migration 8 — widening the `jobs.action` CHECK
+### 2.5 Migration 8 — the shipped `jobs.action` CHECK rebuild
 
-`jobs` carries `CHECK(action IN ('restore','archive','scan'))`. SQLite cannot alter a CHECK
-constraint; adding a `rename` action requires the documented twelve-step table rebuild. This
-is the one migration in this document that is not additive, and it is why it is separate.
+The pre-migration table carried `CHECK(action IN ('restore','archive','scan'))`. SQLite cannot
+alter a CHECK constraint, so migration 8 shipped the documented table rebuild and added the
+durable `rename` payload. This is the one migration in this document that is not additive,
+and it is why it is separate. The locally supported schema is now 8.
 
 ```sql
 -- migration8RenameJobs
@@ -968,11 +980,11 @@ always non-nil — `[]` for an untagged file, never `null`, so the frontend neve
 
 ---
 
-## 3. Search and filtering — and why not FTS5 (T6)
+## 3. Search and filtering — and why no FTS5 was needed (T6)
 
-Today `FileQuery.Search` is `AND filename LIKE '%' || ? || '%'`. The interview settled that
-the fuzzy finder should cover filenames, paths, folder, extension and status, and that tags
-and descriptions are the new fields that need to exist.
+`FileQuery.Search` now implements the extended predicate below. The fuzzy finder covers
+filenames, paths, folder, extension and status while tags and descriptions participate in
+the server query.
 
 ### 3.1 The extended `q` predicate
 
@@ -991,10 +1003,9 @@ literal string "archived" against a filename called `archived-notes.txt` is a fi
 lies about what it found.
 
 `LIKE` with a leading `%` cannot use an index; this is a full scan of `files`. That is
-acceptable and the numbers say why: SQLite scans on the order of a million simple rows per
-second even on modest ARM hardware, the catalog is tens of thousands of rows, and the query
-is serialised behind the quota tick anyway — a 20 ms scan is invisible next to a 400 ms
-`os.Rename` across a spinning pool. The escape hatch is named in section 10.
+acceptable and the measured numbers say why: a representative 50,000-row ARM64 benchmark
+put the extended query/filter cases at 14.0-47.9 ms, below the documented 100 ms FTS5
+threshold. This was not an N40L host benchmark. The escape hatch remains named in section 10.
 
 ### 3.2 New filter parameters
 
@@ -1340,7 +1351,9 @@ and `<C-u>` means "clear the line" rather than "scroll half a page".
 - `/` builds hierarchy as you type; the completion list shows the subtree.
 - A name with no match shows `+ new tag` **before** commit. Silently creating `icelnad` next
   to `iceland` is how a vocabulary rots, and one word of feedback is the fix.
-- `<Esc>` cancels the **whole** operation — no partial tag, no created tag.
+- `<Esc>` cancels the **whole** operation before submission — no partial tag, no created tag.
+  Once Apply starts, dismissal stays disabled until the server result is known because an
+  aborted client request cannot prove the transaction did not commit.
 - `<C-w>` deletes the previous word, `<C-u>` clears the line. Free from a real input, and
   worth asserting, because a custom key handler eats them.
 
@@ -1619,7 +1632,7 @@ is `'basename'` **breaks the pairing** — so a single-file rename inside such a
 renames the whole group (keeping the shared stem) or is refused with a `409` explaining
 which files it would separate. Renaming the whole group is the default.
 
-### 6.4 Why the label is not renameable, and a bug that exists today
+### 6.4 Why the label is not renameable, and the shipped identity guard
 
 `folder_label` is the join key in `files`, `folder_configs`, `persistent_paths`, `jobs` and
 `events.folder`, and it is a path component in `archive/{label}/` and `thumbnails/{label}/`.
@@ -1631,22 +1644,16 @@ TOML label would insert a **new** `folder_configs` row and the renamed one would
 `present_in_toml = 0`, orphaning its budget, its globs and every file, pin, tag and
 description under it.
 
-**And this footgun exists right now, without any UI for it.** If the owner edits `label` in
-`coldstore.toml` — a plausible thing to do; nothing warns against it — coldstore sees one
-folder that disappeared and one that appeared. The old folder's rows are kept (correctly:
-`MarkFoldersAbsentFromTOML` never deletes) and stay browsable, and the new label re-scans
-**the same directory tree**, producing a complete duplicate catalog: two rows per path under
-two labels, two thumbnail trees, and two budgets against one directory. `config.Validate`
-already rejects two folders sharing a path *within one TOML file* (`seenPath`), but nothing
-checks across runs.
+**This was a live footgun before the guard landed.** Editing `label` in `coldstore.toml`
+previously made coldstore see one folder disappear and another appear at the same path. The
+old rows stayed browsable while a new label could rescan the same tree, duplicating catalog,
+thumbnail and budget state.
 
-**The guard**, which is a small change and worth landing before any of the rest: during
-startup reconciliation, if a declared folder's `syncthing_path` matches an existing
-`folder_configs` row under a **different** label, and that row is about to lose
-`present_in_toml`, refuse to start with a message naming both labels and telling the owner
-that renaming a folder label is not supported and what to do instead. Failing to start is
-the right severity: the alternative is a silently duplicated catalog that gets worse every
-tick.
+**The shipped guard** runs before startup reconciliation writes and in the read-only
+`--check` path. If a declared folder's cleaned `syncthing_path` belongs to an existing
+`folder_configs` row under a **different** label, coldstore refuses with a recovery-oriented
+message naming both labels. Failing closed is the right severity: the alternative is a
+silently duplicated catalog that gets worse every tick.
 
 ### 6.5 `display_name` — the safe version of what was asked for
 
@@ -1666,23 +1673,22 @@ it looks like it should be dangerous and is not.
 
 ---
 
-## 7. Frontend plan
+## 7. Frontend implementation map
 
 Everything stays inside the existing constraints: React 19 + Vite + Tailwind 4, no router,
 no state library, no data-fetching library, `lib/api.ts` the only place that calls `fetch`,
 zero `eslint-disable` in `web/src`, dark only.
 
-**New modules**
+**Implemented modules**
 
 | Path | What |
 |---|---|
 | `web/src/hooks/useTags.ts` | `GET /tags` with a folder-scoped cache, `prefix` completion with abort-on-keystroke, and the mutation wrappers |
-| `web/src/hooks/useTagOperator.ts` | Range resolution and the three paths of 5.3. **Not** a state machine: the keyboard layer already resolves the range, so this receives ids and decides picker / repeat / slot |
-| `web/src/hooks/useQuickSlots.ts` | Per-folder slot assignments, persisted; an unassigned slot is a no-op with a status-line note |
+| `web/src/hooks/useGridKeymap.ts` + `useFileWorkspace.ts` | Range resolution and the picker/repeat/quick-slot paths of 5.3, reusing the existing machine rather than adding a second operator state machine |
 | `web/src/components/TagPrompt.tsx` | The picker of 5.5, pre-seeded with the last committed tag set |
 | `web/src/components/TagMode.tsx` | The culling scope of 5.6 |
 | `web/src/components/DescriptionEditor.tsx` | The exclusive-scope textarea of 5.7 |
-| `web/src/components/QuickSlots.tsx` | The `<Space>1`–`<Space>9` slot indicators, and the editor that assigns them (5.3) |
+| `web/src/hooks/useQuickSlots.ts` + `TagManager.tsx` | Per-folder `<Space>1`–`<Space>9` persistence, indicators and assignment editor |
 | `web/src/components/TagChips.tsx` | Chips on tiles, in the lightbox, in the Tag mode panel |
 | `web/src/components/CaptureMeta.tsx` | Capture time + offset + source + coordinates, with the "timezone not recorded" wording |
 
@@ -1692,9 +1698,9 @@ zero `eslint-disable` in `web/src`, dark only.
   grows `tag[]`, `untagged`, `described`, `captured_from`, `captured_to`, `undated`, `near`.
   It stays the shared function for `/files` and `/files/ids`.
 - `types/api.ts`: the fields of 2.6, plus `Tag`, `BulkTagResponse`, `TagUndo`.
-- `useFileWorkspace.ts`: `actions` grows `addTags`, `removeTags`, `setDescription`,
-  `setCaptureDate`, `undoLastTag`. Same shape as the existing actions — through `apiFetch`,
-  write the returned record back with `patchFile`, report failures as toasts. Two
+- `useFileWorkspace.ts`: `actions` grows `tagFiles`, `repeatTags`, `undoTags`, `redoTags`,
+  `applyQuickSlot`, `setDescription` and `setCaptureDate`. Same shape as the existing actions
+  — through `apiFetch`, write the returned record back with `patchFile`, report failures as toasts. Two
   implementations of "tag this row" is how one of them ends up without the `res.ok` check.
 - `FilterBar.tsx`: two new presets, **Untagged** and **No capture date**, with hints. These
   are the two entry points to a tagging session and they belong where the other six filters
@@ -1721,16 +1727,18 @@ zero `eslint-disable` in `web/src`, dark only.
   typed in the description editor produces the letter `j` and does not navigate.
 - A test that **bare `3j` still counts** with the tag operator registered. Quick slots are
   leader-prefixed precisely so digits stay counts, and that is the assertion which proves it.
-- `make test-playwright`: `scripts/seed-demo` gains a tagged folder, an untagged folder, a
-  Live Photo pair, a file with EXIF, a file with GPS, a file with **no** metadata, and a
-  file with a manual capture date. Without those fixtures half of this UI is unreachable —
+- Open browser-tier acceptance: `scripts/seed-demo` must expose a tagged folder, an untagged
+  folder, a Live Photo pair, a file with EXIF, a file with GPS, a file with **no** metadata,
+  and a file with a manual capture date. Without those fixtures half of this UI is unreachable —
   which is the lesson `scripts/seed-demo` was written to record.
 
 ---
 
 ## 8. Implementation order
 
-Each step leaves the tree green (`go test ./...`, `make test-web`, `npm run lint`).
+Rows 1–14 are implemented locally and each landed with focused and whole-tree validation.
+Row 15 remains open and unfiled. The browser fixture/Playwright acceptance above also remains
+open because this execution environment cannot bind its isolated listener.
 
 | # | Step | Issue | Depends on |
 |---|---|---|---|

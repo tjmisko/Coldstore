@@ -1,7 +1,7 @@
 # Status — coldstore closeout
 
-Snapshot date: 2026-08-21. Integrated code/document state: `feat/interface-refresh`
-through `4f029d1`. The Git tree is authoritative for changes after this snapshot.
+Snapshot date: 2026-08-21. Integrated code state: `feat/interface-refresh` through
+`0ed5572`. The Git tree is authoritative for changes after this snapshot.
 
 ## Executive state
 
@@ -10,10 +10,11 @@ through `4f029d1`. The Git tree is authoritative for changes after this snapshot
   integration was deployed or run against the host.
 - Local `main` is `9bcb7e8`, nine commits ahead of the deployed baseline, including the real
   `require_mountpoint` guard and build/runbook corrections.
-- `feat/interface-refresh` now integrates keymap, document-preview and tagging-design work.
-  Document preview owns shipped migration 6; planned tagging/rename migrations are 7/8.
-- The folder-label identity guard for GitHub #13 is implemented locally and tested but not
-  deployed. Live Photo members remain non-atomic; #6 is the outstanding P0 data bug.
+- `feat/interface-refresh` integrates keymap, document-preview and tagging work. Document
+  preview owns migration 6, metadata/tagging owns migration 7, and durable rename jobs own
+  migration 8; the locally supported schema is 8.
+- The folder-label identity guard, Live Photo atomicity, metadata/tagging/search surfaces and
+  durable rename jobs are implemented locally and tested. None is deployed.
 - All GitHub issues were still open at the last reachable snapshot. Issue-body migration
   edits could not be made because `api.github.com` is unreachable from this environment.
 
@@ -29,33 +30,43 @@ The active branch carries:
 - schema migration 6, content sniffing, PDF/EPUB/text previews and PDF/EPUB thumbnails;
 - finder-owned preview/open/select/download/reveal workflows;
 - permanent folder-label/path ownership validation before reconciliation writes;
-- `coldstore --status [--json]`, using immutable/query-only catalog inspection; and
-- the verified tagging/metadata/Live Photo/rename design with planned migrations 7 and 8.
+- `coldstore --status [--json]`, using immutable/query-only catalog inspection;
+- migration 7 metadata extraction, tags, descriptions, capture/location fields and cosmetic
+  folder display names;
+- extended literal search/filtering, mouse and keyboard tagging, exact bulk undo/redo,
+  per-folder quick slots and the dedicated culling scope;
+- content-ID Live Photo grouping, globally ordered pair-aware quota selection, compensating
+  archive/restore rollback and split warnings; and
+- migration 8 durable file/directory rename jobs with group expansion, restart recovery,
+  scanner exclusion, descriptor-relative path safety and atomic no-replace commits.
 
-Key integration commits are listed in `HANDOFF.md`. Both feature merges are true two-parent
-merge commits (`752c210` for documents and `9b5be84` for tagging design).
+Key integration commits are listed in `HANDOFF.md`. The document and tagging-design merges
+remain true two-parent merge commits (`752c210` and `9b5be84`).
 
 ## Verified test evidence
 
 Passed on the integrated branch:
 
 - `make lint` with zero warnings;
-- `make test-web`: 22 files, 260 tests;
-- `web/src/components/keyboard.test.tsx`: 20 consecutive runs, 34 tests each;
+- `make test-web`: 31 files, 334 tests;
+- 20 consecutive runs of the eight keyboard/tagging adversarial files, 147 tests each
+  (2,940 test executions);
 - `go vet ./...`;
 - `go test ./...`;
 - `go test -race ./internal/...`;
 - `make test-e2e`; and
-- detached fresh-checkout `make build` with no preparatory dependency install.
+- `make build` after the final code integration; and
+- the earlier detached fresh-checkout build with no preparatory dependency install.
 
-The fresh build installed its own 370 frontend packages and produced:
+The final integrated build produced:
 
-- `web/dist`: 3,568 KiB;
-- `coldstore`: 18,187,688 bytes.
+- `web/dist`: 3,624 KiB;
+- `coldstore`: 21,483,024 bytes.
 
-This sandbox denies esbuild's npm postinstall self-exec even with scoped escalation. Setting
-`npm_config_ignore_scripts=true` allowed the target's own `npm ci` to install the correct
-platform package, after which the normal TypeScript/Vite and Go build completed.
+The earlier fresh-checkout target installed its own 370 frontend packages. This sandbox
+denies esbuild's npm postinstall self-exec even with scoped escalation; setting
+`npm_config_ignore_scripts=true` let `npm ci` install the correct platform package, after
+which the normal TypeScript/Vite and Go build completed.
 
 Two tiers remain unverified here:
 
@@ -105,9 +116,10 @@ already-offloaded archive rows.
 
 ### Load-bearing
 
-- Live Photo identification, archive/restore expansion, mover backstop and whole-group quota
-  accounting are complete. The future rename job in #14 must preserve that group contract.
-- Metadata package #1, schema #2 (migration 7) and extraction pass #3 are complete.
+- Implementation issues #1–#14 are complete locally. The remaining tagging follow-up is XMP
+  export into cold storage; it still needs a separate GitHub issue when connectivity exists.
+- No local engineering item authorizes a schema migration, service restart or filesystem
+  operation against production.
 
 ### Product and operations
 

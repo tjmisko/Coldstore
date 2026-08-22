@@ -10,8 +10,9 @@ Status legend: `[ ]` not started `[~]` in progress `[x]` done `[?]` blocked on a
 
 ## A. Identity -- title and favicon
 
-The page still ships Vite's scaffold identity: `web/index.html` has `<title>web</title>` and
-`<link rel="icon" href="/vite.svg">`. Every tab in the owner's browser says "web".
+At the initial audit the page still shipped Vite's scaffold identity: `web/index.html` had
+`<title>web</title>` and `<link rel="icon" href="/vite.svg">`. The shipped identity and PWA
+assets below replaced it.
 
 - [x] A1. Real `<title>` -- static, plus per-view suffix (folder name / "Gallery" / "Config").
 - [x] A2. Real favicon. SVG mark, dark/light aware, embedded (no CDN).
@@ -138,12 +139,11 @@ has one dispatcher, a generated binding table and scoped overlays.
 
 ## F. Fuzzy finder
 
-**Half the plumbing is already there and wired to nothing.** `FileFilters.search` maps to
-`?q=` and `FileFilters.extension` maps to `?ext=` (`web/src/lib/api.ts:97-102`), and
-`useFiles` destructures both (`useFiles.ts:43`) -- but **no component ever sets either**,
-and there is no search box anywhere in the app. Server side `q` is
-`AND filename LIKE '%q%'` (`internal/catalog/catalog.go:230-232`): filename only, not path,
-no ranking, no FTS. So "fuzzy" is the part that does not exist yet, at either end.
+At the initial audit, `FileFilters.search` and `extension` existed but no component set them,
+and server-side `q` matched filenames only. The completed finder keeps bounded client-side
+fuzzy ranking while server `q` now searches literal substrings across filename, relative
+path, description and tags. Server hits are merged by id so a matching row outside the
+client corpus remains reachable; the UI reports when that corpus is truncated.
 
 - [x] F1. `F10` **and** `<leader>fe` (space, f, e) open a fuzzy file finder.
 - [x] F2. Use client-side scoring over a 2,000-record bounded corpus, merged with server
@@ -166,10 +166,10 @@ no ranking, no FTS. So "fuzzy" is the part that does not exist yet, at either en
 
 ## H. Thumbnails and previews for documents
 
-Today `internal/thumbnail` covers images (imaging), HEIF/HEIC and video (ffmpeg). PDFs, EPUBs
-and extension-less bookmark files render as a grey tile with the filename. Four docs already
-say so on purpose (`docs/deployment.md:27, :239, :1414-1423`, `coldstore.toml.example:64-65`)
--- all four need updating in the same change as the code.
+At the initial audit `internal/thumbnail` covered images, HEIF/HEIC and video, while PDFs,
+EPUBs and extension-less bookmark files rendered as grey filename tiles. The completed H
+work below added document thumbnails/previews and updated the corresponding deployment and
+configuration documentation.
 
 **Research conclusions:**
 
@@ -330,10 +330,10 @@ discovered against the real code:
    fixture whose catalog is missing a column the real one always has hides the
    feature it exists to exercise.
 
-H9 (a second, larger thumbnail derivative) is **not** done and is no longer
-urgent: the lightbox no longer loads a full original to render an image it
-cannot decode. It stays open as a quality improvement -- a 400px thumbnail
-standing in for a HEIC is visibly soft at full screen.
+H9 is complete as a decision: retain the existing 400px derivative. The lightbox no longer
+loads a full original into a renderer that cannot decode it; a second larger derivative is
+deliberately deferred outside this acceptance set until owner-visible quality evidence
+justifies its storage, migration and regeneration cost.
 
 ## I. Operational status dump
 
@@ -387,14 +387,10 @@ Not in the owner's notes -- found by screenshotting the running UI at 1440x900 a
 - [x] **BUG-2. The mobile sidebar toggle sits on top of the folder heading.** The button is
       `fixed top-3 left-3` (`web/src/App.tsx:58`) and the heading has no left inset at that
       breakpoint, so "CameraRoll" renders as "meraRoll" at 390px. Fixed in 7978fd5.
-- [x] **BUG-3. The lightbox puts raw video and HEIC bytes inside an `<img>` tag.**
-      `Lightbox.tsx:128` picks its source as "has a thumbnail and is not missing, therefore
-      renderable as an image" -- but `internal/thumbnail` also thumbnails `.heif .heic` and
-      `.mp4 .mov .avi .mkv .webm` (`thumbnail.go:36-50`). So opening a video hands the
-      browser the **full original file** as an `<img src>`: it downloads every byte over the
-      LAN and then renders a broken-image icon. HEIC does the same everywhere except Safari.
-      Needs a `<video>` branch and a decode-capability check, and it lands with H4-H6 since
-      that is the same "what can this browser actually render" decision.
+- [x] **BUG-3. The original lightbox put raw video and HEIC bytes inside an `<img>` tag.**
+      Shared preview resolution now selects a real `<video>` branch for video and uses the
+      browser-decodable original or safe derivative for images; the H4-H6 preview work fixed
+      the failure without downloading an opaque original into a broken image element.
 
 ## Decisions (owner interview, 2026-08-21)
 
@@ -427,13 +423,14 @@ Not in the owner's notes -- found by screenshotting the running UI at 1440x900 a
 10. **poppler-utils approved.** *"Yes, please, don't reinvent the wheel here."*
 11. **Ship full readers**, lazily and in the background; a bigger binary is fine.
 12. **New major feature: tagging.** Photo tags, descriptions, multiselect tagging, a
-    keyboard-driven culling flow like a professional photo vault, folder renaming, and
-    capture-date + location metadata preserved from iPhone. Being designed and split into
-    GitHub issues in its own worktree; see `docs/tagging-design.md`.
+    keyboard-driven culling flow, durable path rename, and capture-date + location metadata
+    are implemented locally through issues #1–#14; see `docs/tagging-design.md`.
 
-## Still open
+## Still-open access decision
 
-Only one thing, and it blocks section B: **domain or no domain.**
+The sole unresolved product-access decision is **domain/topology and guest scope**. Other
+project work remains externally gated in `TASKLIST.md`, but this decision is what blocks
+section B's session-auth implementation.
 
 - Tailscale covers the owner's own phone and laptops, on and off the LAN, free, with a real
   certificate and no code change. It cannot serve a guest without that guest installing a VPN.
@@ -449,34 +446,16 @@ Only one thing, and it blocks section B: **domain or no domain.**
 
 ## Integration notes
 
-Four branches are in flight. They did not all fork from the same commit, and two of
-them will need a follow-up pass rather than a clean merge.
+The interface, keymap, document-preview and tagging branches are integrated on
+`feat/interface-refresh`; their source branches are historical and must not be merged again.
+The raw-colour sweep and shared Lightbox reconciliation are complete.
 
-| Branch | Forked at | Carries |
-|---|---|---|
-| `feat/interface-refresh` | `9bcb7e8` (main tip) | A, C, BUG-1, BUG-2 |
-| `worktree-agent-a57eb908…` | `9bcb7e8` (main tip) | H, BUG-3 |
-| `worktree-agent-accbd99e…` | `37ad497` (6 behind) | D, E, F, G |
-| `feat/tagging-design` | `37ad497` (6 behind) | `docs/tagging-design.md` only |
-
-1. **The keyboard branch predates the design tokens.** It forked before
-   `feat/interface-refresh` existed, and it was deliberately told not to restyle
-   anything so that a parallel restyle could not collide with it. So every component it
-   adds -- command palette, context menu, fuzzy finder, `?` cheatsheet -- is written
-   against raw Tailwind defaults (`bg-neutral-900`, `text-blue-400`). Those classes
-   still exist, so the merge compiles and renders; it just renders off-system. **Sweep
-   the new components onto the tokens as the first commit after that merge**, and
-   re-run the `SWEEP CLEAN` grep:
-   `grep -rn "neutral-\|amber-\|emerald-\|indigo-\|red-[0-9]\|blue-\|sky-" web/src --include=*.tsx | grep -v '\.test\.'`
-2. **`Lightbox.tsx` is unswept on purpose** (C7). The documents branch is rewriting its
-   render path for BUG-3 and the document previews. Sweep it once that lands, not before.
-3. **Both `37ad497` branches are missing six commits of main** -- the deploy runbook
-   rewrite, `[storage] require_mountpoint`, the node-lockfile build fix. All docs and
-   config; rebase or merge main into them before review rather than after.
-4. **The z ladder is centralized in `web/src/lib/zLayers.ts`.** Tailwind v4 has no
+1. **The z ladder is centralized in `web/src/lib/zLayers.ts`.** Tailwind v4 has no
    `--z-*` theme namespace, so `z-sidebar` and friends silently produced class names
    that did not exist. New layers must add or reuse a `Z` value there and apply it as
    an inline `style`; do not introduce a numeric z-index class at the call site.
-5. **The table's native checkbox is `sr-only`** with a styled span over it, so anything
+2. **The table's native checkbox is `sr-only`** with a styled span over it, so anything
    that clicks `input[type=checkbox]` directly will hang on Playwright's actionability
    check. Use the `selectRow` helper in `web/e2e/helpers.ts`, or click the label.
+3. Keep Playwright completion open until it runs on a host that permits loopback listeners;
+   this sandbox fails before its isolated daemon can bind and provides no product result.

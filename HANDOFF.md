@@ -20,8 +20,8 @@ documents and tagging-design branches are already integrated; do not merge them 
 3. When GitHub connectivity exists, update every issue body that still calls tagging schema
    migration 6 or rename migration 7. The landed plan uses 7 and 8; issue-body edits are the
    only unfinished part of `TASKLIST.md` item 8.
-4. Follow `docs/tagging-design.md` section 8 for implementation order. Metadata issues #1–#3
-   and Live Photo atomicity #6 are complete; the rename job in #14 must reuse pair expansion.
+4. Tagging implementation issues #1–#14 are complete locally. The unfiled XMP export
+   follow-up, GitHub tracker bookkeeping and external verification/deployment gates remain.
 5. Leave ingress/session-auth work at its decision gate until the owner selects a domain,
    proxy and trust boundary. Do not expose the raw control-plane listener.
 6. Treat every production/deployment checkbox as owner-mediated. No host access or rollout
@@ -39,6 +39,10 @@ documents and tagging-design branches are already integrated; do not merge them 
 | Read-only archive health CLI | Landed in `97c69e0`; `--status [--json]`, exit 0/1/2. |
 | Tagging design | Two-parent merge `9b5be84`; planned migrations renumbered 7/8 in `f14af62`. |
 | Acceptance and recovery docs | Reconciled through `4f029d1`. |
+| Metadata and tag foundation | Issues #1-#8 through `56c1364`: migration 7, extraction, tag CRUD, capture/location and descriptions. |
+| Live Photo, search and mouse tagging | Issues #6/#9/#10/#12 through `45c2a05`; safety audit fixes in `1847a4d`. |
+| Durable rename | Issue #14 in `22297b2`, hardened against overwrite, partial-recovery, scanner and symlink races in `356aa82`. |
+| Keyboard tagging | Issue #11 in `d9a72af`; nine adversarial acceptance fixes in `0ed5572`. |
 
 ## Production boundary
 
@@ -58,7 +62,8 @@ documents and tagging-design branches are already integrated; do not merge them 
 - Claim a row with compare-and-swap before moving bytes.
 - Startup recovery completes before concurrent actors exist.
 - Never overwrite or truncate a destination. Preserve ambiguous bytes and log an event.
-- Folder labels are permanent identities; `display_name` is the planned cosmetic field.
+- Folder labels are permanent identities; migration 7's editable `display_name` is the
+  cosmetic alternative.
 - A status/check surface must not migrate or reconcile the catalog for writes.
 - Preserve frontend `data-*` attributes; tests treat them as API.
 - Keep one generated keymap source, one window dispatcher, tokenized layers and zero ESLint
@@ -67,10 +72,10 @@ documents and tagging-design branches are already integrated; do not merge them 
 
 ## Verification boundary
 
-The integrated branch passed lint, all 260 Vitest tests, 20 consecutive keyboard runs, vet,
-all Go tests, the full internal race suite, in-process E2E and a detached fresh-checkout
-build. The measured outputs were 3,568 KiB for `web/dist` and 18,187,688 bytes for the
-binary.
+The integrated branch passed lint, 31 files / 334 Vitest tests, 20 consecutive runs of the
+eight keyboard/tagging adversarial files (147 tests each), vet, all Go tests, the full
+internal race suite, in-process E2E and a final build. That build measured 3,624 KiB for
+`web/dist` and 21,483,024 bytes for the binary.
 
 The fresh checkout needed `npm_config_ignore_scripts=true` because this sandbox denies
 esbuild's npm postinstall self-exec; the target still performed its own `npm ci` and built

@@ -29,7 +29,7 @@ both closed on one press.
 
 ## 1. Architecture
 
-Five modules, none of which import React. That is deliberate: the grammar is
+Nine modules, none of which import React. That is deliberate: the grammar is
 where the bugs are, and a grammar tested as a pure function costs a millisecond
 per case instead of a jsdom render.
 
@@ -42,6 +42,8 @@ web/src/keymap/
   bindings.ts   the binding TABLE -- data, not code
   fuzzy.ts      the finder's scorer
   palette.ts    the ex-command table, its argument parser and its completion
+  textEntry.ts  the shared text-entry suspension predicate
+  types.ts      the exhaustive motion/operator/action/scope vocabulary
 ```
 
 and one thin React layer:
@@ -169,6 +171,13 @@ wide, and that is the whole reason FileBrowser gets the same bindings for free.
 | `last` | `G` | last item, or item N with a count |
 | `half-page-down` / `-up` | `<C-d>` `<C-u>` | `floor(rows/2)` rows |
 | `page-down` / `-up` | `<C-f>` `<C-b>` | `rows` rows |
+| `capture-day-next` / `-previous` | `}` `{` | next / previous capture-day boundary |
+| `tag-next` / `-previous` | `]t` `[t` | next / previous file sharing a tag |
+| `untagged-next` / `-previous` | `]u` `[u` | next / previous untagged file |
+| `pair-next` / `-previous` | `]p` `[p` | next / previous distinct pair group |
+
+The final four motion families require file metadata and are resolved by the active file
+layer; `motions.ts` remains pure geometry and returns the current index for those ids.
 
 `down` from the last row clamps by whole rows rather than to `total-1`, so `j` on
 the bottom row stays in its column instead of teleporting to the last tile. `k`
@@ -193,11 +202,14 @@ An operator takes a range and produces one bulk request.
 | pin | `p` | one `POST /files/pin` |
 | unpin | `u` | one `POST /files/pin {pinned:false}` |
 | download | `y` | `window.open` per file, capped |
+| tag | `t` | one bulk tag request after the range-aware picker |
+| untag | `T` | one bulk tag request limited to tags present on the range |
 
 `d` for archive because the muscle memory is real and because archiving *is* the
-delete here -- it removes the file from every device Syncthing talks to. `u` for
-unpin rather than undo: there is no undo model in this app, and inventing a `u`
-that sometimes means undo and sometimes unpin is worse than not having undo.
+delete here -- it removes the file from every device Syncthing talks to. `u` stays
+unpin: byte and pin operations have no generic undo model. Tag writes expose their exact
+one-level inverse on `U`, with `<C-r>` redo, so their reversible contract does not overload
+the existing operator.
 
 Operators never loop per file. They resolve their range to a list of ids and go
 through the same job runner and the same `bulkPin` the selection bar uses, which
@@ -256,7 +268,10 @@ the top of the stack plus every non-exclusive scope beneath it is the chain that
 | `gallery` | the gallery view | no |
 | `browser` | the file table | no |
 | `lightbox` | the lightbox | no |
+| `tagging` | Tag mode | no |
 | `overlay` | palette, finder, cheatsheet, context menu, confirm dialog | **yes** |
+| `description` | description editor | **yes** |
+| `tag-prompt` | tag/untag command line | **yes** |
 
 Exclusive means the chain stops there: while the command palette is open, `d`
 types a `d` and does not archive anything. `gallery` and `browser` are mutually
@@ -340,7 +355,7 @@ cheatsheet that lies is worse than none.
 - `completions(line, context)` -> the ranked candidate list
 
 Argument completion is per-command: `:folder ` completes over the folder labels
-the status response knows about, `:filter ` over the six preset keys, `:view `
+the status response knows about, `:filter ` over the eight preset keys, `:view `
 over the three views. `:budget 20GB` runs through the same `parseSize` the budget
 editor uses, so a value the palette accepts is a value the settings panel would
 have accepted, byte for byte.
@@ -355,15 +370,15 @@ than being folklore.
 
 ## 12. The finder (`F10`, `<leader>fe`)
 
-Server-side `q` is `filename LIKE '%q%'` (`internal/catalog/catalog.go:230`):
-filename only, no path, no ranking, no FTS. So the ranking is the client's job.
+Server-side `q` now performs literal substring matching across filename, relative path,
+description and tags. It deliberately has no relevance ranking or FTS; fuzzy ranking remains
+the client's job.
 
 The corpus is bounded: up to `CORPUS_MAX = 2000` files for the current folder,
 paged at the server's `maxPageLimit` of 500. Above that the finder says so in its
-footer rather than quietly searching a fifth of the folder. Every query also
-fires the server's substring filter and merges those hits in by id, so a file
-outside the window is still findable by an exact substring even when the window
-is full.
+footer rather than quietly searching a fifth of the folder. Every query also fires the
+extended server substring filter and merges those hits in by id, so a file outside the
+window is still findable by an exact substring even when the window is full.
 
 `fuzzy.ts` scores a subsequence match over `filename`, `relative_path`,
 `folder_label`, `extension` and `status`, with bonuses for a match at a word
@@ -395,7 +410,8 @@ The grammar tests drive `step` with token arrays, which is the only way `2d3j`,
   the focus would have to be stolen back after every action that re-renders, and
   a single window listener with an explicit suspend predicate is easier to reason
   about than an invisible focus contract.
-- **Registers, marks, macros, `.` repeat.** No use case here yet, and each one is
-  a state field that every other feature then has to respect.
+- **Registers, marks and macros.** No use case here yet, and each one is a state field that
+  every other feature then has to respect. `.` is implemented narrowly for replaying the
+  last resolved tag operation; it does not create a generic command-repeat register.
 - **Making Space both leader and "toggle selection"** (the tasklist's D3 wanted
   both). It cannot be both. Leader won because the owner named it; `x` toggles.

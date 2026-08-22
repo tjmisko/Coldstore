@@ -70,7 +70,7 @@ deployment.
 - [x] Implement F4: keyboard open/select/act flow from fuzzy results.
 - [x] Finish G2: add reveal-folder behavior, or document the platform limitation and replace
       it with a precise supported action.
-- [ ] Mark H0a–H8 and BUG-3 complete only after the combined branch passes verification.
+- [x] Mark H0a–H8 and BUG-3 complete only after the combined branch passes verification.
 - [x] Decide H9: larger preview derivative versus full original/browser rendering.
 - [ ] Complete H10: benchmark PDF thumbnail generation on the actual two-core N40L using
       owner-provided command output; agents have no host access.
@@ -87,8 +87,8 @@ deployment.
 - [ ] `make test-playwright` against an isolated root and unused port
 - [x] fresh-checkout `make build` with no preceding `npm ci`
 - [ ] `make test-e2e-live` with the `e2e_live` tag alone
-- [x] Measure and record final frontend distribution and binary sizes: 3,568 KiB and
-      18,187,688 bytes respectively at `f14af62`.
+- [x] Measure and record final frontend distribution and binary sizes: 3,624 KiB and
+      21,483,024 bytes respectively after the final `0ed5572` code integration.
 
 The two browser/network tiers remain open because this execution environment refuses
 loopback binds even after scoped escalation. Playwright failed before its server could
@@ -134,14 +134,14 @@ reach `api.github.com` from this environment.
 
 ### 10. GitHub #6 — make Live Photos atomic
 
-This follows metadata issues #1–#3 and schema issue #2 below, but remains P0 because it is a
-real half-archive data bug.
+This followed metadata issues #1–#3 and schema issue #2 below and was treated as P0 because
+it was a real half-archive data bug.
 
 - [x] Pair by matching content identifier, not filename authority.
 - [x] Use `ffprobe` for MOV and resident ExifTool subprocess for candidate stills.
 - [x] Treat basename only as an explicitly degraded source when ExifTool is unavailable.
 - [x] Expand pair groups at every existing archive and restore entry point and in quota byte
-      accounting; the future rename entry point remains an explicit #14 obligation.
+      accounting; the completed #14 rename path preserves the same group contract.
 - [x] Add the mover-level `pair_split` warning backstop.
 - [x] Test UUID collisions, edited `IMG_E...` variants, AAE membership, exact-one-member
       budgets, bulk job totals, restore expansion and 20,000-ID chunking.
@@ -213,11 +213,14 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
 - [x] #5 — location display/proximity filtering and location tagging without geocoding.
 - [x] #8 — descriptions API/editor with keymap-safe text entry.
 - [x] #9 — extend search to path/description/tags and add tag/untagged filters. Benchmark
-      `LIKE` on representative N40L-scale data before accepting the no-FTS5 claim.
+      `LIKE` on representative N40L-scale data before accepting the no-FTS5 claim. The
+      50,000-row ARM64 run measured 14.0–47.9 ms, below the 100 ms threshold; this was not a
+      benchmark on the production N40L.
 - [x] #10 — mouse-first tagging UI, typeahead prompt and tag manager.
 - [x] #12 — one bulk tagging endpoint, 500-ID statement chunks and real undo.
-- [ ] #14 — migration 8, durable directory/file rename job and cosmetic display names.
-- [ ] #11 — tag operators, quick slots and dedicated Tag mode on the existing grammar.
+- [x] #14 — migration 8 and durable, group-preserving directory/file rename jobs; cosmetic
+      `display_name` shipped earlier in migration 7.
+- [x] #11 — tag operators, quick slots and dedicated Tag mode on the existing grammar.
 - [ ] File a separate XMP export issue; tracker #15 currently names it without an issue.
 - [ ] Close tracker #15 only when its children and the export follow-up are accounted for.
 
@@ -242,7 +245,7 @@ requires the owner.
 - [ ] Run the isolated throwaway-folder test before relying on automatic quota enforcement:
       oldest-first, grace period, persistent paths, archive layout, exact restore and pinning.
 - [ ] Verify no coldstore temp/superseded file appears as a synced item.
-- [ ] Production manual archive/deletion propagation/restore is already confirmed; do not
+- [x] Production manual archive/deletion propagation/restore is already confirmed; do not
       repeat destructive tests merely for ceremony.
 - [ ] Upgrade the server's Syncthing v1.19.2 through an owner-approved maintenance plan.
 - [ ] Decide separately whether to enable Syncthing file versioning. The owner currently
