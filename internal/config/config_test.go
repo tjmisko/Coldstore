@@ -186,6 +186,32 @@ budget = "5GB"
 	}
 }
 
+func TestLoadShouldRejectTheConfigWhenTwoFoldersShareASyncthingID(t *testing.T) {
+	path := writeConfig(t, `
+[[folders]]
+label = "Photos"
+syncthing_id = "ph5wp-hswbp"
+path = "/srv/sync/photos"
+budget = "10GB"
+
+[[folders]]
+label = "Pictures"
+syncthing_id = "ph5wp-hswbp"
+path = "/srv/sync/pictures"
+budget = "5GB"
+`)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("want an error for a duplicate Syncthing folder ID")
+	}
+	for _, want := range []string{"Photos", "Pictures", "ph5wp-hswbp", "cannot back two Coldstore identities"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
 func TestLoadForInspectionShouldNotRequireOrRetainSecrets(t *testing.T) {
 	t.Setenv(EnvUsername, "environment-user-secret")
 	t.Setenv(EnvPassword, "environment-password-secret")

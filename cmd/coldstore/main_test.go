@@ -126,6 +126,40 @@ func TestCheckShouldReportACataloguedPathUnderAnotherLabel(t *testing.T) {
 	}
 }
 
+func TestCheckShouldReportACataloguedSyncthingIDUnderAnotherLabelAndPath(t *testing.T) {
+	coldDir := t.TempDir()
+	dbPath := filepath.Join(coldDir, "catalog.db")
+	cat, err := catalog.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cat.ReconcileFolderFromTOML(
+		"Photos", "ph5wp-hswbp", "/srv/sync/Photos", 100, 30,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{
+		Storage: config.StorageConfig{ColdStoragePath: coldDir},
+		Folders: []config.FolderConfig{{
+			Label: "Pictures", SyncthingID: "ph5wp-hswbp",
+			Path: "/srv/sync/Camera Roll (Tristan)", BudgetBytes: 100,
+		}},
+	}
+	err = checkCatalogFolderIdentities(cfg, dbPath)
+	if err == nil {
+		t.Fatal("--check identity validation accepted a label and path rename with the same Syncthing ID")
+	}
+	for _, want := range []string{"ph5wp-hswbp", "already catalogued under label \"Photos\""} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want the catalog ownership conflict %q", err, want)
+		}
+	}
+}
+
 func TestStatusFlagsShouldRemainAdditiveAndRejectAmbiguousModes(t *testing.T) {
 	for _, tc := range []struct {
 		name                      string

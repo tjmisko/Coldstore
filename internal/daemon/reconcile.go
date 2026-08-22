@@ -96,9 +96,10 @@ func ReconcileFolders(cfg *config.Config, cat *catalog.Catalog, logger *slog.Log
 }
 
 // ValidateFolderIdentityChanges rejects a TOML declaration that assigns an
-// already-catalogued path to a different label. Labels key file rows, archive
-// paths, policy and persistent globs, so changing one is not a cosmetic rename:
-// it creates a second folder while stranding everything under the original.
+// already-catalogued path or non-empty Syncthing ID to a different label.
+// Labels key file rows, archive paths, policy and persistent globs, so changing
+// one is not a cosmetic rename: it creates a second folder while stranding
+// everything under the original.
 //
 // Both sides are cleaned before comparison so a trailing slash or a path such
 // as /srv/sync/old/../Photos cannot bypass the invariant. A path move under the
@@ -123,13 +124,22 @@ func ValidateFolderIdentityChanges(cfg *config.Config, identities []catalog.Fold
 	for _, f := range cfg.Folders {
 		declaredPath := filepath.Clean(f.Path)
 		for _, identity := range identities {
-			if identity.FolderLabel == f.Label || filepath.Clean(identity.SyncthingPath) != declaredPath {
+			if identity.FolderLabel == f.Label {
 				continue
 			}
-			return fmt.Errorf("folder %q declares path %q, but that path is already catalogued under label %q; "+
-				"folder labels are permanent identifiers. Restore label %q in coldstore.toml, or use a different path; "+
-				"display_name is the cosmetic alternative when this version exposes it",
-				f.Label, declaredPath, identity.FolderLabel, identity.FolderLabel)
+			if filepath.Clean(identity.SyncthingPath) == declaredPath {
+				return fmt.Errorf("folder %q declares path %q, but that path is already catalogued under label %q; "+
+					"folder labels are permanent identifiers. Restore label %q in coldstore.toml, or use a different path; "+
+					"display_name is the cosmetic alternative when this version exposes it",
+					f.Label, declaredPath, identity.FolderLabel, identity.FolderLabel)
+			}
+			if f.SyncthingID != "" && identity.SyncthingID != "" && f.SyncthingID == identity.SyncthingID {
+				return fmt.Errorf("folder %q declares Syncthing ID %q and path %q, but that Syncthing ID is already "+
+					"catalogued under label %q at path %q; folder labels are permanent identifiers. Restore label %q "+
+					"in coldstore.toml; display_name is the cosmetic alternative when this version exposes it",
+					f.Label, f.SyncthingID, declaredPath, identity.FolderLabel,
+					filepath.Clean(identity.SyncthingPath), identity.FolderLabel)
+			}
 		}
 	}
 	return nil

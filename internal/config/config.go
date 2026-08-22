@@ -241,11 +241,13 @@ func (c *Config) validate(checkServerBinding bool) error {
 	coldRoot := filepath.Clean(c.Storage.ColdStoragePath)
 
 	// A folder is INFRASTRUCTURE (D1): the label is the primary key of the
-	// policy table and the path is the only thing that says where the folder
-	// physically is. Both are validated here, at load, so a typo cannot reach
-	// the reconciler and quietly merge two folders into one row or resolve a
-	// relative path against whatever directory systemd happened to start in.
+	// policy table, the Syncthing ID is its identity on the local Syncthing
+	// device, and the path says where it physically is. They are validated here,
+	// at load, so a typo cannot reach the reconciler and quietly merge two
+	// folders into one row or resolve a relative path against whatever directory
+	// systemd happened to start in.
 	seenLabel := make(map[string]bool, len(c.Folders))
+	seenSyncthingID := make(map[string]string, len(c.Folders))
 	seenPath := make(map[string]string, len(c.Folders))
 	for i := range c.Folders {
 		label := c.Folders[i].Label
@@ -257,6 +259,15 @@ func (c *Config) validate(checkServerBinding bool) error {
 			return fmt.Errorf("folder %q is declared more than once", label)
 		}
 		seenLabel[label] = true
+
+		if syncthingID := c.Folders[i].SyncthingID; syncthingID != "" {
+			if other, dup := seenSyncthingID[syncthingID]; dup {
+				return fmt.Errorf("folders %q and %q both declare Syncthing ID %q: "+
+					"one Syncthing folder cannot back two Coldstore identities",
+					other, label, syncthingID)
+			}
+			seenSyncthingID[syncthingID] = label
+		}
 
 		if !filepath.IsAbs(c.Folders[i].Path) {
 			return fmt.Errorf("folder %q: path %q must be absolute",

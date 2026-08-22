@@ -29,3 +29,11 @@ docs/first-deploy.md
 # Step-by-step checklist for this specific installation: LAN address, Syncthing
 # folder IDs, real paths and budgets. Same reason as first-deploy.md.
 docs/deploy-checklist.md
+
+# Host-specific runbook for reconciling production Syncthing folders with
+# Coldstore. It records real folder IDs and paths once the blanks are filled.
+docs/syncthing-coldstore-migration.md
+
+# Local secret material must never be tracked or make release builds appear
+# dirty. Service credentials belong outside the repository in production.
+/.secrets

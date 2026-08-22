@@ -1639,10 +1639,11 @@ old rows stayed browsable while a new label could rescan the same tree, duplicat
 thumbnail and budget state.
 
 **The shipped guard** runs before startup reconciliation writes and in the read-only
-`--check` path. If a declared folder's cleaned `syncthing_path` belongs to an existing
-`folder_configs` row under a **different** label, coldstore refuses with a recovery-oriented
-message naming both labels. Failing closed is the right severity: the alternative is a
-silently duplicated catalog that gets worse every tick.
+`--check` path. If a declared folder's cleaned `syncthing_path` or non-empty `syncthing_id`
+belongs to an existing `folder_configs` row under a **different** label, coldstore refuses
+with a recovery-oriented message naming both labels. The ID check also covers an attempted
+rename that moves the filesystem path in the same edit. Failing closed is the right severity:
+the alternative is a silently duplicated catalog that gets worse every tick.
 
 ### 6.5 `display_name` — the safe version of what was asked for
 

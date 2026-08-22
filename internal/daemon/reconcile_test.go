@@ -302,6 +302,48 @@ func TestReconcileFoldersShouldRejectALabelRenameBeforeWritingAnything(t *testin
 	}
 }
 
+func TestReconcileFoldersShouldRejectALabelAndPathRenameWithTheSameSyncthingID(t *testing.T) {
+	cat, dbPath := openCatalog(t)
+	if err := ReconcileFolders(tomlConfig(config.FolderConfig{
+		Label: "Photos", SyncthingID: "ph5wp-hswbp", Path: "/srv/sync/Photos", BudgetBytes: 20_000,
+	}), cat, testLogger()); err != nil {
+		t.Fatal(err)
+	}
+	seededEvents := countEvents(t, dbPath, "folder_seeded")
+
+	// A new declaration first ensures the full set is validated before any
+	// writes. The Pictures block changes both label and path, which the path
+	// guard alone cannot identify as a rename; its stable Syncthing ID can.
+	err := ReconcileFolders(tomlConfig(
+		config.FolderConfig{Label: "Docs", SyncthingID: "docs-id", Path: "/srv/sync/Docs", BudgetBytes: 10_000},
+		config.FolderConfig{
+			Label: "Pictures", SyncthingID: "ph5wp-hswbp", Path: "/srv/sync/Camera Roll (Tristan)", BudgetBytes: 20_000,
+		},
+	), cat, testLogger())
+	if err == nil {
+		t.Fatal("renaming Photos and moving its path while retaining its Syncthing ID must be rejected")
+	}
+	for _, want := range []string{
+		"Pictures", "ph5wp-hswbp", "/srv/sync/Camera Roll (Tristan)",
+		"Photos", "/srv/sync/Photos", "permanent", "display_name",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want recovery detail %q", err, want)
+		}
+	}
+
+	all, err := cat.ListFolderConfigs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].FolderLabel != "Photos" || !all[0].PresentInTOML {
+		t.Errorf("folder rows after refusal = %+v, want the untouched Photos row only", all)
+	}
+	if got := countEvents(t, dbPath, "folder_seeded"); got != seededEvents {
+		t.Errorf("folder_seeded events = %d, want unchanged %d", got, seededEvents)
+	}
+}
+
 func TestReconcileFoldersShouldRejectSwappedLabels(t *testing.T) {
 	cat, _ := openCatalog(t)
 	if err := ReconcileFolders(tomlConfig(

@@ -115,10 +115,11 @@ Original relative paths are preserved exactly, so restore = move back to `{synct
 **`folder_configs`** -- per-folder settings, and the runtime source of truth for
 both folder policy and folder paths:
 - `folder_label` -- permanent identity used by file rows, policy and archive paths.
-  Reconciliation rejects a cleaned path already catalogued under a different label,
-  including rows no longer present in TOML
+  Reconciliation rejects a cleaned path or non-empty Syncthing ID already catalogued
+  under a different label, including rows no longer present in TOML
 - `syncthing_id`, `syncthing_path` -- refreshed from `coldstore.toml` by startup
-  reconciliation; the path may change while `folder_label` stays unchanged
+  reconciliation; the path may change while `folder_label` stays unchanged. Non-empty
+  Syncthing IDs must be unique across declarations
 - `budget_bytes`, `grace_minutes`, `enabled` -- owned by the UI; TOML only seeds them
   when the row is created
 - `present_in_toml` -- 0 once a folder stops being declared. The row is kept, its files

@@ -7,26 +7,27 @@ import (
 	"os"
 )
 
-// FolderIdentity is a catalogued label and its current path. The label is
-// permanent while the path may move under that same label. Policy and
-// present_in_toml are deliberately absent: identity checks must include
-// disabled and removed folders too.
+// FolderIdentity is a catalogued label and its current Syncthing identity.
+// The label is permanent while the Syncthing ID and path may be refreshed
+// under that same label. Policy and present_in_toml are deliberately absent:
+// identity checks must include disabled and removed folders too.
 type FolderIdentity struct {
 	FolderLabel   string
+	SyncthingID   string
 	SyncthingPath string
 }
 
-// ListFolderIdentities returns every catalogued label/path association. The
-// reconciler calls this before its first write so a TOML label rename cannot
-// silently strand the files recorded under the original label.
+// ListFolderIdentities returns every catalogued label/Syncthing association.
+// The reconciler calls this before its first write so a TOML label rename
+// cannot silently strand the files recorded under the original label.
 func (c *Catalog) ListFolderIdentities() ([]FolderIdentity, error) {
 	return queryFolderIdentities(c.db)
 }
 
 // ReadFolderIdentities opens an existing catalog strictly read-only and
-// returns its label/path associations without running migrations. A missing
-// catalog has no associations and is not created. This is the catalog access
-// used by `coldstore --check`.
+// returns its label/Syncthing associations without running migrations. A
+// missing catalog has no associations and is not created. This is the catalog
+// access used by `coldstore --check`.
 func ReadFolderIdentities(dbPath string) ([]FolderIdentity, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
@@ -52,7 +53,7 @@ func ReadFolderIdentities(dbPath string) ([]FolderIdentity, error) {
 }
 
 func queryFolderIdentities(db *sql.DB) ([]FolderIdentity, error) {
-	rows, err := db.Query(`SELECT folder_label, syncthing_path FROM folder_configs
+	rows, err := db.Query(`SELECT folder_label, syncthing_id, syncthing_path FROM folder_configs
 		ORDER BY folder_label`)
 	if err != nil {
 		return nil, err
@@ -62,7 +63,7 @@ func queryFolderIdentities(db *sql.DB) ([]FolderIdentity, error) {
 	var identities []FolderIdentity
 	for rows.Next() {
 		var identity FolderIdentity
-		if err := rows.Scan(&identity.FolderLabel, &identity.SyncthingPath); err != nil {
+		if err := rows.Scan(&identity.FolderLabel, &identity.SyncthingID, &identity.SyncthingPath); err != nil {
 			return nil, err
 		}
 		identities = append(identities, identity)

@@ -33,7 +33,7 @@ func TestReadFolderIdentitiesShouldReadALegacyCatalogWithoutMigratingOrWriting(t
 	}
 	if _, err := raw.Exec(`INSERT INTO folder_configs
 		(folder_label, syncthing_id, syncthing_path, budget_bytes, grace_minutes, enabled)
-		VALUES ('Photos', '', '/srv/sync/Photos', 100, 30, 1)`); err != nil {
+		VALUES ('Photos', 'ph5wp-hswbp', '/srv/sync/Photos', 100, 30, 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if err := raw.Close(); err != nil {
@@ -54,6 +54,7 @@ func TestReadFolderIdentitiesShouldReadALegacyCatalogWithoutMigratingOrWriting(t
 	}
 
 	if len(identities) != 1 || identities[0].FolderLabel != "Photos" ||
+		identities[0].SyncthingID != "ph5wp-hswbp" ||
 		identities[0].SyncthingPath != "/srv/sync/Photos" {
 		t.Errorf("identities = %+v, want the legacy Photos association", identities)
 	}
