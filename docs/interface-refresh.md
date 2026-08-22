@@ -22,6 +22,10 @@ assets below replaced it.
 
 ## B. Access -- guest-capable HTTPS without exposing the control plane
 
+The plain-language option comparison, staged recommendation and unanswered owner questions
+are maintained in `docs/access-and-export-interview.md`. This section remains the technical
+acceptance contract after those decisions are made.
+
 The current loopback SSH tunnel is the safe interim owner path. Tailscale Serve is also a
 good private owner/admin path, but it cannot satisfy the guest requirement without making
 every guest install a client and join the tailnet.

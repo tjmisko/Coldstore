@@ -150,6 +150,8 @@ it was a real half-archive data bug.
 
 ### 11. Select and threat-model the ingress
 
+Use `docs/access-and-export-interview.md` to record the owner choices that gate this section.
+
 - [x] Treat the current loopback SSH tunnel as the safe interim state.
 - [ ] Select a domain-backed HTTPS path that works in a normal browser and supports guests
       without installing a VPN client.

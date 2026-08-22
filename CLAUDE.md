@@ -56,7 +56,9 @@ The current product designs are:
 - `docs/interface-refresh.md` — interface, preview and operational-status acceptance;
 - `docs/keymap-design.md` — keyboard grammar and interaction contract; and
 - `docs/tagging-design.md` — verified metadata findings plus the tagging, Live Photo and
-  rename plan.
+  rename plan; and
+- `docs/access-and-export-interview.md` — plain-language XMP guidance, access/session
+  options and the pending owner decision record.
 
 Schema numbers in design documents are assigned in landing order and are never reused after
 another branch ships them. Document preview owns migration 6; tagging and rename are planned
