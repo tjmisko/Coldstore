@@ -6,6 +6,7 @@ import { afterEach } from "vitest";
 // one test answers the next test's queries.
 afterEach(() => {
   cleanup();
+  localStorage.removeItem("coldstore.workspace.v1");
 });
 
 // jsdom has no IntersectionObserver, and the Gallery and the FileBrowser both

@@ -1,7 +1,6 @@
 import { useCallback, useState } from "react";
 import type { TagOperation, FileActions } from "../hooks/useFileWorkspace";
 import { useKeymapLayer } from "../hooks/useKeymapLayer";
-import { useQuickSlots } from "../hooks/useQuickSlots";
 import { useScrollLock } from "../hooks/useScrollLock";
 import type { Command } from "../keymap/types";
 import { formatDateTime, formatSize } from "../lib/format";
@@ -37,7 +36,6 @@ export function TagMode({ files, index, actions, lastOperation, onClose }: TagMo
   const [seenOperation, setSeenOperation] = useState(lastOperation);
   const [arrivedFromID, setArrivedFromID] = useState<number | null>(null);
   const [pending, setPending] = useState<TagOperation | null>(null);
-  const quick = useQuickSlots(file?.folder_label ?? "");
   useScrollLock(true);
 
   if (seenOperation !== lastOperation) {
@@ -153,23 +151,13 @@ export function TagMode({ files, index, actions, lastOperation, onClose }: TagMo
               <p className="mt-1 whitespace-pre-wrap text-ink-muted">{file.description || "None"}</p>
               <p className="mt-2 text-ink-faint">Press i to edit</p>
             </div>
-            <div className="mt-4 border-t border-line pt-4" data-quick-slots>
-              <h3 className="mb-2 text-ink-faint">Quick tags</h3>
-              <div className="grid grid-cols-3 gap-1">
-                {quick.slots.map((name, slot) => (
-                  <span key={slot} data-quick-slot={slot + 1} className="truncate rounded bg-raised px-2 py-1 text-ink-muted">
-                    {slot + 1} {name || "—"}
-                  </span>
-                ))}
-              </div>
-            </div>
           </aside>
         </div>
 
         <footer className="border-t border-line px-4 py-2 text-meta text-ink-faint" data-tag-mode-status>
           {pending
             ? `Enter repeats ${pending.mode === "add" ? "tag" : "untag"} ${pending.tags.join(", ")} · any other key discards`
-            : "t/T tag · . repeat · U undo · Ctrl-R redo · Space 1–9 quick tags · , carry · J/K untagged · Esc close"}
+            : "t/T tag · . repeat · U undo · Ctrl-R redo · , carry · J/K untagged · Esc close"}
         </footer>
       </section>
     </Portal>

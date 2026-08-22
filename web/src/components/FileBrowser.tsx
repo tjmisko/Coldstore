@@ -21,12 +21,17 @@ import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 interface FileBrowserProps {
   folder: string;
   displayName?: string;
+  allFolders?: boolean;
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
+  tagFilters?: string[];
+  onTagFiltersChange?(tags: string[]): void;
   onFolderChanged(): void;
   reveal?: FileReveal | null;
   onShowInFiles?(file: FileRecord): void;
 }
+
+const NO_TAG_FILTERS: string[] = [];
 
 /** A table row is about this tall, and <C-d> needs to know. Measured rather
  *  than guessed would be better; measured costs a ResizeObserver on a list that
@@ -69,16 +74,21 @@ const CHECKBOX_BOX =
 export function FileBrowser({
   folder,
   displayName = folder,
+  allFolders = false,
   filterKey,
   onFilterChange,
+  tagFilters = NO_TAG_FILTERS,
+  onTagFiltersChange = () => {},
   onFolderChanged,
   reveal = null,
   onShowInFiles = () => {},
 }: FileBrowserProps) {
   const [near, setNear] = useState<NearFilter | null>(null);
+  const queryFolder = allFolders ? "" : folder;
   const workspace = useFileWorkspace({
-    folder,
+    folder: queryFolder,
     filterKey,
+    tags: tagFilters,
     sort: "name",
     near: near ?? undefined,
     onFolderChanged,
@@ -95,13 +105,13 @@ export function FileBrowser({
       !target ||
       loading ||
       filterKey !== "all" ||
-      target.folder_label !== folder ||
+      (!allFolders && target.folder_label !== folder) ||
       loadedFiles.some((file) => file.id === target.id)
     ) {
       return loadedFiles;
     }
     return [...loadedFiles, target];
-  }, [filterKey, folder, loadedFiles, loading, reveal]);
+  }, [allFolders, filterKey, folder, loadedFiles, loading, reveal]);
 
   const observer = useRef<IntersectionObserver | null>(null);
   const headerCheckbox = useRef<HTMLInputElement>(null);
@@ -195,7 +205,7 @@ export function FileBrowser({
     reveal,
   });
 
-  if (!folder) {
+  if (!folder && !allFolders) {
     return (
       <div className="flex items-center justify-center h-full text-ink-muted">
         Select a folder from the sidebar
@@ -208,8 +218,16 @@ export function FileBrowser({
       {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
           top of the first few characters of the folder name at 390px. Margin,
           not padding: the box has to move for a bounding-box test to see it. */}
-      <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{displayName}</h2>
-      <FilterBar active={filterKey} onChange={onFilterChange} near={near} onClearNear={() => setNear(null)} />
+      <h2 className="mb-4 ml-11 pr-32 text-title font-medium tracking-tight md:ml-0">{displayName}</h2>
+      <FilterBar
+        active={filterKey}
+        onChange={onFilterChange}
+        near={near}
+        onClearNear={() => setNear(null)}
+        folder={allFolders ? undefined : folder}
+        tags={tagFilters}
+        onTagsChange={onTagFiltersChange}
+      />
 
       {error && (
         <p className="mb-3 text-meta text-alarm" role="alert">
@@ -217,7 +235,7 @@ export function FileBrowser({
         </p>
       )}
 
-      <div className="overflow-x-auto">
+      <div className="-m-1 overflow-x-auto p-1">
         <table className="w-full text-base">
           <thead>
             <tr className="text-left text-ink-faint border-b border-line-strong text-micro uppercase tracking-wider">
@@ -376,7 +394,7 @@ export function FileBrowser({
 
       {tagPrompt && (
         <TagPrompt
-          folder={folder}
+          folder={queryFolder}
           ids={tagPrompt.ids}
           mode={tagPrompt.mode}
           selectionNote={bulk.selectAllNote}
@@ -452,7 +470,7 @@ function Row({
       }}
       className={`group border-b border-line/70 hover:bg-raised/50 outline-none ${
         selected ? "bg-ink/[0.055]" : ""
-      } ${cursor ? "ring-2 ring-inset ring-cursor" : ""}`}
+      } ${cursor ? "keyboard-cursor" : ""}`}
     >
       <td className="py-2.5 pr-2">
         <label className="inline-flex p-1 cursor-pointer align-middle">

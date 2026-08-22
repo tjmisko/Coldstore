@@ -136,11 +136,18 @@ describe("operators", () => {
     ]);
   });
 
-  it("emits resolved repeat, exact history, and leader quick-slot actions", () => {
+  it("should expose PDF colour inversion on uppercase I only in the reader", () => {
+    expect(run("I", { chain: ["pdf-reader", "lightbox", "global"] }).commands).toEqual([
+      { kind: "action", action: "invert-pdf", count: 0 },
+    ]);
+    expect(run("I").commands).toEqual([]);
+  });
+
+  it("emits resolved repeat and exact history while Space selects directly", () => {
     expect(run(".").commands).toEqual([{ kind: "action", action: "repeat-tags", count: 0 }]);
     expect(run("U").commands).toEqual([{ kind: "action", action: "tag-undo", count: 0 }]);
     expect(run("<C-r>").commands).toEqual([{ kind: "action", action: "tag-redo", count: 0 }]);
-    expect(run("<Space>3").commands).toEqual([{ kind: "action", action: "quick-tag-3", count: 0 }]);
+    expect(run("<Space>").commands).toEqual([{ kind: "action", action: "toggle-select", count: 0 }]);
     expect(run("3j").commands).toEqual([{ kind: "motion", motion: "down", count: 3, extend: false }]);
   });
 
@@ -165,7 +172,7 @@ describe("operators", () => {
     expect(state.operator).toBeNull();
   });
 
-  it("should refuse a leader sequence while an operator is pending", () => {
+  it("should refuse Space while an operator is pending", () => {
     const { commands, state } = run("d<Space>a");
     expect(commands).toEqual([]);
     expect(state.operator).toBeNull();
@@ -247,24 +254,13 @@ describe("visual mode", () => {
 });
 
 describe("multi-key sequences", () => {
-  it("should hold the keys and emit nothing when a sequence is still ambiguous", () => {
-    const { commands, state } = run("<Space>f");
-    expect(commands).toEqual([]);
-    expect(state.pending).toEqual(["<Space>", "f"]);
-  });
-
-  it("should open the finder when the whole leader sequence is typed", () => {
-    const { commands } = run("<Space>fe");
-    expect(commands).toEqual([{ kind: "action", action: "finder", count: 0 }]);
-  });
-
-  it("should drop the sequence and hand the key back when nothing matches", () => {
-    const { commands, handled, state } = run("<Space>z");
-    expect(commands).toEqual([]);
+  it("should dispatch Space immediately instead of holding it as a leader", () => {
+    const { commands, state } = run("<Space>e");
+    expect(commands).toEqual([
+      { kind: "action", action: "toggle-select", count: 0 },
+      { kind: "action", action: "tag-mode", count: 0 },
+    ]);
     expect(state.pending).toEqual([]);
-    // Not handled: an engine that swallows keys it has no binding for is one
-    // that breaks Ctrl+R.
-    expect(handled.at(-1)).toBe(false);
   });
 
   it("should resolve the shorter binding when the timeout fires on an ambiguous prefix", () => {
@@ -328,7 +324,7 @@ describe("scopes", () => {
 describe("pendingLabel", () => {
   it("should show what has been typed so far while a command is unfinished", () => {
     expect(pendingLabel(run("2d3").state)).toBe("2d3");
-    expect(pendingLabel(run("<Space>f").state)).toBe("<Space>f");
+    expect(pendingLabel(run("g").state)).toBe("g");
     expect(pendingLabel(initialState)).toBe("");
   });
 });

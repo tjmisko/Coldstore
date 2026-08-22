@@ -52,6 +52,7 @@ export const SCOPE_PRIORITY: Record<Scope, number> = {
   lightbox: 20,
   tagging: 30,
   overlay: 40,
+  "pdf-reader": 45,
   description: 50,
   "tag-prompt": 60,
 };

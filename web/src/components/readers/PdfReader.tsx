@@ -3,6 +3,8 @@ import { Document, Page, pdfjs } from "react-pdf";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
+import { useKeymapLayer } from "../../hooks/useKeymapLayer";
+import type { Command } from "../../keymap/types";
 
 // The worker comes through Vite's ?url import, so it is emitted as a hashed
 // asset that the binary's embedded filesystem serves. pdf.js's default is a
@@ -47,7 +49,17 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
   const [page, setPage] = useState(1);
   const [error, setError] = useState("");
   const [width, setWidth] = useState(0);
+  const [inverted, setInverted] = useState(false);
   const frameRef = useRef<HTMLDivElement | null>(null);
+
+  const handleKeymap = useCallback((command: Command): boolean => {
+    if (command.kind === "action" && command.action === "invert-pdf") {
+      setInverted((current) => !current);
+      return true;
+    }
+    return false;
+  }, []);
+  useKeymapLayer("pdf-reader", handleKeymap);
 
   // react-pdf renders at a fixed pixel width, so it needs a measured one. A
   // percentage would render at the intrinsic page size and overflow the
@@ -87,8 +99,8 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
   }
 
   return (
-    <div data-pdf-reader className="flex flex-col items-center gap-3 w-full">
-      <div ref={frameRef} className="w-full max-w-3xl overflow-auto max-h-[68vh] flex justify-center">
+    <div data-pdf-reader className="flex max-h-full min-h-0 w-full flex-col items-center gap-3">
+      <div ref={frameRef} className="flex min-h-0 w-full max-w-3xl flex-1 justify-center overflow-auto rounded-md bg-raised">
         <Document
           file={src}
           options={DOCUMENT_OPTIONS}
@@ -102,6 +114,7 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
             <Page
               pageNumber={page}
               width={Math.min(width, 900)}
+              className={`transition-[filter] duration-200 ${inverted ? "invert hue-rotate-180" : ""}`}
               renderAnnotationLayer={false}
               loading={<ReaderMessage>Rendering page {page}...</ReaderMessage>}
             />
@@ -109,28 +122,41 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
         </Document>
       </div>
 
-      {pageCount > 1 && (
-        <div className="flex items-center gap-3 text-base text-ink-muted">
+      {pageCount > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-3 text-base text-ink-muted">
+          {pageCount > 1 && (
+            <>
+              <button
+                type="button"
+                data-pdf-prev
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className={READER_BUTTON}
+              >
+                Previous
+              </button>
+              <span data-pdf-page-indicator>
+                Page {page} of {pageCount}
+              </span>
+              <button
+                type="button"
+                data-pdf-next
+                onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                disabled={page >= pageCount}
+                className={READER_BUTTON}
+              >
+                Next
+              </button>
+            </>
+          )}
           <button
             type="button"
-            data-pdf-prev
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page <= 1}
-            className={READER_BUTTON}
+            data-pdf-invert
+            aria-pressed={inverted}
+            onClick={() => setInverted((current) => !current)}
+            className={`${READER_BUTTON} ${inverted ? "bg-cursor-dim text-cursor ring-cursor/40" : ""}`}
           >
-            Previous
-          </button>
-          <span data-pdf-page-indicator>
-            Page {page} of {pageCount}
-          </span>
-          <button
-            type="button"
-            data-pdf-next
-            onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-            disabled={page >= pageCount}
-            className={READER_BUTTON}
-          >
-            Next
+            Invert (I)
           </button>
         </div>
       )}

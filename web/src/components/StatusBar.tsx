@@ -7,13 +7,10 @@ import type { FolderStatus, StatusResponse } from "../types/api";
 interface StatusBarProps {
   status: StatusResponse | null;
   error: string | null;
-  /** Sends the owner to a folder with a filter already applied. The wedge
-   *  banner's remedy is only a remedy if it is one click away. */
-  onReview(folder: string, filter: "pinned-auto"): void;
   onRefresh(): Promise<void> | void;
 }
 
-export function StatusBar({ status, error, onReview, onRefresh }: StatusBarProps) {
+export function StatusBar({ status, error, onRefresh }: StatusBarProps) {
   const scan = useJobRunner();
   const scanning = scan.running;
 
@@ -27,7 +24,7 @@ export function StatusBar({ status, error, onReview, onRefresh }: StatusBarProps
   }, [scan.job, onRefresh]);
 
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto p-3 border-t border-line text-meta text-ink-muted space-y-3">
+    <div className="max-h-[35%] shrink-0 overflow-y-auto p-3 border-t border-line text-meta text-ink-muted space-y-3">
       {error && (
         // Never `return null` on an error. A 401 and an empty install used to
         // render identically: nothing at all.
@@ -42,10 +39,6 @@ export function StatusBar({ status, error, onReview, onRefresh }: StatusBarProps
           <span>{formatCount(status.archived_files)} archived</span>
         </div>
       )}
-
-      {status?.folders.map((folder) => (
-        <FolderMeter key={folder.label} folder={folder} onReview={onReview} />
-      ))}
 
       <BulkEvictionStrip />
 
@@ -68,12 +61,16 @@ export function StatusBar({ status, error, onReview, onRefresh }: StatusBarProps
   );
 }
 
-function FolderMeter({
+export function FolderNavItem({
   folder,
+  selected,
+  onSelect,
   onReview,
 }: {
   folder: FolderStatus;
-  onReview: StatusBarProps["onReview"];
+  selected: boolean;
+  onSelect(): void;
+  onReview(): void;
 }) {
   // Two NESTED segments, never two additive ones: pinned_bytes is a subset of
   // synced_size_bytes, so stacking them would draw a fully pinned folder at
@@ -91,74 +88,72 @@ function FolderMeter({
   const pressured = totalPct > 90 || folder.over_budget;
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex justify-between gap-2 text-meta">
-        <span className={folder.enabled && folder.present_in_toml ? "text-ink" : "text-ink-faint"}>
-          {folder.display_name || folder.label}
-          {!folder.enabled && <span className="ml-1 text-ink-faint">(disabled)</span>}
-          {!folder.present_in_toml && (
-            <span className="ml-1 text-ink-faint">(not in coldstore.toml)</span>
-          )}
-        </span>
-        {/* Mono and tabular so the figures line up down the folder list; that
-            column is the one place the owner compares folders against each
-            other rather than reading a single number. */}
-        <span className="whitespace-nowrap text-ink-muted font-mono tabular">
-          {formatSize(folder.synced_size_bytes)} / {formatSize(budget)}
-        </span>
-      </div>
-
-      <div
-        className="relative h-2 bg-raised rounded-full overflow-hidden flex ring-1 ring-inset ring-line"
-        role="meter"
-        aria-label={`${folder.label} budget`}
-        aria-valuenow={Math.round(totalPct)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        data-total-pct={totalPct.toFixed(2)}
-        data-pinned-pct={pinnedPct.toFixed(2)}
+    <div className={`rounded-lg ${selected ? "bg-raised-hover" : "hover:bg-raised"}`}>
+      <button
+        type="button"
+        data-folder-nav={folder.label}
+        aria-current={selected ? "page" : undefined}
+        onClick={onSelect}
+        className="w-full rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
       >
-        {/* Held out of the cold, so it wears the held hue -- the same one the
-            pin and the pinned badge use. */}
-        <div className="h-full bg-held" style={{ width: `${pinnedPct}%` }} data-segment="pinned" />
         <div
-          className={`h-full ${pressured ? "bg-alarm" : "bg-ink-muted"}`}
-          style={{ width: `${unpinnedPct}%` }}
-          data-segment="unpinned"
-        />
-        {folder.over_budget && (
-          // At budget and over budget both clamp to 100% width, so without
-          // this they look identical.
-          <div
-            className="absolute right-0 top-0 h-full w-1 bg-alarm brightness-125"
-            data-segment="overflow"
-            title="over budget"
-          />
-        )}
-      </div>
+          className={`flex items-start justify-between gap-2 text-meta ${
+            folder.enabled && folder.present_in_toml ? "text-ink" : "text-ink-faint"
+          }`}
+        >
+          <span className="min-w-0 truncate font-medium">{folder.display_name || folder.label}</span>
+          <span className="shrink-0 whitespace-nowrap font-mono text-ink-muted tabular">
+            {formatSize(folder.synced_size_bytes)} / {formatSize(budget)}
+          </span>
+        </div>
 
-      {folder.pinned_bytes > 0 && (
-        <p className="text-micro text-held/85 tabular">
-          {formatSize(folder.pinned_bytes)} pinned ({formatCount(folder.counts.pinned)} files)
-        </p>
-      )}
+        <div
+          className="relative mt-2 flex h-2 overflow-hidden rounded-full bg-ground ring-1 ring-inset ring-line"
+          role="meter"
+          aria-label={`${folder.label} budget`}
+          aria-valuenow={Math.round(totalPct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          data-total-pct={totalPct.toFixed(2)}
+          data-pinned-pct={pinnedPct.toFixed(2)}
+        >
+          <span className="h-full bg-held" style={{ width: `${pinnedPct}%` }} data-segment="pinned" />
+          <span
+            className={`h-full ${pressured ? "bg-alarm" : "bg-ink-muted"}`}
+            style={{ width: `${unpinnedPct}%` }}
+            data-segment="unpinned"
+          />
+          {folder.over_budget && (
+            <span
+              className="absolute right-0 top-0 h-full w-1 bg-alarm brightness-125"
+              data-segment="overflow"
+              title="over budget"
+            />
+          )}
+        </div>
+
+        <span className="mt-1.5 flex flex-wrap gap-x-2 text-micro text-ink-faint">
+          {folder.pinned_bytes > 0 && (
+            <span className="text-held/85 tabular">
+              {formatSize(folder.pinned_bytes)} pinned
+            </span>
+          )}
+          {!folder.enabled && <span>disabled</span>}
+          {!folder.present_in_toml && <span>not in coldstore.toml</span>}
+          {folder.wedged && <span className="text-alarm">budget blocked</span>}
+          <span>checked {formatAgo(folder.last_enforced_at)}</span>
+        </span>
+      </button>
 
       {folder.wedged && (
-        <div
-          className="rounded-md border border-alarm/45 bg-alarm-dim p-2.5 space-y-1"
-          role="alert"
-          data-wedge-banner={folder.label}
-        >
-          <p className="text-ink font-medium leading-snug">
-            {formatSize(folder.pinned_bytes)} pinned exceeds {formatSize(budget)} budget &mdash;
-            nothing left to offload.
-          </p>
-          <p className="text-ink-muted">
-            Unpin or archive some files to let coldstore free space.
+        <div className="mx-2 mb-2 rounded-md border border-alarm/45 bg-alarm-dim p-2.5 text-meta" role="alert" data-wedge-banner={folder.label}>
+          <p className="text-ink leading-snug">
+            {formatSize(folder.pinned_bytes)} pinned exceeds {formatSize(budget)} budget; nothing left to offload.
           </p>
           <button
-            onClick={() => onReview(folder.label, "pinned-auto")}
-            className="text-alarm hover:brightness-125 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
+            type="button"
+            onClick={onReview}
+            className="mt-1 rounded text-alarm underline underline-offset-2 hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
           >
             Review auto-pinned files &rarr;
           </button>
@@ -166,20 +161,12 @@ function FolderMeter({
       )}
 
       {folder.syncthing_type !== "" && folder.syncthing_type !== "sendreceive" && (
-        <div className="rounded-md border border-alarm/45 bg-alarm-dim p-2.5" role="alert">
+        <div className="mx-2 mb-2 rounded-md border border-alarm/45 bg-alarm-dim p-2.5 text-meta" role="alert">
           <p className="text-ink leading-snug">
-            {folder.display_name || folder.label} is a {folder.syncthing_type} Syncthing folder &mdash; coldstore cannot
-            free space on your devices.
-          </p>
-          <p className="text-ink-muted">
-            Change it to Send &amp; Receive in Syncthing, then re-enable the folder here.
+            This is a {folder.syncthing_type} Syncthing folder; coldstore cannot free device space.
           </p>
         </div>
       )}
-
-      <p className="text-micro text-ink-faint">
-        checked {formatAgo(folder.last_enforced_at)}
-      </p>
     </div>
   );
 }

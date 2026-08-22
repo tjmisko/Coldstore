@@ -320,7 +320,7 @@ describe("operators", () => {
 describe("visual mode", () => {
   it("should extend the selection over the motion and keep it after Escape", async () => {
     // In vim nothing stays selected after Escape. Here the point of a visual
-    // range is to end up with a selection, and <Space>c is how one goes away.
+    // range is to end up with a selection, and Escape clears it once normal.
     renderBrowser();
     await browserReady();
 
@@ -364,14 +364,15 @@ describe("visual mode", () => {
     expect(postedJob()?.ids).toEqual([1, 2, 3]);
   });
 
-  it("should clear the selection on leader-c", async () => {
+  it("should toggle the current row selection directly with Space", async () => {
     renderBrowser();
     await browserReady();
 
-    type("v3j");
-    type("<Space>c");
+    type("<Space>");
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    type("<Space>");
 
-    await waitFor(() => expect(screen.queryByText("4 selected")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("1 selected")).toBeNull());
   });
 });
 
@@ -470,7 +471,7 @@ describe("the context menu", () => {
     renderBrowser();
     await browserReady();
 
-    type("<Space>m");
+    type("<Menu>");
 
     expect(await screen.findByRole("menu")).toHaveTextContent("file_01.jpg");
   });

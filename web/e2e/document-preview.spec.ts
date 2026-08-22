@@ -48,6 +48,30 @@ test("pages through a PDF that has more than one page", async ({ page }) => {
   await expect(indicator).toContainText("Page 2 of 2");
 });
 
+test("inverts a PDF for dark reading with I", async ({ page }) => {
+  await openLightbox(page, "2026-Q1-Report.pdf");
+  await expect(page.locator("[data-pdf-reader] canvas")).toBeVisible({ timeout: 20_000 });
+
+  await page.keyboard.press("Shift+I");
+
+  await expect(page.locator("[data-pdf-invert]")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".react-pdf__Page")).toHaveClass(/invert/);
+});
+
+test("keeps the mobile lightbox summary and actions at a readable width", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFolder(page, "CameraRoll");
+  await page.locator("[data-file-id]").first().click();
+
+  const lightbox = page.locator("[data-lightbox]");
+  await expect(lightbox).toBeVisible();
+  const summary = await page.locator("[data-lightbox-summary]").boundingBox();
+  const actions = await page.locator("[data-lightbox-actions]").boundingBox();
+  expect(summary?.width).toBeGreaterThan(330);
+  expect(actions?.x).toBeGreaterThanOrEqual(0);
+  expect((actions?.x ?? 0) + (actions?.width ?? 0)).toBeLessThanOrEqual(390);
+});
+
 test("reads an EPUB without downloading the archive to the browser", async ({ page }) => {
   await openLightbox(page, "Pocket-Guide.epub");
 

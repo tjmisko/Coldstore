@@ -105,6 +105,70 @@ describe("App", () => {
     expect(document.title).toBe("Settings — Coldstore");
   });
 
+  it("should keep the active folder, view, and filters across a refresh", async () => {
+    localStorage.setItem("coldstore.workspace.v1", JSON.stringify({
+      folder: "Documents",
+      allFolders: false,
+      view: "files",
+      filterKey: "archived",
+      tags: ["Work/Reports"],
+    }));
+    stub = stubFetch([
+      {
+        url: "/api/v1/status",
+        body: aStatus({
+          folders: [
+            { ...aStatus().folders[0], label: "Articles" },
+            { ...aStatus().folders[0], label: "Documents" },
+          ],
+        }),
+      },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Documents", level: 2 })).toBeInTheDocument();
+    expect(document.querySelector('[data-view-nav="files"]')).toHaveAttribute("aria-current", "page");
+    await waitFor(() => {
+      const request = stub!.urls().find((url) => url.startsWith("/api/v1/files?"));
+      const params = new URLSearchParams(request?.split("?")[1]);
+      expect(params.get("folder")).toBe("Documents");
+      expect(params.get("status")).toBe("archived");
+      expect(params.getAll("tag")).toEqual(["Work/Reports"]);
+    });
+  });
+
+  it("should filter by tags inside one folder and across all folders", async () => {
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+      { url: "/api/v1/tags", body: [{ id: 1, name: "Trips", count: 3, descendant_count: 3 }] },
+    ]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+
+    const input = screen.getByRole("combobox", { name: "Filter CameraRoll by tag" });
+    await userEvent.type(input, "Trips");
+    await userEvent.click(screen.getByRole("button", { name: "Add" }));
+
+    await waitFor(() => expect(stub!.urls().some((url) => {
+      if (!url.startsWith("/api/v1/files?")) return false;
+      const params = new URLSearchParams(url.split("?")[1]);
+      return params.get("folder") === "CameraRoll" && params.get("tag") === "Trips";
+    })).toBe(true));
+
+    await userEvent.click(screen.getByRole("button", { name: /All folders/ }));
+    expect(await screen.findByRole("heading", { name: "All folders", level: 2 })).toBeInTheDocument();
+    await waitFor(() => expect(stub!.urls().some((url) => {
+      if (!url.startsWith("/api/v1/files?")) return false;
+      const params = new URLSearchParams(url.split("?")[1]);
+      return !params.has("folder") && params.get("tag") === "Trips";
+    })).toBe(true));
+  });
+
   it("should replace the finder with a preview when Enter opens its result", async () => {
     const file = aFile({ id: 44, filename: "concert.jpg", relative_path: "events/concert.jpg" });
     stub = stubFetch([

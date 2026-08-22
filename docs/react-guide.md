@@ -383,8 +383,8 @@ the checkbox, pin and row actions never also open a preview. In either view,
 It registers the `lightbox` scope, which is **not** exclusive: `q` and `i` are
 its own, and `d`, `p`, `y`, `j` and `G` fall through to the same paths the grid
 uses. That is the point of having a grammar rather than a switch statement per
-component. `Space` no longer toggles the metadata panel -- it is the leader now
--- so `i` does. The tile is a `<div role="button">`, not a `<button>`: a
+component. `Space` toggles selection for the current file, while `i` toggles the
+metadata panel. The tile is a `<div role="button">`, not a `<button>`: a
 checkbox and a pin toggle inside a button are nested interactive elements, which
 is invalid HTML and made a click on the checkbox also open the lightbox.
 

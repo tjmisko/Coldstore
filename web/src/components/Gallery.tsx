@@ -22,24 +22,38 @@ import { TagPrompt, type TagPromptMode } from "./TagPrompt";
 interface GalleryProps {
   folder: string;
   displayName?: string;
+  allFolders?: boolean;
   filterKey: FilterKey;
   onFilterChange(key: FilterKey): void;
+  tagFilters?: string[];
+  onTagFiltersChange?(tags: string[]): void;
   onFolderChanged(): void;
   onShowInFiles?(file: FileRecord): void;
 }
 
+const NO_TAG_FILTERS: string[] = [];
+
 export function Gallery({
   folder,
   displayName = folder,
+  allFolders = false,
   filterKey,
   onFilterChange,
+  tagFilters = NO_TAG_FILTERS,
+  onTagFiltersChange = () => {},
   onFolderChanged,
   onShowInFiles = () => {},
 }: GalleryProps) {
   const [sort, setSort] = useState<FileSort>("mtime");
   const [near, setNear] = useState<NearFilter | null>(null);
+  const queryFolder = allFolders ? "" : folder;
   const workspace = useFileWorkspace({
-    folder, filterKey, sort, near: near ?? undefined, onFolderChanged,
+    folder: queryFolder,
+    filterKey,
+    tags: tagFilters,
+    sort,
+    near: near ?? undefined,
+    onFolderChanged,
   });
   const { files: list, selection, actions, preset, filters } = workspace;
   const effectiveSort = preset.sort ?? sort;
@@ -133,7 +147,7 @@ export function Gallery({
     active: lightboxIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
   });
 
-  if (!folder) {
+  if (!folder && !allFolders) {
     return (
       <div className="flex items-center justify-center h-full text-ink-muted">
         Select a folder from the sidebar
@@ -146,8 +160,16 @@ export function Gallery({
       {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
           top of the first few characters of the folder name at 390px. Margin,
           not padding: the box has to move for a bounding-box test to see it. */}
-      <h2 className="text-title font-medium tracking-tight mb-4 ml-11 md:ml-0">{displayName}</h2>
-      <FilterBar active={filterKey} onChange={onFilterChange} near={near} onClearNear={() => setNear(null)} />
+      <h2 className="mb-4 ml-11 pr-32 text-title font-medium tracking-tight md:ml-0">{displayName}</h2>
+      <FilterBar
+        active={filterKey}
+        onChange={onFilterChange}
+        near={near}
+        onClearNear={() => setNear(null)}
+        folder={allFolders ? undefined : folder}
+        tags={tagFilters}
+        onTagsChange={onTagFiltersChange}
+      />
 
       <label className="mb-4 flex w-fit items-center gap-2 text-meta text-ink-muted">
         Sort
@@ -291,7 +313,7 @@ export function Gallery({
 
       {tagPrompt && (
         <TagPrompt
-          folder={folder}
+          folder={queryFolder}
           ids={tagPrompt.ids}
           mode={tagPrompt.mode}
           selectionNote={bulk.selectAllNote}
@@ -378,9 +400,9 @@ function Tile({
         e.preventDefault();
         onMenu({ x: e.clientX, y: e.clientY });
       }}
-      className={`relative aspect-square bg-raised rounded-lg overflow-hidden group cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-ground ${
+      className={`relative aspect-square bg-raised rounded-lg overflow-hidden group cursor-pointer outline-none ${
         selected ? "ring-2 ring-ink" : ""
-      } ${cursor && !selected ? "ring-2 ring-cursor" : ""}`}
+      } ${cursor ? "keyboard-cursor" : ""}`}
     >
       {thumbnail ? (
         <img

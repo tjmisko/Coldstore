@@ -62,6 +62,7 @@ export type ActionId =
   | "prev-folder"
   | "close"
   | "info"
+  | "invert-pdf"
   | "edit-description"
   | "repeat-tags"
   | "tag-undo"
@@ -91,6 +92,7 @@ export type Scope =
   | "gallery"
   | "browser"
   | "lightbox"
+  | "pdf-reader"
   | "tagging"
   | "overlay"
   | "description"
@@ -131,7 +133,7 @@ export interface Binding {
   /** Stable across renames of the written key form, so tests and the cheatsheet
    *  can refer to a binding without hard-coding its keys. */
   id: string;
-  /** The written form: "gg", "<Space>fe", "<C-d>". */
+  /** The written form: "gg", "<Space>", "<C-d>". */
   keys: string;
   sequence: string[];
   command: BindingCommand;

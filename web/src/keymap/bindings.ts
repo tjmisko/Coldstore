@@ -69,61 +69,43 @@ const SPECS: BindingSpec[] = [
   { id: "tag.repeat", keys: ".", command: { kind: "action", action: "repeat-tags" }, scopes: NAVIGABLE, title: "Repeat the last tag operation", group: GROUP_TAGS },
   { id: "tag.undo", keys: "U", command: { kind: "action", action: "tag-undo" }, scopes: NAVIGABLE, title: "Undo the last tag write", group: GROUP_TAGS },
   { id: "tag.redo", keys: "<C-r>", command: { kind: "action", action: "tag-redo" }, scopes: NAVIGABLE, title: "Redo the last undone tag write", group: GROUP_TAGS },
-  { id: "tag.mode", keys: "<Space>e", command: { kind: "action", action: "tag-mode" }, scopes: GRID, title: "Enter Tag mode", group: GROUP_TAGS },
+  { id: "tag.mode", keys: "e", command: { kind: "action", action: "tag-mode" }, scopes: GRID, title: "Enter Tag mode", group: GROUP_TAGS },
   { id: "tag.carry", keys: ",", command: { kind: "action", action: "toggle-tag-carry" }, scopes: ["tagging"], title: "Toggle tag carry-forward", group: GROUP_TAGS },
   { id: "tag.carryAccept", keys: "<CR>", command: { kind: "action", action: "accept-tag-carry" }, scopes: ["tagging"], title: "Accept carried tags", group: GROUP_TAGS, alias: true },
-  { id: "tag.quick1", keys: "<Space>1", command: { kind: "action", action: "quick-tag-1" }, scopes: NAVIGABLE, title: "Apply quick tag 1", group: GROUP_TAGS },
-  { id: "tag.quick2", keys: "<Space>2", command: { kind: "action", action: "quick-tag-2" }, scopes: NAVIGABLE, title: "Apply quick tag 2", group: GROUP_TAGS },
-  { id: "tag.quick3", keys: "<Space>3", command: { kind: "action", action: "quick-tag-3" }, scopes: NAVIGABLE, title: "Apply quick tag 3", group: GROUP_TAGS },
-  { id: "tag.quick4", keys: "<Space>4", command: { kind: "action", action: "quick-tag-4" }, scopes: NAVIGABLE, title: "Apply quick tag 4", group: GROUP_TAGS },
-  { id: "tag.quick5", keys: "<Space>5", command: { kind: "action", action: "quick-tag-5" }, scopes: NAVIGABLE, title: "Apply quick tag 5", group: GROUP_TAGS },
-  { id: "tag.quick6", keys: "<Space>6", command: { kind: "action", action: "quick-tag-6" }, scopes: NAVIGABLE, title: "Apply quick tag 6", group: GROUP_TAGS },
-  { id: "tag.quick7", keys: "<Space>7", command: { kind: "action", action: "quick-tag-7" }, scopes: NAVIGABLE, title: "Apply quick tag 7", group: GROUP_TAGS },
-  { id: "tag.quick8", keys: "<Space>8", command: { kind: "action", action: "quick-tag-8" }, scopes: NAVIGABLE, title: "Apply quick tag 8", group: GROUP_TAGS },
-  { id: "tag.quick9", keys: "<Space>9", command: { kind: "action", action: "quick-tag-9" }, scopes: NAVIGABLE, title: "Apply quick tag 9", group: GROUP_TAGS },
 
   // -- selection ----------------------------------------------------------
-  { id: "select.toggle", keys: "x", command: { kind: "action", action: "toggle-select" }, scopes: GRID, title: "Select or deselect this file", group: GROUP_SELECT },
+  { id: "select.toggle", keys: "<Space>", command: { kind: "action", action: "toggle-select" }, scopes: NAVIGABLE, title: "Select or deselect this file", group: GROUP_SELECT },
+  { id: "select.toggle.x", keys: "x", command: { kind: "action", action: "toggle-select" }, scopes: GRID, title: "Select or deselect this file", group: GROUP_SELECT, alias: true },
   { id: "select.visual", keys: "v", command: { kind: "visual", mode: "visual" }, scopes: GRID, title: "Visual select; motions extend it", group: GROUP_SELECT },
   { id: "select.visualLine", keys: "V", command: { kind: "visual", mode: "visual-line" }, scopes: GRID, title: "Visual select by whole rows (ggVG selects everything)", group: GROUP_SELECT },
   { id: "select.allLoaded", keys: "<C-a>", command: { kind: "action", action: "select-all-loaded" }, scopes: GRID, title: "Select every file on screen", group: GROUP_SELECT },
   { id: "select.allLoaded.cmd", keys: "<D-a>", command: { kind: "action", action: "select-all-loaded" }, scopes: GRID, title: "Select every file on screen", group: GROUP_SELECT, alias: true },
-  { id: "select.allFolder", keys: "<Space>a", command: { kind: "action", action: "select-all-folder" }, scopes: GRID, title: "Select every file in the folder that matches the filter", group: GROUP_SELECT },
-  { id: "select.clear", keys: "<Space>c", command: { kind: "action", action: "clear-selection" }, scopes: GRID, title: "Clear the selection", group: GROUP_SELECT },
 
   // -- opening ------------------------------------------------------------
   { id: "file.open", keys: "<CR>", command: { kind: "action", action: "open" }, scopes: GRID, title: "Open in the lightbox", group: GROUP_FILES },
   { id: "file.open.o", keys: "o", command: { kind: "action", action: "open" }, scopes: GRID, title: "Open in the lightbox", group: GROUP_FILES, alias: true },
   { id: "file.menu", keys: "<Menu>", command: { kind: "action", action: "context-menu" }, scopes: GRID, title: "Context menu for this file", group: GROUP_FILES, alias: true },
-  { id: "file.menu.leader", keys: "<Space>m", command: { kind: "action", action: "context-menu" }, scopes: GRID, title: "Context menu for this file", group: GROUP_FILES },
+  { id: "file.menu.shiftF10", keys: "<S-F10>", command: { kind: "action", action: "context-menu" }, scopes: GRID, title: "Context menu for this file", group: GROUP_FILES, alias: true },
   { id: "file.description", keys: "i", command: { kind: "action", action: "edit-description" }, scopes: NAVIGABLE, title: "Edit description", group: GROUP_FILES },
 
   // -- lightbox -----------------------------------------------------------
   { id: "lightbox.close", keys: "q", command: { kind: "action", action: "close" }, scopes: ["lightbox"], title: "Close the lightbox", group: GROUP_OVERLAY },
-  { id: "lightbox.info", keys: "<Space>i", command: { kind: "action", action: "info" }, scopes: ["lightbox"], title: "Toggle the metadata panel", group: GROUP_OVERLAY },
+  { id: "pdf.invert", keys: "I", command: { kind: "action", action: "invert-pdf" }, scopes: ["pdf-reader"], title: "Invert PDF colours", group: GROUP_OVERLAY },
 
   // -- conflicts ----------------------------------------------------------
   { id: "conflict.device", keys: "cd", command: { kind: "action", action: "resolve-device" }, scopes: NAVIGABLE, title: "Resolve: keep the copy on your device", group: GROUP_CONFLICT },
   { id: "conflict.archive", keys: "ca", command: { kind: "action", action: "resolve-archive" }, scopes: NAVIGABLE, title: "Resolve: keep the archived copy", group: GROUP_CONFLICT },
 
   // -- navigation ---------------------------------------------------------
-  { id: "nav.gallery", keys: "<Space>g", command: { kind: "action", action: "view-gallery" }, scopes: ["global"], title: "Gallery view", group: GROUP_NAV },
-  { id: "nav.files", keys: "<Space>b", command: { kind: "action", action: "view-files" }, scopes: ["global"], title: "File browser view", group: GROUP_NAV },
-  { id: "nav.settings", keys: "<Space>s", command: { kind: "action", action: "view-settings" }, scopes: ["global"], title: "Settings view", group: GROUP_NAV },
   { id: "nav.nextView", keys: "gt", command: { kind: "action", action: "next-view" }, scopes: ["global"], title: "Next view", group: GROUP_NAV },
   { id: "nav.prevView", keys: "gT", command: { kind: "action", action: "prev-view" }, scopes: ["global"], title: "Previous view", group: GROUP_NAV },
   { id: "nav.nextFolder", keys: "]f", command: { kind: "action", action: "next-folder" }, scopes: ["global"], title: "Next folder", group: GROUP_NAV },
   { id: "nav.prevFolder", keys: "[f", command: { kind: "action", action: "prev-folder" }, scopes: ["global"], title: "Previous folder", group: GROUP_NAV },
-  { id: "nav.folderPalette", keys: "<Space>o", command: { kind: "action", action: "palette-folder" }, scopes: ["global"], title: "Switch folder", group: GROUP_NAV },
-  { id: "nav.filterPalette", keys: "<Space>t", command: { kind: "action", action: "palette-filter" }, scopes: ["global"], title: "Switch filter", group: GROUP_NAV },
-  { id: "nav.rescan", keys: "<Space>R", command: { kind: "action", action: "rescan" }, scopes: ["global"], title: "Rescan this folder", group: GROUP_NAV },
 
   // -- overlays -----------------------------------------------------------
   { id: "overlay.palette", keys: ":", command: { kind: "action", action: "palette" }, scopes: ["global"], title: "Command palette", group: GROUP_OVERLAY },
   { id: "overlay.finder", keys: "<F10>", command: { kind: "action", action: "finder" }, scopes: ["global"], title: "Fuzzy file finder", group: GROUP_OVERLAY },
-  { id: "overlay.finder.leader", keys: "<Space>fe", command: { kind: "action", action: "finder" }, scopes: ["global"], title: "Fuzzy file finder", group: GROUP_OVERLAY },
   { id: "overlay.help", keys: "?", command: { kind: "action", action: "cheatsheet" }, scopes: ["global"], title: "This cheatsheet", group: GROUP_OVERLAY },
-  { id: "overlay.help.leader", keys: "<Space>?", command: { kind: "action", action: "cheatsheet" }, scopes: ["global"], title: "This cheatsheet", group: GROUP_OVERLAY, alias: true },
 
   // Escape is intercepted by the machine before the trie -- a cancel that can
   // itself get stuck pending is not a cancel -- but it lives in the table so

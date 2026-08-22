@@ -59,12 +59,11 @@ test("selects a visual range and keeps it after Escape", async ({ page }) => {
   await expect(page.locator('[data-selected="true"]').first()).toBeVisible();
 });
 
-test("clears the selection on leader-c", async ({ page }) => {
-  await type(page, "x");
+test("toggles selection directly with Space", async ({ page }) => {
+  await page.keyboard.press("Space");
   await expect(page.locator("[data-selection-count]")).toHaveText("1 selected");
 
   await page.keyboard.press("Space");
-  await page.keyboard.press("c");
 
   await expect(page.locator("[data-selection-bar]")).toBeHidden();
 });
@@ -139,8 +138,7 @@ test("opens a context menu on right-click and scopes it to the selection", async
 });
 
 test("reaches the context menu from the keyboard alone", async ({ page }) => {
-  await page.keyboard.press("Space");
-  await page.keyboard.press("m");
+  await page.keyboard.press("Shift+F10");
 
   await expect(page.getByRole("menu")).toBeVisible();
 });

@@ -15,7 +15,7 @@ export function Cheatsheet({ onClose }: { onClose(): void }) {
           <h2 className="text-base font-semibold">Keyboard</h2>
           <p className="text-meta text-ink-faint">
             Counts and operators compose: <code>3j</code>, <code>d3j</code>, <code>ggVG</code>.
-            Leader is <code>Space</code>.
+            <code>Space</code> toggles selection.
           </p>
         </div>
 

@@ -22,12 +22,12 @@ export function PreviewSurface({ file, preview }: PreviewSurfaceProps) {
   switch (preview.kind) {
     case "image":
       return (
-        <figure className="flex flex-col items-center gap-2 max-w-full">
+        <figure className="flex max-h-full max-w-full min-h-0 flex-col items-center gap-2">
           <img
             src={preview.src}
             alt={file.filename}
             data-preview-image
-            className="max-w-full max-h-[76vh] object-contain"
+            className="min-h-0 max-h-full max-w-full object-contain"
           />
           {preview.degraded && (
             <figcaption
@@ -52,7 +52,7 @@ export function PreviewSurface({ file, preview }: PreviewSurfaceProps) {
           preload="metadata"
           playsInline
           data-preview-video
-          className="max-w-full max-h-[76vh]"
+          className="max-h-full max-w-full"
         >
           Your browser cannot play this video.
         </video>

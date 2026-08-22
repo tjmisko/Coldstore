@@ -11,6 +11,10 @@ cannot express `d3j`, because by the time `d` is dispatched the handler has no w
 to say "I am not finished, and the next few keys belong to me". Everything below
 follows from choosing a machine over a table.
 
+Space is deliberately not a leader key. It dispatches selection immediately in every
+navigable file view; `x` remains a gallery alias. Commands that used to live beneath a
+Space prefix are available through direct bindings, the command palette, or menus.
+
 ## 0. What the app had before this
 
 Three `window` keydown listeners, no registry, no shared state:
@@ -102,7 +106,7 @@ interface MachineState {
   count: string;           // digits typed before an operator or a motion
   operator: OperatorId | null;
   operatorCount: string;   // digits typed after the operator
-  pending: string[];       // a partially matched sequence: ["g"], ["<Space>","f"]
+  pending: string[];       // a partially matched sequence: ["g"]
 }
 ```
 
@@ -129,7 +133,7 @@ an easy way to make the interpreter allocate a span the size of the catalog.
 
 ### 2.2 Pending sequences and the timeout
 
-The registry is a trie over token arrays, so `gg`, `<Space>fe` and `zz` cost
+The registry is a trie over token arrays, so `gg` and `zz` cost
 nothing special. On each token:
 
 - **no binding starts with `pending + token`** -> the sequence is dead. Reset to
@@ -236,8 +240,8 @@ having when the unit is a file, and an exclusive `d3j` that archives three of th
 four files the eye counted is a bug report waiting to happen.
 
 When nothing is selected, a bare operator with no motion is invalid and the
-machine cancels. When a selection exists, `:archive`, `<leader>` bindings and the
-context menu all target `{kind:"selection"}`.
+machine cancels. When a selection exists, palette commands and the context menu target
+`{kind:"selection"}`.
 
 ## 5. Visual mode
 
@@ -253,8 +257,7 @@ Two departures from vim, both deliberate:
   would make visual mode useless for "these fifty and also that one".
 - **Leaving visual commits the span.** In vim, `<Esc>` from visual leaves nothing
   selected. Here the point of `ggVG` is to end up with everything selected, so
-  `<Esc>` keeps what was highlighted. `<leader>c` and `:clear` are how a selection
-  goes away.
+  `<Esc>` keeps what was highlighted. `:clear` is how a selection goes away.
 
 ## 6. Scopes
 
@@ -368,7 +371,7 @@ Commands that act on files use the selection when there is one and the cursor
 item when there is not. That rule is stated in the palette's own hint line rather
 than being folklore.
 
-## 12. The finder (`F10`, `<leader>fe`)
+## 12. The finder (`F10`)
 
 Server-side `q` now performs literal substring matching across filename, relative path,
 description and tags. It deliberately has no relevance ranking or FTS; fuzzy ranking remains
@@ -413,5 +416,6 @@ The grammar tests drive `step` with token arrays, which is the only way `2d3j`,
 - **Registers, marks and macros.** No use case here yet, and each one is a state field that
   every other feature then has to respect. `.` is implemented narrowly for replaying the
   last resolved tag operation; it does not create a generic command-repeat register.
-- **Making Space both leader and "toggle selection"** (the tasklist's D3 wanted
-  both). It cannot be both. Leader won because the owner named it; `x` toggles.
+- **Using Space as a leader.** It prevented the conventional direct selection action and
+  made ordinary Space presses wait for a second key. The leader bindings were retired;
+  Space now toggles selection immediately and `x` remains an alias in the gallery.

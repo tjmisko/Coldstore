@@ -183,22 +183,14 @@ describe("Gallery", () => {
     expect(screen.queryByLabelText("Tags to add")).toBeNull();
   });
 
-  it("applies a folder quick slot immediately without stealing bare digit counts", async () => {
-    localStorage.setItem("coldstore.quick-tags.CameraRoll", JSON.stringify(["Favorite", "", "", "", "", "", "", "", ""]));
+  it("uses Space directly for selection without turning the next key into a leader command", async () => {
     renderGallery();
     await screen.findByLabelText("one.jpg");
-    stub!.route({
-      method: "POST",
-      url: "/api/v1/files/tags",
-      body: { updated: 1, created: [], undo: { changes: [{ ids: [1], remove: ["Favorite"] }] } },
-    });
 
     fireEvent.keyDown(window, { key: " ", code: "Space" });
-    fireEvent.keyDown(window, { key: "1" });
-
-    await waitFor(() => expect(stub!.calls.find((call) => call.method === "POST" && call.url === "/api/v1/files/tags")?.body)
-      .toEqual({ ids: [1], add: ["Favorite"], remove: [] }));
-    expect(screen.queryByLabelText("Tags to add")).toBeNull();
+    expect(tile(1)).toHaveAttribute("data-selected", "true");
+    fireEvent.keyDown(window, { key: "l" });
+    await waitFor(() => expect(tile(2)).toHaveAttribute("data-cursor", "true"));
   });
 
   it("makes selection win for the tag operator and exposes non-exclusive Tag mode", async () => {
@@ -215,7 +207,6 @@ describe("Gallery", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByText("2 selected")).toBeNull());
-    fireEvent.keyDown(window, { key: " ", code: "Space" });
     fireEvent.keyDown(window, { key: "e" });
     const mode = await screen.findByRole("dialog", { name: "Tag mode for two.jpg" });
     expect(mode).toHaveAttribute("data-tag-scope", "on");
@@ -238,7 +229,6 @@ describe("Gallery", () => {
       body: { updated: 1, created: [], undo: { changes: [{ ids: [1], remove: ["Favorite"] }] } },
     });
 
-    fireEvent.keyDown(window, { key: " ", code: "Space" });
     fireEvent.keyDown(window, { key: "e" });
     await screen.findByRole("dialog", { name: "Tag mode for one.jpg" });
     fireEvent.keyDown(window, { key: "," });
@@ -264,42 +254,9 @@ describe("Gallery", () => {
     expect(document.querySelector("[data-tag-mode-status]")).not.toHaveTextContent("Enter repeats");
   });
 
-  it("attributes a delayed quick-tag response to the file it left and disarms carry on an unbound key", async () => {
-    localStorage.setItem("coldstore.quick-tags.CameraRoll", JSON.stringify(["Reviewed", "", "", "", "", "", "", "", ""]));
-    let release: (() => void) | undefined;
-    const delayed = new Promise<void>((resolve) => { release = resolve; });
-    renderGallery();
-    await screen.findByLabelText("one.jpg");
-    stub!.route({
-      method: "POST",
-      url: "/api/v1/files/tags",
-      delay: delayed,
-      body: { updated: 1, created: [], undo: { changes: [{ ids: [1], remove: ["Reviewed"] }] } },
-    });
-
-    fireEvent.keyDown(window, { key: " ", code: "Space" });
-    fireEvent.keyDown(window, { key: "e" });
-    await screen.findByRole("dialog", { name: "Tag mode for one.jpg" });
-    fireEvent.keyDown(window, { key: "," });
-    fireEvent.keyDown(window, { key: " ", code: "Space" });
-    fireEvent.keyDown(window, { key: "1" });
-    await waitFor(() => expect(stub!.calls.filter((call) => call.method === "POST")).toHaveLength(1));
-    fireEvent.keyDown(window, { key: "j" });
-    await screen.findByRole("dialog", { name: "Tag mode for two.jpg" });
-
-    release?.();
-    expect(await screen.findByText(/Enter repeats tag Reviewed/)).toBeInTheDocument();
-    fireEvent.keyDown(window, { key: "z" });
-    await waitFor(() => expect(document.querySelector("[data-tag-mode-status]")).not.toHaveTextContent("Enter repeats"));
-    fireEvent.keyDown(window, { key: "Enter" });
-    await Promise.resolve();
-    expect(stub!.calls.filter((call) => call.method === "POST")).toHaveLength(1);
-  });
-
   it("uses i for description editing inside Tag mode while j remains caption text", async () => {
     renderGallery();
     await screen.findByLabelText("one.jpg");
-    fireEvent.keyDown(window, { key: " ", code: "Space" });
     fireEvent.keyDown(window, { key: "e" });
     await screen.findByRole("dialog", { name: "Tag mode for one.jpg" });
 

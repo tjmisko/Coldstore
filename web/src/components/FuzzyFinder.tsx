@@ -27,7 +27,7 @@ function fieldsOf(file: FileRecord): FileFields {
   };
 }
 
-/** F10 and <leader>fe.
+/** F10 opens the finder.
  *
  *  Searches filenames, paths, folder, extension and status. Ranking is entirely
  *  client-side because the server's `q` is `filename LIKE '%q%'` and has no

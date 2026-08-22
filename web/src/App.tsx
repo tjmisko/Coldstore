@@ -9,7 +9,7 @@ import { FilePreviewDialog } from "./components/FilePreviewDialog";
 import { FuzzyFinder } from "./components/FuzzyFinder";
 import { Gallery } from "./components/Gallery";
 import { KeymapProvider } from "./components/KeymapProvider";
-import { StatusBar } from "./components/StatusBar";
+import { FolderNavItem, StatusBar } from "./components/StatusBar";
 import { ToastProvider } from "./components/ToastProvider";
 import { useDocumentTitle } from "./hooks/useDocumentTitle";
 import { useKeymapLayer } from "./hooks/useKeymapLayer";
@@ -28,6 +28,43 @@ import type { FileReveal } from "./types/navigation";
 type View = "gallery" | "files" | "config";
 
 const VIEWS: View[] = ["gallery", "files", "config"];
+const WORKSPACE_STORAGE_KEY = "coldstore.workspace.v1";
+
+interface SavedWorkspace {
+  folder: string;
+  allFolders: boolean;
+  view: View;
+  filterKey: FilterKey;
+  tags: string[];
+}
+
+const DEFAULT_WORKSPACE: SavedWorkspace = {
+  folder: "",
+  allFolders: false,
+  view: "gallery",
+  filterKey: "all",
+  tags: [],
+};
+
+function readWorkspace(): SavedWorkspace {
+  if (typeof localStorage === "undefined") return DEFAULT_WORKSPACE;
+  try {
+    const value = JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? "null") as Partial<SavedWorkspace> | null;
+    return {
+      folder: typeof value?.folder === "string" ? value.folder : "",
+      allFolders: value?.allFolders === true,
+      view: VIEWS.includes(value?.view as View) ? (value?.view as View) : "gallery",
+      filterKey: FILTER_PRESETS.some((preset) => preset.key === value?.filterKey)
+        ? (value?.filterKey as FilterKey)
+        : "all",
+      tags: Array.isArray(value?.tags)
+        ? value.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim() !== "")
+        : [],
+    };
+  } catch {
+    return DEFAULT_WORKSPACE;
+  }
+}
 
 type OverlayState =
   | { kind: "palette"; initial: string }
@@ -55,14 +92,19 @@ function Shell() {
   // Memoised because it is a useCallback dependency: a fresh [] every render
   // recreates stepFolder, which re-registers the keymap layer forever.
   const folders = useMemo(() => status?.folders ?? [], [status]);
-  const [selectedFolder, setSelectedFolder] = useState<string>("");
-  const [view, setView] = useState<View>("gallery");
-  const [filterKey, setFilterKey] = useState<FilterKey>("all");
+  const [initialWorkspace] = useState(readWorkspace);
+  const [selectedFolder, setSelectedFolder] = useState<string>(initialWorkspace.folder);
+  const [allFolders, setAllFolders] = useState(initialWorkspace.allFolders);
+  const [view, setView] = useState<View>(initialWorkspace.view);
+  const [filterKey, setFilterKey] = useState<FilterKey>(initialWorkspace.filterKey);
+  const [tagFilters, setTagFilters] = useState<string[]>(initialWorkspace.tags);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
   const [reveal, setReveal] = useState<FileReveal | null>(null);
   const selectedFolderStatus = folders.find((folder) => folder.label === selectedFolder);
-  const selectedDisplayName = selectedFolderStatus?.display_name || selectedFolder;
+  const selectedDisplayName = allFolders
+    ? "All folders"
+    : selectedFolderStatus?.display_name || selectedFolder;
 
   const keymap = useKeymap();
   const toast = useToast();
@@ -74,9 +116,10 @@ function Shell() {
   // before painting, and there is no cascading render.
   // The `label !== ""` guard is what makes it terminate: a folder with an
   // empty label would leave the condition true forever.
-  if (selectedFolder === "" && folders.length > 0 && folders[0].label !== "") {
-    setSelectedFolder(folders[0].label);
-    setView(isImageFolder(folders[0].label) ? "gallery" : "files");
+  if (!allFolders && folders.length > 0 && !folders.some((folder) => folder.label === selectedFolder)) {
+    const first = folders[0];
+    setSelectedFolder(first.label);
+    if (selectedFolder === "") setView(isImageFolder(first.label) ? "gallery" : "files");
   }
 
   useDocumentTitle(view === "config" ? "Settings" : selectedDisplayName);
@@ -96,10 +139,29 @@ function Shell() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    if ((!selectedFolder && !allFolders) || typeof localStorage === "undefined") return;
+    try {
+      localStorage.setItem(
+        WORKSPACE_STORAGE_KEY,
+        JSON.stringify({ folder: selectedFolder, allFolders, view, filterKey, tags: tagFilters }),
+      );
+    } catch {
+      // Browsing must keep working when private-mode storage is unavailable.
+    }
+  }, [allFolders, filterKey, selectedFolder, tagFilters, view]);
+
   const selectFolder = useCallback((label: string, filter: FilterKey = "all") => {
     setSelectedFolder(label);
+    setAllFolders(false);
     setFilterKey(filter);
+    if (filter !== "all") setTagFilters([]);
     setView(isImageFolder(label) ? "gallery" : "files");
+  }, []);
+
+  const selectAllFolders = useCallback(() => {
+    setAllFolders(true);
+    setView((current) => (current === "config" ? "files" : current));
   }, []);
 
   const onFolderChanged = useCallback(() => {
@@ -109,11 +171,11 @@ function Shell() {
   const stepFolder = useCallback(
     (delta: number) => {
       if (folders.length === 0) return;
-      const at = folders.findIndex((folder) => folder.label === selectedFolder);
+      const at = allFolders ? -1 : folders.findIndex((folder) => folder.label === selectedFolder);
       const next = folders[(Math.max(0, at) + delta + folders.length) % folders.length];
       selectFolder(next.label);
     },
-    [folders, selectedFolder, selectFolder],
+    [allFolders, folders, selectedFolder, selectFolder],
   );
 
   const stepView = useCallback((delta: number) => {
@@ -122,12 +184,12 @@ function Shell() {
 
   const rescan = useCallback(async () => {
     try {
-      await api.createJob({ action: "scan", folder: selectedFolder });
-      toast.show("success", `Rescanning ${selectedFolder || "every folder"}`);
+      await api.createJob({ action: "scan", ...(allFolders ? {} : { folder: selectedFolder }) });
+      toast.show("success", `Rescanning ${allFolders ? "every folder" : selectedFolder}`);
     } catch (err) {
       toast.show("error", errorMessage(err));
     }
-  }, [selectedFolder, toast]);
+  }, [allFolders, selectedFolder, toast]);
 
   /** The global layer: everything that is about the app rather than about a
    *  file. File commands fall through to whichever grid is mounted. */
@@ -277,7 +339,9 @@ function Shell() {
   const showInFiles = useCallback(
     (file: FileRecord) => {
       setSelectedFolder(file.folder_label);
+      setAllFolders(false);
       setFilterKey("all");
+      setTagFilters([]);
       setView("files");
       setReveal((current) => ({ file, token: (current?.token ?? 0) + 1 }));
       setOverlay(null);
@@ -308,64 +372,45 @@ function Shell() {
           <h1 className="text-lg font-semibold tracking-tight">Coldstore</h1>
         </div>
 
-        {/* Navigation keeps its natural height and the status panel below
-            takes the slack, so the folder list is never clipped mid-item by a
-            wedge banner appearing underneath it. The cap is for an install
-            with more folders than fit; then this scrolls too. */}
-        <nav className="shrink-0 max-h-[45%] overflow-y-auto p-2 space-y-1">
+        <nav className="min-h-0 flex-1 overflow-y-auto p-2 space-y-1">
           <p className="text-micro uppercase tracking-wider text-ink-faint px-2 pt-2 pb-1.5">Folders</p>
+          <button
+            type="button"
+            data-folder-nav="all"
+            aria-current={allFolders ? "page" : undefined}
+            onClick={() => {
+              selectAllFolders();
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+            className={`w-full rounded-lg px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
+              allFolders ? "bg-raised-hover text-ink" : "text-ink-muted hover:bg-raised hover:text-ink"
+            }`}
+          >
+            <span className="font-medium">All folders</span>
+            <span className="mt-0.5 block text-meta text-ink-faint">
+              Filter and compare tags across the catalog
+            </span>
+          </button>
           {folders.map((folder) => (
-            <button
+            <FolderNavItem
               key={folder.label}
-              data-folder-nav={folder.label}
-              onClick={() => {
+              folder={folder}
+              selected={!allFolders && selectedFolder === folder.label}
+              onSelect={() => {
                 selectFolder(folder.label);
                 if (window.innerWidth < 768) setSidebarOpen(false);
               }}
-              className={`w-full text-left px-3 py-2 rounded-md text-base transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
-                selectedFolder === folder.label
-                  ? "bg-raised-hover text-ink"
-                  : "text-ink-muted hover:bg-raised hover:text-ink"
-              }`}
-            >
-              <span className={folder.enabled && folder.present_in_toml ? "" : "opacity-60"}>
-                {folder.display_name || folder.label}
-              </span>
-              {!folder.enabled && <span className="ml-1 text-meta text-ink-faint">disabled</span>}
-              {!folder.present_in_toml && (
-                <span className="ml-1 text-meta text-ink-faint">not in coldstore.toml</span>
-              )}
-            </button>
+              onReview={() => selectFolder(folder.label, "pinned-auto")}
+            />
           ))}
           {folders.length === 0 && !error && (
             <p className="px-3 py-2 text-base text-ink-faint">No folders yet.</p>
           )}
-
-          <p className="text-micro uppercase tracking-wider text-ink-faint px-2 pt-4 pb-1.5">Views</p>
-          {VIEWS.map((option) => (
-            <button
-              key={option}
-              data-view-nav={option}
-              onClick={() => {
-                setView(option);
-                if (window.innerWidth < 768) setSidebarOpen(false);
-              }}
-              className={`w-full text-left px-3 py-2 rounded-md text-base capitalize transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
-                view === option
-                  ? "bg-raised-hover text-ink"
-                  : "text-ink-muted hover:bg-raised hover:text-ink"
-              }`}
-            >
-              {view === option && <span className="mr-1.5">&#10003;</span>}
-              {option === "config" ? "Settings" : option}
-            </button>
-          ))}
         </nav>
 
         <StatusBar
           status={status}
           error={error}
-          onReview={(label, filter) => selectFolder(label, filter)}
           onRefresh={refetch}
         />
       </aside>
@@ -379,27 +424,34 @@ function Shell() {
       )}
 
       <main className="flex-1 overflow-y-auto flex flex-col">
+        <ViewToggle view={view} onChange={setView} />
         {error && <ErrorBanner message={error} status={errorStatus} />}
 
         <div className="flex-1">
           {view === "gallery" && (
             <Gallery
-              key={`gallery-${selectedFolder}`}
+              key={`gallery-${allFolders ? "all" : selectedFolder}`}
               folder={selectedFolder}
               displayName={selectedDisplayName}
+              allFolders={allFolders}
               filterKey={filterKey}
               onFilterChange={setFilterKey}
+              tagFilters={tagFilters}
+              onTagFiltersChange={setTagFilters}
               onFolderChanged={onFolderChanged}
               onShowInFiles={showInFiles}
             />
           )}
           {view === "files" && (
             <FileBrowser
-              key={`files-${selectedFolder}`}
+              key={`files-${allFolders ? "all" : selectedFolder}`}
               folder={selectedFolder}
               displayName={selectedDisplayName}
+              allFolders={allFolders}
               filterKey={filterKey}
               onFilterChange={setFilterKey}
+              tagFilters={tagFilters}
+              onTagFiltersChange={setTagFilters}
               onFolderChanged={onFolderChanged}
               reveal={reveal}
               onShowInFiles={showInFiles}
@@ -409,7 +461,10 @@ function Shell() {
             <ConfigPanel
               status={status}
               selectedFolder={selectedFolder}
-              onSelectFolder={setSelectedFolder}
+              onSelectFolder={(label) => {
+                setSelectedFolder(label);
+                setAllFolders(false);
+              }}
               onChanged={onFolderChanged}
             />
           )}
@@ -432,7 +487,7 @@ function Shell() {
       {overlay?.kind === "finder" && (
         <FuzzyFinder
           initialQuery={overlay.query}
-          filters={{ folder: selectedFolder }}
+          filters={allFolders ? {} : { folder: selectedFolder }}
           onClose={() => closeIf("finder")}
           onOpen={(file) => setOverlay({ kind: "preview", file })}
           onShowInFiles={showInFiles}
@@ -445,5 +500,69 @@ function Shell() {
 
       {overlay?.kind === "cheatsheet" && <Cheatsheet onClose={() => closeIf("cheatsheet")} />}
     </div>
+  );
+}
+
+function ViewToggle({ view, onChange }: { view: View; onChange(view: View): void }) {
+  const labels: Record<View, string> = {
+    gallery: "Gallery",
+    files: "Files",
+    config: "Settings",
+  };
+
+  return (
+    <nav
+      aria-label="Views"
+      style={{ zIndex: Z.viewToggle }}
+      className="fixed right-3 top-3 flex rounded-lg border border-line-strong bg-surface/95 p-1 shadow-lg backdrop-blur-sm"
+    >
+      {VIEWS.map((option) => (
+        <button
+          key={option}
+          type="button"
+          data-view-nav={option}
+          aria-label={`${labels[option]} view`}
+          aria-current={view === option ? "page" : undefined}
+          title={labels[option]}
+          onClick={() => onChange(option)}
+          className={`rounded-md p-2 transition-[background-color,color,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
+            view === option
+              ? "bg-raised-hover text-ink"
+              : "text-ink-faint hover:bg-raised hover:text-ink"
+          }`}
+        >
+          <ViewIcon view={option} />
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function ViewIcon({ view }: { view: View }) {
+  if (view === "gallery") {
+    return (
+      <svg className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+      </svg>
+    );
+  }
+  if (view === "files") {
+    return (
+      <svg className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+        <path strokeLinecap="round" d="M8 6h13M8 12h13M8 18h13" />
+        <circle cx="4" cy="6" r="1" fill="currentColor" stroke="none" />
+        <circle cx="4" cy="12" r="1" fill="currentColor" stroke="none" />
+        <circle cx="4" cy="18" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+  return (
+    <svg className="size-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.4 15a1.7 1.7 0 00.34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0015 19.4a1.7 1.7 0 00-1 .6 1.7 1.7 0 00-.4 1.1V21h-4v-.09A1.7 1.7 0 008.6 19.4a1.7 1.7 0 00-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 004.6 15a1.7 1.7 0 00-.6-1 1.7 1.7 0 00-1.1-.4H3v-4h.09A1.7 1.7 0 004.6 8.6a1.7 1.7 0 00-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 009 4.6a1.7 1.7 0 001-.6 1.7 1.7 0 00.4-1.1V3h4v.09A1.7 1.7 0 0015.4 4.6a1.7 1.7 0 001.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0019.4 9c.12.38.33.72.6 1 .3.27.68.4 1.1.4H21v4h-.09A1.7 1.7 0 0019.4 15z" />
+    </svg>
   );
 }

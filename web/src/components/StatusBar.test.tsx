@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { aFolderStatus, aStatus } from "../test/fixtures";
 import { renderWithToasts, stubFetch } from "../test/harness";
-import { StatusBar } from "./StatusBar";
+import { FolderNavItem, StatusBar } from "./StatusBar";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
 
@@ -30,9 +30,7 @@ describe("StatusBar", () => {
       wedged: true,
     });
 
-    renderWithToasts(
-      <StatusBar status={aStatus({ folders: [folder] })} error={null} onReview={() => {}} onRefresh={() => {}} />,
-    );
+    renderWithToasts(<FolderNavItem folder={folder} selected onSelect={() => {}} onReview={() => {}} />);
 
     const meter = await screen.findByRole("meter", { name: /Backups budget/ });
     const total = Number(meter.dataset.totalPct);
@@ -63,7 +61,10 @@ describe("StatusBar", () => {
     });
 
     renderWithToasts(
-      <StatusBar status={aStatus({ folders: [atBudget, over] })} error={null} onReview={() => {}} onRefresh={() => {}} />,
+      <div>
+        <FolderNavItem folder={atBudget} selected={false} onSelect={() => {}} onReview={() => {}} />
+        <FolderNavItem folder={over} selected={false} onSelect={() => {}} onReview={() => {}} />
+      </div>,
     );
 
     // Both clamp to 100% width, so only the overflow cap tells them apart.
@@ -85,9 +86,7 @@ describe("StatusBar", () => {
       wedged: true,
     });
 
-    renderWithToasts(
-      <StatusBar status={aStatus({ folders: [folder] })} error={null} onReview={onReview} onRefresh={() => {}} />,
-    );
+    renderWithToasts(<FolderNavItem folder={folder} selected onSelect={() => {}} onReview={onReview} />);
 
     const banner = await screen.findByRole("alert");
     expect(banner).toHaveTextContent("48 kB pinned exceeds 20 kB budget");
@@ -95,13 +94,13 @@ describe("StatusBar", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /Review auto-pinned files/ }));
     // A remedy the owner cannot act on in one click is not a remedy.
-    expect(onReview).toHaveBeenCalledWith("Backups", "pinned-auto");
+    expect(onReview).toHaveBeenCalledOnce();
   });
 
   it("should render an error line instead of vanishing when status cannot be read", async () => {
     stub = noEvents();
     renderWithToasts(
-      <StatusBar status={null} error="401 Unauthorized" onReview={() => {}} onRefresh={() => {}} />,
+      <StatusBar status={null} error="401 Unauthorized" onRefresh={() => {}} />,
     );
 
     // `if (!status) return null` made a rejected password and an empty install
@@ -112,32 +111,20 @@ describe("StatusBar", () => {
   it("should mark disabled and orphaned folders rather than hiding them", async () => {
     stub = noEvents();
     renderWithToasts(
-      <StatusBar
-        status={aStatus({
-          folders: [
-            aFolderStatus({ label: "Documents", enabled: false }),
-            aFolderStatus({ label: "OldPhone", present_in_toml: false }),
-          ],
-        })}
-        error={null}
-        onReview={() => {}}
-        onRefresh={() => {}}
-      />,
+      <div>
+        <FolderNavItem folder={aFolderStatus({ label: "Documents", enabled: false })} selected={false} onSelect={() => {}} onReview={() => {}} />
+        <FolderNavItem folder={aFolderStatus({ label: "OldPhone", present_in_toml: false })} selected={false} onSelect={() => {}} onReview={() => {}} />
+      </div>,
     );
 
-    expect(await screen.findByText("(disabled)")).toBeInTheDocument();
-    expect(screen.getByText("(not in coldstore.toml)")).toBeInTheDocument();
+    expect(await screen.findByText("disabled")).toBeInTheDocument();
+    expect(screen.getByText("not in coldstore.toml")).toBeInTheDocument();
   });
 
   it("should warn about a folder Syncthing does not let coldstore delete from", async () => {
     stub = noEvents();
     renderWithToasts(
-      <StatusBar
-        status={aStatus({ folders: [aFolderStatus({ syncthing_type: "receiveonly" })] })}
-        error={null}
-        onReview={() => {}}
-        onRefresh={() => {}}
-      />,
+      <FolderNavItem folder={aFolderStatus({ syncthing_type: "receiveonly" })} selected onSelect={() => {}} onReview={() => {}} />,
     );
 
     expect(await screen.findByText(/receiveonly Syncthing folder/)).toBeInTheDocument();
@@ -152,7 +139,7 @@ describe("StatusBar", () => {
     const onRefresh = vi.fn();
 
     renderWithToasts(
-      <StatusBar status={aStatus()} error={null} onReview={() => {}} onRefresh={onRefresh} />,
+      <StatusBar status={aStatus()} error={null} onRefresh={onRefresh} />,
     );
 
     await userEvent.click(await screen.findByRole("button", { name: "rescan" }));
@@ -182,7 +169,7 @@ describe("StatusBar", () => {
     ]);
 
     renderWithToasts(
-      <StatusBar status={aStatus()} error={null} onReview={() => {}} onRefresh={() => {}} />,
+      <StatusBar status={aStatus()} error={null} onRefresh={() => {}} />,
     );
 
     const strip = await screen.findByText(/2483 files/);

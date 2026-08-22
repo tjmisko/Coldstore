@@ -117,6 +117,28 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* The keyboard cursor sits just outside the item instead of crushing its
+ * content. The short settle makes a moved cursor easy to reacquire without
+ * turning every j/k press into a flourish. */
+.keyboard-cursor {
+  border-radius: 0.7rem;
+  outline: 2px solid var(--color-cursor);
+  outline-offset: 4px;
+  transition: outline-color 140ms ease, outline-offset 140ms ease, background-color 140ms ease;
+  animation: keyboard-cursor-in 160ms ease-out;
+}
+
+@keyframes keyboard-cursor-in {
+  from {
+    outline-color: color-mix(in srgb, var(--color-cursor) 35%, transparent);
+    outline-offset: 1px;
+  }
+  to {
+    outline-color: var(--color-cursor);
+    outline-offset: 4px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

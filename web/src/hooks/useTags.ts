@@ -5,7 +5,7 @@ import type { Tag, TagDeleteResponse, TagRenameResponse } from "../types/api";
 /** Debounced, abortable tag completion. The generation check is deliberate:
  * some fetch shims resolve after abort, and an old vocabulary is worse than
  * showing no suggestions while the current request catches up. */
-export function useTagCompletions(folder: string, prefix: string, enabled: boolean) {
+export function useTagCompletions(folder: string | undefined, prefix: string, enabled: boolean) {
   const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -14,14 +14,14 @@ export function useTagCompletions(folder: string, prefix: string, enabled: boole
   const key = `${folder}\u0000${prefix.trim()}`;
 
   useEffect(() => {
-    if (!enabled || !folder) {
+    if (!enabled) {
       return;
     }
     const mine = ++generation.current;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setLoading(true);
-      void api.tags({ folder, prefix: prefix.trim(), limit: 50 }, { signal: controller.signal })
+      void api.tags({ ...(folder ? { folder } : {}), prefix: prefix.trim(), limit: 50 }, { signal: controller.signal })
         .then((next) => {
           if (mine !== generation.current) return;
           setTags(next);
@@ -45,7 +45,7 @@ export function useTagCompletions(folder: string, prefix: string, enabled: boole
     };
   }, [enabled, folder, key, prefix]);
 
-  if (!enabled || !folder) return { tags: [], loading: false, error: null };
+  if (!enabled) return { tags: [], loading: false, error: null };
   const fresh = resolvedKey === key;
   return { tags: fresh ? tags : [], loading: loading || !fresh, error: fresh ? error : null };
 }

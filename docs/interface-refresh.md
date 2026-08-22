@@ -131,17 +131,17 @@ Restyling must not rename or drop them.
 
 ## D. Keyboard -- vim-flavoured navigation
 
-Leader is **space**. At the initial audit there were three unrelated `window` listeners,
-no registry, no FileBrowser shortcuts and only a local typing guard. The merged keymap now
-has one dispatcher, a generated binding table and scoped overlays.
+At the initial audit there were three unrelated `window` listeners, no registry, no
+FileBrowser shortcuts and only a local typing guard. The merged keymap now has one
+dispatcher, a generated binding table and scoped overlays. Space is a direct selection
+toggle; there is no leader key.
 
 - [x] D1. A real keymap layer: a single dispatcher, scoped modes (gallery / browser /
       lightbox / palette / preview), and an escape hatch when focus is in a text field.
 - [x] D2. Motions: `h j k l`, `g g`, `G`, `Ctrl-d`/`Ctrl-u`, `0`/`$` in the grid.
-- [x] D3. Selection: `x` toggles the cursor item, `v`/`V` enter visual selection,
-      `Ctrl/Cmd-a` selects the loaded page, `<Space>a` selects the matching folder and
-      `<Space>c` clears. `Esc` exits visual mode while preserving the resulting selection.
-      Space itself is exclusively the leader.
+- [x] D3. Selection: `Space` (with `x` as a gallery alias) toggles the cursor item,
+      `v`/`V` enter visual selection, and `Ctrl/Cmd-a` selects the loaded page. `Esc`
+      exits visual mode while preserving the resulting selection; `:clear` clears it.
 - [x] D4. Actions on selection: archive / restore / pin / download, each with a mnemonic.
 - [x] D5. `?` opens a keymap cheatsheet overlay.
 - [x] D6. Focus management so the visible cursor and the DOM focus never disagree.
@@ -161,7 +161,7 @@ fuzzy ranking while server `q` now searches literal substrings across filename, 
 path, description and tags. Server hits are merged by id so a matching row outside the
 client corpus remains reachable; the UI reports when that corpus is truncated.
 
-- [x] F1. `F10` **and** `<leader>fe` (space, f, e) open a fuzzy file finder.
+- [x] F1. `F10` opens a fuzzy file finder.
 - [x] F2. Use client-side scoring over a 2,000-record bounded corpus, merged with server
       filename-substring results so a match outside the window remains reachable. The UI
       states when the corpus is truncated instead of implying a complete search.
@@ -178,7 +178,7 @@ client corpus remains reachable; the UI reports when that corpus is truncated.
       clears restrictive filters, switches to the Files view, and focuses the
       record (including finder matches beyond the first loaded page).
 - [x] G3. Multi-select aware -- right-clicking inside a selection acts on the whole selection.
-- [x] G4. Keyboard-reachable (context-menu key, and a leader binding).
+- [x] G4. Keyboard-reachable with the context-menu key or `Shift-F10`.
 
 ## H. Thumbnails and previews for documents
 

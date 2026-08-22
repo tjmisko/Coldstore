@@ -188,6 +188,9 @@ export function Lightbox({
             case "info":
               setShowMeta((shown) => !shown);
               return true;
+            case "toggle-select":
+              selection.toggle(file.id);
+              return true;
             case "edit-description":
               setDescriptionOpen(true);
               return true;
@@ -259,7 +262,7 @@ export function Lightbox({
         data-lightbox={file.id}
         data-keyscope="lightbox"
         style={{ zIndex: Z.lightbox }}
-        className="fixed inset-0 bg-ground/95 flex items-center justify-center outline-none"
+        className="fixed inset-0 grid h-[100dvh] grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-ground/95 outline-none"
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
@@ -279,7 +282,7 @@ export function Lightbox({
           <button
             onClick={goPrev}
             aria-label="Previous"
-            className={`absolute left-4 top-1/2 -translate-y-1/2 z-10 ${ICON_BUTTON}`}
+            className={`absolute left-1 top-[35%] -translate-y-1/2 bg-ground/55 z-10 sm:left-4 sm:top-1/2 ${ICON_BUTTON}`}
           >
             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -290,7 +293,7 @@ export function Lightbox({
           <button
             onClick={goNext}
             aria-label="Next"
-            className={`absolute right-4 top-1/2 -translate-y-1/2 z-10 ${ICON_BUTTON}`}
+            className={`absolute right-1 top-[35%] -translate-y-1/2 bg-ground/55 z-10 sm:right-4 sm:top-1/2 ${ICON_BUTTON}`}
           >
             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -300,18 +303,22 @@ export function Lightbox({
 
         {/* Main viewport */}
         <div
-          className="max-w-[90vw] max-h-[80vh] w-full flex items-center justify-center"
+          className="flex min-h-0 w-full items-center justify-center overflow-hidden px-3 pb-3 pt-14 sm:px-14 sm:pb-6"
           data-preview-kind={preview.kind}
+          data-lightbox-viewport
         >
           <PreviewSurface file={file} preview={preview} />
         </div>
 
         {/* Bottom bar */}
-        <div className="absolute bottom-0 left-0 right-0 border-t border-line bg-surface/90 backdrop-blur-sm px-4 py-3">
-          <div className="flex items-center justify-between max-w-4xl mx-auto">
-            <div className="flex-1 min-w-0">
+        <div
+          data-lightbox-details
+          className="max-h-[48dvh] overflow-y-auto border-t border-line bg-surface/95 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:px-4"
+        >
+          <div className="mx-auto flex max-w-4xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex-1 min-w-0" data-lightbox-summary>
               <p className="text-base font-medium truncate">{file.filename}</p>
-              <p className="text-meta text-ink-muted">
+              <p className="text-meta leading-relaxed text-ink-muted">
                 {formatSize(file.size_bytes)} &middot; {formatDateTime(file.file_mtime)} &middot;{" "}
                 <span className={statusColor(file.status)}>
                   {file.status}
@@ -325,7 +332,7 @@ export function Lightbox({
               </p>
             </div>
 
-            <div className="flex items-center gap-2 ml-4">
+            <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:justify-end" data-lightbox-actions>
               <PinToggle
                 file={file}
                 onPin={(pinned) => void run(() => actions.setPinned(file, pinned))}

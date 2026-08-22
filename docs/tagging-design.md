@@ -10,6 +10,11 @@ Implementation status: issues #1–#14 are implemented locally on `feat/interfac
 the XMP export follow-up remains unfiled. None of these schema or daemon changes has been
 deployed to production.
 
+Interaction amendment (2026-08-21): Space is no longer a leader. It toggles selection
+immediately, Tag mode uses bare `e`, and the leader-prefixed quick-slot interaction has
+been retired. Older leader and quick-slot passages below document the superseded design;
+they are not current bindings.
+
 It builds to nine decisions:
 
 | ID | Decision |
@@ -24,7 +29,7 @@ It builds to nine decisions:
 | T8 | "Rename a folder" means renaming a **directory inside** a Syncthing folder. It rewrites three trees and two columns and runs as a durable job. The coldstore folder **label** is not renameable; a cosmetic `display_name` is offered instead. |
 | T9 | Live Photos are a first-class **pair group**. A member is never archived, restored or renamed alone. |
 | T10 | Metadata reading is **hybrid**: pure Go for the bulk capture-time and GPS path, `ffprobe` for QuickTime, and `exiftool` **as a subprocess** — never as an import — for the Live Photo still probe only. |
-| T11 | Tagging registers `t` / `T` as operators in the existing grammar. Because an operator carries a **range but not an argument**, there are three tagging paths: picker, repeat, and leader-prefixed quick slots. |
+| T11 | Tagging registers `t` / `T` as operators in the existing grammar. Because an operator carries a **range but not an argument**, the active tagging paths are picker and repeat. |
 
 ---
 
@@ -1205,15 +1210,14 @@ DELETE /api/v1/tags/Trips%2FIceland?cascade=1                       → delete +
 ## 5. The keyboard-first tagging UX
 
 The hard requirement is: *"I want to use this without touching my mouse at all, ever."* The
-keyboard layer provides a real vim operator-pending grammar — counts, motions, operators —
-with leader = space. This section specifies how tagging **fits into** that grammar rather
-than bolting a second keymap beside it.
+keyboard layer provides a real vim operator-pending grammar — counts, motions and operators.
+Space toggles selection directly and is not a leader. This section specifies how tagging
+**fits into** that grammar rather than bolting a second keymap beside it.
 
-It has been rewritten against that layer's actual bindings and its actual command model. Two
-things it originally assumed were wrong: `gt` / `gT` and `<Space>t` were already taken (5.1),
-and **an operator carries a range but not an argument**, so `tt` is two steps rather than one
-and a picker-per-photo cannot be the fast path (5.2). Both corrections shaped everything
-below.
+It has been rewritten against that layer's actual bindings and its actual command model.
+`gt` / `gT` are already taken (5.1), and **an operator carries a range but not an
+argument**, so `tt` is two steps rather than one and a picker-per-photo cannot be the fast
+path (5.2). Both constraints shaped everything below.
 
 ### 5.1 What the keyboard layer already owns
 
@@ -1225,13 +1229,12 @@ nothing here quietly collides with it.
 |---|---|
 | Motions | `h` `j` `k` `l` `0` `$` `gg` `G` `<C-d>` `<C-u>` `<C-f>` `<C-b>` |
 | Operators | `d` archive · `r` restore · `p` pin · `u` unpin · `y` download |
-| Selection | `x` toggle · `v` visual · `V` visual-line · `<C-a>` select all |
-| Open / menu | `<CR>` `o` `<Menu>` |
-| Lightbox | `q` `i` |
+| Selection | `<Space>` toggle · `x` gallery alias · `v` visual · `V` visual-line · `<C-a>` select all |
+| Open / menu | `<CR>` `o` `<Menu>` `<S-F10>` |
+| Lightbox | `q` `i`; PDF reader also owns `I` for colour inversion |
 | Conflicts | `cd` `ca` |
 | Navigation | `gt` / `gT` next / previous view · `]f` / `[f` |
 | Overlays | `:` `?` `<F10>` `<Esc>` |
-| Leader (`<Space>`) | `a` `c` `g` `b` `s` `o` `t` `m` `R` `fe` `?` |
 
 Machine modes are `normal`, `visual` and `visual-line`. Everything else is a **scope** —
 a keymap layer pushed with `useKeymapLayer(name, handler)` and resolved by `SCOPE_PRIORITY`,
@@ -1242,8 +1245,7 @@ through the rest of this section: Tag mode and the description editor are scopes
 layer implements no till-motions, because `t` / `T` / `;` / `,` have no meaning when the unit
 is a file rather than a character in a line. An earlier draft of this document offered
 `gt` / `gT` as a fallback; **that was the actual collision** — `gt` and `gT` are
-next / previous view — and `<Space>t`, this section's original Tag-mode key, is the filter
-palette. The fallback is withdrawn rather than left in the document as a trap.
+next / previous view. The fallback is withdrawn rather than left in the document as a trap.
 
 The three obligations that follow from working inside a real grammar:
 
@@ -1272,31 +1274,20 @@ Two consequences, and the second is the design problem:
   moving quickly across hundreds of frames, and a modal question on every one of them is
   exactly the thing that makes people reach for the mouse instead.
 
-So the design is not "one tagging path with a picker". It is **three paths, and the picker is
-only the first of them**. The professional tools this feature is modelled on solved the same
-problem the same way — Photo Mechanic applies a colour class on a bare keypress, not through
-a dialog — and the escape from the picker therefore belongs in the keymap surface, not in a
-follow-up issue.
+So the design is not "one tagging path with a picker". Repeat provides the fast path for a
+tag set that was just used, without consuming Space or the bare digit keys.
 
-### 5.3 The three tagging paths
+### 5.3 The two tagging paths
 
 | Path | Keys | When |
 |---|---|---|
 | **Picker** | `t{motion}` | An arbitrary or brand-new tag. Always available; the only one needed for correctness. |
 | **Repeat** | `t{motion}<CR>`, or `.` on the cursor target | The same tag again, over a new range. The picker opens **pre-seeded with the last committed tag set**, selected, so `<CR>` alone reapplies it and any keystroke replaces it. One key of overhead, no new binding. |
-| **Quick slots** | `<Space>1` … `<Space>9` | The handful of tags a given pass actually uses. Applies slot *N* immediately, **no picker**, to the current selection if there is one and to the file under the cursor otherwise. |
 
 **`.` replays the resolved tag set, not the keystroke.** A naive `.` re-runs the operator and
 reopens the picker, which is worse than useless — it looks like a repeat and asks a question.
 `.` must replay `(operator, tag set)` against the current cursor target with no prompt. The
 repeated case is the only case `.` exists for.
-
-**Quick slots are `<Space>1`–`<Space>9`, not bare `1`–`9`.** Bare digits are **counts** in an
-operator-pending grammar; binding them would break `3j` and `2t3j` everywhere they were live.
-Leader-prefixed digits are unambiguous, are free in the leader namespace, and work identically
-in the gallery and in Tag mode. Slot contents are configured in the tag manager (section 7)
-and persist per folder; an unassigned slot is a no-op with a status-line note, never a silent
-nothing.
 
 ### 5.4 The tag operator and its motions
 
@@ -1363,8 +1354,7 @@ the covered set, each with the count of covered files carrying it
 
 ### 5.6 Tag mode — a scope, not a mode
 
-`<Space>e` enters it. (`<Space>t` — the obvious key, and this document's original choice — is
-the filter palette.) It adds `"tagging"` to `Scope` with a `SCOPE_PRIORITY` entry and is
+Bare `e` enters it. It adds `"tagging"` to `Scope` with a `SCOPE_PRIORITY` entry and is
 **non-exclusive**, so motions fall through to the layer beneath exactly as the lightbox's do.
 The machine mode stays `normal`.
 
@@ -1377,9 +1367,8 @@ Dark only, no chrome: a large preview, a metadata and tag panel on the right, a 
 | `{` / `}` | Previous / next capture day |
 | `i` | Enter the description editor (5.7) |
 | `t` / `T` | Tag / untag — the operator, with an implicit `tt` |
-| `<Space>1`–`<Space>9` | Quick slots (5.3) |
 | `,` | Toggle **carry-forward** |
-| `x` | Toggle selection of the current file — the layer's existing binding |
+| `<Space>` / `x` | Toggle selection of the current file (`x` is the gallery alias) |
 | `<Esc>` | Leave, returning to the same file in the gallery |
 
 **`i` shadows the lightbox's `i`, deliberately. This was raised, reviewed and settled —
@@ -1456,7 +1445,7 @@ existing ones — `x`, `v`, `V`, `<C-a>` — and tagging adds none of its own.
 
 **Selection wins over the cursor.** When the selection is non-empty, `t` applies to it and the
 picker says `tag 431 files`. There is **no separate bulk-tag key**; a second key for the same
-operator is exactly the one-off chord 5.1 forbids. The same rule governs `<Space>1`–`<Space>9`.
+operator is exactly the one-off chord 5.1 forbids.
 
 **Above the cap, say so.** `<C-a>` resolves through `GET /files/ids`, which truncates at
 20,000 and reports `truncated: true`. The picker must then read
@@ -1684,11 +1673,11 @@ zero `eslint-disable` in `web/src`, dark only.
 | Path | What |
 |---|---|
 | `web/src/hooks/useTags.ts` | `GET /tags` with a folder-scoped cache, `prefix` completion with abort-on-keystroke, and the mutation wrappers |
-| `web/src/hooks/useGridKeymap.ts` + `useFileWorkspace.ts` | Range resolution and the picker/repeat/quick-slot paths of 5.3, reusing the existing machine rather than adding a second operator state machine |
+| `web/src/hooks/useGridKeymap.ts` + `useFileWorkspace.ts` | Range resolution and the picker/repeat paths of 5.3, reusing the existing machine rather than adding a second operator state machine |
 | `web/src/components/TagPrompt.tsx` | The picker of 5.5, pre-seeded with the last committed tag set |
 | `web/src/components/TagMode.tsx` | The culling scope of 5.6 |
 | `web/src/components/DescriptionEditor.tsx` | The exclusive-scope textarea of 5.7 |
-| `web/src/hooks/useQuickSlots.ts` + `TagManager.tsx` | Per-folder `<Space>1`–`<Space>9` persistence, indicators and assignment editor |
+| `web/src/components/TagManager.tsx` | Catalog-wide tag vocabulary management, including safe rename, merge and deletion |
 | `web/src/components/TagChips.tsx` | Chips on tiles, in the lightbox, in the Tag mode panel |
 | `web/src/components/CaptureMeta.tsx` | Capture time + offset + source + coordinates, with the "timezone not recorded" wording |
 
@@ -1707,9 +1696,8 @@ zero `eslint-disable` in `web/src`, dark only.
   are.
 - `Gallery.tsx`: tag chips on tiles (collapsed to `+3` past two), a `sort=captured` option,
   and capture-day group headers that `{`/`}` navigate between.
-- `TagManager` (in `ConfigPanel`): assigns the nine quick slots per folder, beside the tag
-  tree. A slot is the fast path of 5.3, so it needs somewhere to be chosen; leaving it to a
-  config file would put the one keyboard-first affordance behind a text editor.
+- `TagManager` (in `ConfigPanel`): manages the catalog-wide tag tree, including rename,
+  merge and deletion.
 - The keyboard layer's bindings array: two operator rows (`t`, `T`), the eight motions of
   5.4, and three scope registrations (`tagging` non-exclusive; `tag-prompt` and
   `description` exclusive). Three typed seams — `OperatorId`,
@@ -1725,8 +1713,8 @@ zero `eslint-disable` in `web/src`, dark only.
   reapplies the last tag), `.` replaying without reopening the picker, the undo round trip
   under `U`, the query-building for every new filter, and — the important one — that `j`
   typed in the description editor produces the letter `j` and does not navigate.
-- A test that **bare `3j` still counts** with the tag operator registered. Quick slots are
-  leader-prefixed precisely so digits stay counts, and that is the assertion which proves it.
+- Tests that **bare `3j` still counts** with the tag operator registered and Space dispatches
+  selection immediately without leaving a pending prefix.
 - Open browser-tier acceptance: `scripts/seed-demo` must expose a tagged folder, an untagged
   folder, a Live Photo pair, a file with EXIF, a file with GPS, a file with **no** metadata,
   and a file with a manual capture date. Without those fixtures half of this UI is unreachable —
@@ -1904,17 +1892,14 @@ such term, is what this codebase already does for `ffmpeg` at
 `internal/thumbnail/thumbnail.go:162`, reuses a subprocess harness that is already tested,
 and costs the same 2.7–3.1 ms/file.
 
-**14. Bare `1`–`9` as quick-tag keys.**
-Rejected — 5.3. Photo Mechanic applies a colour class on a bare number key, which is the
-right ergonomics and the wrong grammar: in an operator-pending keymap bare digits are
-**counts**, so binding them would break `3j` and `2t3j` wherever they were live. Leader-
-prefixed digits (`<Space>1`–`<Space>9`) are unambiguous, free in the leader namespace, and
-identical in the gallery and in Tag mode.
+**14. Number-key quick tags.**
+Rejected — 5.3. In an operator-pending keymap bare digits are **counts**, so binding them
+would break `3j` and `2t3j`. Prefixing them with Space was also rejected because Space must
+remain the direct selection toggle; repeat (`.`) is the fast tagging path.
 
 **15. `gt` / `gT` as the tag operator's fallback keys.**
 Rejected — 5.1, and worth recording because the fallback was *more* dangerous than the
-primary it was hedging. `gt` and `gT` are next / previous view in the keyboard layer, and
-`<Space>t`, this document's original Tag-mode key, is the filter palette. Bare `t` and `T` —
+primary it was hedging. `gt` and `gT` are next / previous view in the keyboard layer. Bare `t` and `T` —
 the keys the fallback existed to avoid claiming — turned out to be unbound and semantically
 free, because that layer implements no till-motions.
 

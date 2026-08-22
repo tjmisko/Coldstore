@@ -320,7 +320,7 @@ export function useGridKeymap(options: Options): GridCursor {
           if (command.mode === "normal") {
             // Leaving visual COMMITS the highlighted span. In vim nothing stays
             // selected; here the point of ggVG is to end up with everything
-            // selected, and <Space>c is how a selection goes away.
+            // selected; Escape clears it once the mode is normal.
             visual.current = null;
             return true;
           }

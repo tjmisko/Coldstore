@@ -116,6 +116,7 @@ export interface FileWorkspace {
 interface Options {
   folder: string;
   filterKey: FilterKey;
+  tags?: string[];
   sort?: FileSort;
   limit?: number;
   near?: NearFilter;
@@ -129,7 +130,7 @@ interface Options {
  *  same repaint rules afterwards. Two implementations of "restore this row"
  *  is how one of them ends up without the res.ok check. */
 export function useFileWorkspace(options: Options): FileWorkspace {
-  const { folder, filterKey, sort, limit, near, onFolderChanged } = options;
+  const { folder, filterKey, tags, sort, limit, near, onFolderChanged } = options;
   const preset = filterPreset(filterKey);
   const toast = useToast();
   const [lastTagUndo, setLastTagUndo] = useState<TagUndo | null>(null);
@@ -140,6 +141,7 @@ export function useFileWorkspace(options: Options): FileWorkspace {
   const files = useFiles({
     folder,
     ...preset.filters,
+    tags,
     near,
     sort: preset.sort ?? sort,
     limit,
@@ -372,7 +374,7 @@ export function useFileWorkspace(options: Options): FileWorkspace {
       tagFiles,
       repeatTags, undoTags, redoTags, applyQuickSlot,
     },
-    filters: { folder, ...preset.filters, near },
+    filters: { folder: folder || undefined, ...preset.filters, tags, near },
     lastTagUndo,
     tagRedo,
     lastTagOperation,

@@ -23,16 +23,12 @@ function row(name: string): HTMLElement {
 }
 
 describe("TagManager", () => {
-  it("configures quick slots per folder and preserves them across remounts", async () => {
+  it("does not expose the removed Space-leader quick slots", async () => {
     stub = stubFetch([{ url: "/api/v1/tags", body: TAGS }]);
-    const first = renderWithToasts(<TagManager folder="CameraRoll" />);
-    const slot = await screen.findByLabelText("Quick tag 1");
-    await userEvent.type(slot, "Trips/Iceland");
-    first.unmount();
-
     renderWithToasts(<TagManager folder="CameraRoll" />);
-    expect(await screen.findByLabelText("Quick tag 1")).toHaveValue("Trips/Iceland");
-    expect(JSON.parse(localStorage.getItem("coldstore.quick-tags.CameraRoll") ?? "[]")[0]).toBe("Trips/Iceland");
+
+    expect(await screen.findByText("Iceland")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Quick tag 1")).toBeNull();
   });
 
   it("makes an existing-name rename an explicit merge and reports affected files", async () => {

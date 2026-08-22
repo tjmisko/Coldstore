@@ -23,7 +23,7 @@ export interface MachineState {
   operatorKeys: string[];
   /** Digits typed AFTER the operator. `2d3j` is `d6j`: the counts multiply. */
   operatorCount: string;
-  /** A partially matched sequence: ["g"], ["<Space>","f"]. */
+  /** A partially matched sequence such as ["g"]. */
   pending: string[];
 }
 
@@ -146,7 +146,7 @@ function onKey(state: MachineState, key: string, bindings: ResolvedBindings): St
   }
 
   // Digits, but only at the start of a command: once a sequence is pending,
-  // `<Space>2` is a leader binding, not a count.
+  // a digit may be part of that sequence rather than a count.
   if (state.pending.length === 0 && DIGIT.test(key)) {
     const pendingOperator = state.operator !== null;
     const buffer = pendingOperator ? state.operatorCount : state.count;
@@ -222,7 +222,7 @@ export function step(state: MachineState, input: Input, bindings: ResolvedBindin
   }
 }
 
-/** What to show the owner while a command is half-typed: "2d3", "<Space>f".
+/** What to show the owner while a command is half-typed: "2d3", "g".
  *  Empty when the machine is idle. */
 export function pendingLabel(state: MachineState): string {
   const parts = [state.count];

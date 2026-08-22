@@ -23,7 +23,7 @@ function remember(name: string) {
 }
 
 interface CommandPaletteProps {
-  /** Text the palette opens with, e.g. ":folder " from <leader>o. */
+  /** Text the palette opens with, e.g. ":folder ". */
   initial: string;
   folders: (string | { label: string; name: string })[];
   filters: { key: string; label: string }[];
