@@ -129,6 +129,13 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
       const key = normalizeKey(event);
       if (key === null) return;
 
+      const activeScopes = new Set(chain());
+      const stack = ordered();
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        const layer = stack[index];
+        if (activeScopes.has(layer.scope)) layer.rawHandler?.current?.(key);
+      }
+
       const bindings = registry.resolve(chain());
       const result = step(machine.current, { type: "key", key }, bindings);
       advance(result);
@@ -140,7 +147,7 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("keydown", onKeyDown);
       clearTimer();
     };
-  }, [chain, clearTimer, dispatch, paint]);
+  }, [chain, clearTimer, dispatch, ordered, paint]);
 
   return (
     <KeymapContext value={api}>

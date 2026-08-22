@@ -44,6 +44,15 @@ export function captureDayGroups(files: FileRecord[]): CaptureDayGroup[] {
   return groups;
 }
 
+/** Row starts for the separately-rendered capture-day grids. Each day begins a
+ * fresh CSS row even when the preceding group did not fill its last row. */
+export function captureGridRowStarts(files: FileRecord[], columns: number): number[] {
+  const width = Math.max(1, Math.floor(columns));
+  return captureDayGroups(files).flatMap((group) =>
+    Array.from({ length: Math.ceil(group.files.length / width) }, (_, row) => group.start + row * width),
+  );
+}
+
 export interface CaptureDayJump {
   index: number;
   /** False only when a forward jump needs rows beyond the loaded page. */

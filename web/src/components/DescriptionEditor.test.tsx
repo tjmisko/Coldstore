@@ -1,6 +1,6 @@
 import { act, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FileActions } from "../hooks/useFileWorkspace";
+import type { FileActions, TagOperation } from "../hooks/useFileWorkspace";
 import { aFile } from "../test/fixtures";
 import { renderWithToasts } from "../test/harness";
 import { KeymapProvider } from "./KeymapProvider";
@@ -24,7 +24,7 @@ function fileActions(): FileActions {
   };
 }
 
-function renderEditor(actions = fileActions()) {
+function renderEditor(actions = fileActions(), lastTagOperation: TagOperation | null = null) {
   const files = [
     aFile({ id: 1, filename: "one.jpg", description: "first" }),
     aFile({ id: 2, filename: "two.jpg", description: "second" }),
@@ -37,6 +37,7 @@ function renderEditor(actions = fileActions()) {
         files={files}
         initialIndex={0}
         actions={actions}
+        lastTagOperation={lastTagOperation}
         onClose={onClose}
         onIndexChange={onIndexChange}
       />
@@ -80,6 +81,20 @@ describe("DescriptionEditor", () => {
     expect(textarea).toHaveFocus();
     expect(textarea.selectionStart).toBe(1);
     expect(textarea.selectionEnd).toBe(3);
+  });
+
+  it("opens Ctrl-T pre-seeded and repeats the last committed tag with bare Enter", async () => {
+    const actions = fileActions();
+    renderEditor(actions, { mode: "add", tags: ["Reviewed"], ids: [2] });
+    const textarea = screen.getByRole("textbox", { name: "Description for one.jpg" });
+
+    fireEvent.keyDown(textarea, { key: "t", ctrlKey: true });
+    const prompt = await screen.findByLabelText("Tags to add");
+    expect(screen.getByText("Reviewed")).toHaveAttribute("data-tag-chip", "Reviewed");
+    fireEvent.keyDown(prompt, { key: "Enter" });
+
+    await act(async () => {});
+    expect(actions.tagFiles).toHaveBeenCalledWith([1], ["Reviewed"], []);
   });
 
   it("should discard only the uncommitted draft on Ctrl-C", () => {

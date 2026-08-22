@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useTagManager } from "../hooks/useTags";
-import { QUICK_SLOT_COUNT, useQuickSlots } from "../hooks/useQuickSlots";
+import { deleteQuickSlotTag, QUICK_SLOT_COUNT, renameQuickSlotTag, useQuickSlots } from "../hooks/useQuickSlots";
 import { errorMessage } from "../lib/api";
 import { formatCount } from "../lib/format";
 import { useToast } from "../lib/toast";
@@ -34,6 +34,7 @@ export function TagManager({ folder }: { folder: string }) {
     setBusy(true);
     try {
       const result = await manager.rename(editing.name, draft);
+      renameQuickSlotTag(editing.name, draft.trim());
       toast.show(
         "success",
         result.merged
@@ -59,6 +60,7 @@ export function TagManager({ folder }: { folder: string }) {
     setBusy(true);
     try {
       const result = await manager.remove(tag.name, cascade);
+      deleteQuickSlotTag(tag.name, cascade);
       toast.show(
         "success",
         `Deleted ${formatCount(result.deleted)} tag${result.deleted === 1 ? "" : "s"}; removed assignments from ${formatCount(result.files_affected)} file${result.files_affected === 1 ? "" : "s"}`,

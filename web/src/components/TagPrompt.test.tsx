@@ -53,6 +53,39 @@ describe("TagPrompt", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it("commits the residual and selected completion with one Enter", async () => {
+    stub = stubFetch([{ url: "/api/v1/tags", body: [] }]);
+    const apply = vi.fn(async () => true);
+    const close = vi.fn();
+    renderWithToasts(
+      <TagPrompt folder="CameraRoll" ids={[1]} mode="add" onApply={apply} onClose={close} />,
+    );
+
+    const input = screen.getByLabelText("Tags to add");
+    await userEvent.type(input, "Trips,2024");
+    await screen.findByRole("button", { name: /new tag “2024”/i });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(apply).toHaveBeenCalledWith(["Trips", "2024"], []));
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("is a bottom command line with an exclusive scope, not a modal overlay", () => {
+    stub = stubFetch([{ url: "/api/v1/tags", body: [] }]);
+    renderWithToasts(
+      <TagPrompt folder="CameraRoll" ids={[1]} mode="add" onApply={async () => true} onClose={() => {}} />,
+    );
+
+    const prompt = document.querySelector('[data-overlay="tag-prompt"]');
+    expect(prompt).not.toBeNull();
+    expect(prompt).not.toHaveAttribute("role");
+    expect(prompt).toHaveAttribute("data-keyscope", "tag-prompt");
+    expect(prompt?.parentElement).toHaveClass("pointer-events-none");
+    expect(prompt?.parentElement).not.toHaveClass("bg-black/70");
+    expect(document.body.style.overflow).toBe("");
+  });
+
   it("cancels the entire locally-tokenized operation without a write", async () => {
     stub = stubFetch([{ url: "/api/v1/files?ids=7", body: [aFile({ id: 7, tags: ["Trips", "Favorites"] })] }]);
     const apply = vi.fn(async () => true);
@@ -115,6 +148,22 @@ describe("TagPrompt", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove tags" }));
 
     await waitFor(() => expect(apply).toHaveBeenCalledWith([], ["Trips/Iceland"]));
+  });
+
+  it("does not ignore an unmatched remove residual when Enter is pressed", async () => {
+    stub = stubFetch([{
+      url: "/api/v1/files?ids=7",
+      body: [aFile({ id: 7, tags: ["Trips"] })],
+    }]);
+    const apply = vi.fn(async () => true);
+    renderWithToasts(
+      <TagPrompt folder="CameraRoll" ids={[7]} mode="remove" onApply={apply} onClose={() => {}} />,
+    );
+    const input = screen.getByLabelText("Tags to remove");
+    await userEvent.type(input, "Missing");
+    await screen.findByText("No matching tags.");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it("aborts superseded completion requests and ignores a stale response", async () => {

@@ -79,6 +79,60 @@ function write(folder: string, slots: readonly string[]): void {
   for (const listener of listeners.get(folder) ?? []) listener();
 }
 
+function knownFolders(): string[] {
+  const folders = new Set(cache.keys());
+  if (typeof localStorage === "undefined") return [...folders];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const storageKey = localStorage.key(index);
+      if (storageKey?.startsWith(prefix)) folders.add(storageKey.slice(prefix.length));
+    }
+  } catch {
+    // Cached assignments remain editable even when persistence is blocked.
+  }
+  return [...folders];
+}
+
+/** Vocabulary lifecycle is catalog-wide, so every folder's persisted slots
+ * must follow a subtree rename/merge or they would recreate the old spelling. */
+export function renameQuickSlotTag(from: string, to: string): void {
+  const source = from.trim();
+  const destination = to.trim();
+  if (!source || !destination) return;
+  const sourceFold = source.toLocaleLowerCase();
+  for (const folder of knownFolders()) {
+    const current = snapshot(folder);
+    let changed = false;
+    const next = current.map((name) => {
+      const fold = name.toLocaleLowerCase();
+      if (fold === sourceFold || fold.startsWith(`${sourceFold}/`)) {
+        changed = true;
+        return `${destination}${name.slice(source.length)}`;
+      }
+      return name;
+    });
+    if (changed) write(folder, next);
+  }
+}
+
+export function deleteQuickSlotTag(name: string, cascade: boolean): void {
+  const sourceFold = name.trim().toLocaleLowerCase();
+  if (!sourceFold) return;
+  for (const folder of knownFolders()) {
+    const current = snapshot(folder);
+    let changed = false;
+    const next = current.map((slot) => {
+      const fold = slot.toLocaleLowerCase();
+      if (fold === sourceFold || (cascade && fold.startsWith(`${sourceFold}/`))) {
+        changed = true;
+        return "";
+      }
+      return slot;
+    });
+    if (changed) write(folder, next);
+  }
+}
+
 export function useQuickSlots(folder: string) {
   const slots = useSyncExternalStore(
     (listener) => subscribe(folder, listener),

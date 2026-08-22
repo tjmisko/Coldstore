@@ -92,8 +92,8 @@ export function TagPrompt({ folder, ids, mode, selectionNote, initialTags = [], 
     setCompletionIndex(0);
   };
 
-  const apply = async () => {
-    const residualName = mode === "remove" ? removeExact?.name ?? "" : input;
+  const apply = async (enteredName?: string) => {
+    const residualName = enteredName ?? (mode === "remove" ? removeExact?.name ?? "" : input);
     const names = appendUnique(tokens, [residualName]);
     if (names.length === 0 || names.length > MAX_TAGS || overFileLimit || invalidRemoveToken || busyRef.current) return;
     busyRef.current = true;
@@ -112,8 +112,8 @@ export function TagPrompt({ folder, ids, mode, selectionNote, initialTags = [], 
 
   // Once Apply has handed the request to fetch, aborting the browser request
   // cannot prove the server did not commit its transaction. Keep the operation
-  // visibly modal until its result is known instead of letting Escape, the
-  // backdrop, or a Cancel click promise a cancellation we cannot guarantee.
+  // visibly busy until its result is known instead of letting Escape or a
+  // Cancel click promise a cancellation we cannot guarantee.
   const closeUnlessApplying = () => {
     if (!busyRef.current) onClose();
   };
@@ -121,7 +121,7 @@ export function TagPrompt({ folder, ids, mode, selectionNote, initialTags = [], 
   const countLabel = `${mode === "add" ? "Tag" : "Remove tags from"} ${formatCount(uniqueIDs.length)} file${uniqueIDs.length === 1 ? "" : "s"}`;
 
   return (
-    <Overlay label={countLabel} onClose={closeUnlessApplying} align="bottom" className="max-w-2xl" testAttribute="tag-prompt" scope="tag-prompt">
+    <Overlay label={countLabel} onClose={closeUnlessApplying} align="bottom" role="none" modal={false} className="max-w-2xl" testAttribute="tag-prompt" scope="tag-prompt">
       <div data-tag-prompt data-keyscope="tag-prompt" className="rounded-xl border border-line-strong bg-surface p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -199,10 +199,12 @@ export function TagPrompt({ folder, ids, mode, selectionNote, initialTags = [], 
             }
             if (event.key === "Enter" && !event.nativeEvent.isComposing) {
               event.preventDefault();
-              if (residual && suggestions[completionIndex]) choose(suggestions[completionIndex].name);
-              else if (residual && mode === "add") choose(residual);
-              else if (residual && removeExact) choose(removeExact.name);
-              else void apply();
+              if (residual && source.loading) return;
+              const entered = residual
+                ? suggestions[completionIndex]?.name ?? (mode === "add" ? residual : removeExact?.name)
+                : undefined;
+              if (residual && !entered) return;
+              void apply(entered);
             }
           }}
           placeholder="e.g. Trips/Iceland"

@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { api, type NearFilter } from "../lib/api";
-import { captureDayGroups, formatCaptureDay, resolveCaptureDayJump } from "../lib/capture";
+import { captureDayGroups, captureGridRowStarts, formatCaptureDay, resolveCaptureDayJump } from "../lib/capture";
 import { formatCount, formatSize } from "../lib/format";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
@@ -115,6 +115,7 @@ export function Gallery({
     files,
     columns,
     visibleRows,
+    rowStarts: effectiveSort === "captured" ? captureGridRowStarts(files, columns) : undefined,
     selection,
     actions,
     bulk,
@@ -243,6 +244,7 @@ export function Gallery({
           onLoadMore={loadMore}
           hasMore={hasMore}
           actions={actions}
+          lastTagOperation={workspace.lastTagOperation}
           bulk={bulk}
           selection={selection}
           onFindNearby={setNear}
@@ -269,6 +271,7 @@ export function Gallery({
           files={files}
           initialIndex={descriptionIndex}
           actions={actions}
+          lastTagOperation={workspace.lastTagOperation}
           onIndexChange={cursor.setIndex}
           onClose={() => setDescriptionIndex(null)}
         />

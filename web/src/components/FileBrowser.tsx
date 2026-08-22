@@ -329,6 +329,7 @@ export function FileBrowser({
           onLoadMore={loadMore}
           hasMore={hasMore}
           actions={actions}
+          lastTagOperation={workspace.lastTagOperation}
           bulk={bulk}
           selection={selection}
           onFindNearby={setNear}
@@ -355,6 +356,7 @@ export function FileBrowser({
           files={files}
           initialIndex={descriptionIndex}
           actions={actions}
+          lastTagOperation={workspace.lastTagOperation}
           onIndexChange={cursor.setIndex}
           onClose={() => setDescriptionIndex(null)}
         />

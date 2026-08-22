@@ -51,6 +51,14 @@ describe("resolveMotion in a grid", () => {
     expect(resolveMotion("row-end", 0, grid(7))).toBe(9);
   });
 
+  it("uses explicit painted rows when independent grids restart after ragged groups", () => {
+    const captured = grid(0, { total: 7, columns: 5, rowStarts: [0, 2] });
+    expect(resolveMotion("down", 1, captured)).toBe(2);
+    expect(resolveMotion("right", 99, captured)).toBe(1);
+    expect(resolveMotion("row-end", 0, captured)).toBe(1);
+    expect(visualSpan(0, 3, true, { ...captured, index: 3 })).toEqual({ from: 0, to: 6 });
+  });
+
   it("should send gg to the first file and G to the last when no count is given", () => {
     expect(resolveMotion("first", 0, grid(7))).toBe(0);
     expect(resolveMotion("last", 0, grid(7))).toBe(12);

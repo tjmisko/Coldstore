@@ -11,7 +11,7 @@ export interface Toast {
 export interface ToastApi {
   /** show returns nothing on purpose: a toast is a report, never a promise the
    *  caller can await. Actions that need a result use the API directly. */
-  show(kind: ToastKind, message: string): void;
+  show(kind: ToastKind, message: string, durationMs?: number): void;
 }
 
 /** The default is a no-op rather than a throw. A component rendered outside the

@@ -9,7 +9,12 @@ import { useQuickSlots } from "./useQuickSlots";
 export interface TagOperation {
   mode: "add" | "remove";
   tags: string[];
+  /** Exact request targets let Tag mode associate a late response with the file
+   * it left, rather than whichever file is visible when the network returns. */
+  ids: number[];
 }
+
+export const TAG_UNDO_TOAST_MS = 20_000;
 
 /** The file-review filters, including the capture-date queue from tagging design 3.2.
  *
@@ -282,7 +287,11 @@ export function useFileWorkspace(options: Options): FileWorkspace {
         const result = await api.bulkTags({ ids, add, remove });
         setLastTagUndo(result.undo.changes.length > 0 ? result.undo : null);
         setTagRedo(null);
-        setLastTagOperation({ mode: add.length > 0 ? "add" : "remove", tags: [...(add.length > 0 ? add : remove)] });
+        setLastTagOperation({
+          mode: add.length > 0 ? "add" : "remove",
+          tags: [...(add.length > 0 ? add : remove)],
+          ids: [...new Set(ids)],
+        });
         await refetchAfterTagMutation(ids);
         const verb = add.length > 0 ? "Tagged" : "Removed tags from";
         const created = result.created.length > 0
@@ -291,6 +300,7 @@ export function useFileWorkspace(options: Options): FileWorkspace {
         toast.show(
           "success",
           `${verb} ${result.updated.toLocaleString()} file${result.updated === 1 ? "" : "s"}${created}${result.undo.changes.length > 0 ? " · U to undo" : ""}`,
+          result.undo.changes.length > 0 ? TAG_UNDO_TOAST_MS : undefined,
         );
         return true;
       } catch (err) {

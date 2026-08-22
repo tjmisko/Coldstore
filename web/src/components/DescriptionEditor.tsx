@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FileActions } from "../hooks/useFileWorkspace";
+import type { FileActions, TagOperation } from "../hooks/useFileWorkspace";
 import { useKeymapLayer } from "../hooks/useKeymapLayer";
 import { isValidManualCapture } from "../lib/capture";
 import { useToast } from "../lib/toast";
@@ -12,6 +12,7 @@ interface DescriptionEditorProps {
   files: FileRecord[];
   initialIndex: number;
   actions: FileActions;
+  lastTagOperation?: TagOperation | null;
   onClose(): void;
   onIndexChange?(index: number): void;
 }
@@ -25,6 +26,7 @@ export function DescriptionEditor({
   files,
   initialIndex,
   actions,
+  lastTagOperation = null,
   onClose,
   onIndexChange = () => {},
 }: DescriptionEditorProps) {
@@ -302,6 +304,7 @@ export function DescriptionEditor({
           folder={file.folder_label}
           ids={[file.id]}
           mode="add"
+          initialTags={lastTagOperation?.mode === "add" ? lastTagOperation.tags : undefined}
           onApply={(add, remove) => actions.tagFiles([file.id], add, remove)}
           onClose={() => setTagPrompt(false)}
         />

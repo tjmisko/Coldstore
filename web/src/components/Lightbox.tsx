@@ -4,11 +4,12 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useKeymapLayer } from "../hooks/useKeymapLayer";
 import { useScrollLock } from "../hooks/useScrollLock";
 import { resolveMotion, resolveRange, spanIndices } from "../keymap/motions";
-import type { Command, MotionId } from "../keymap/types";
+import type { Command } from "../keymap/types";
+import { contextOperatorEndpoint, isContextMotion, resolveContextMotion } from "../lib/contextMotion";
 import { resolvePreview } from "../lib/preview";
 import { Z } from "../lib/zLayers";
 import type { BulkActions } from "../hooks/useBulkActions";
-import type { FileActions } from "../hooks/useFileWorkspace";
+import type { FileActions, TagOperation } from "../hooks/useFileWorkspace";
 import type { Selection } from "../hooks/useSelection";
 import { quickSlotFromAction } from "../hooks/useQuickSlots";
 import type { FileRecord } from "../types/api";
@@ -36,6 +37,7 @@ interface LightboxProps {
    *  selection bar would. */
   bulk: BulkActions;
   selection: Selection;
+  lastTagOperation: TagOperation | null;
   onFindNearby(near: NearFilter): void;
 }
 
@@ -65,37 +67,6 @@ function pairIDs(files: FileRecord[], ids: number[]): number[] {
   return [...result];
 }
 
-function contextMotion(files: FileRecord[], at: number, motion: MotionId, count: number): number {
-  const direction = motion.endsWith("previous") ? -1 : 1;
-  const distance = count > 0 ? count : 1;
-  let current = at;
-  for (let step = 0; step < distance; step += 1) {
-    const source = files[current];
-    if (!source) return at;
-    let found = -1;
-    const day = source.captured_local.slice(0, 10);
-    const tags = new Set(source.tags.map((tag) => tag.toLocaleLowerCase()));
-    const group = source.pair_key ? `pair:${source.pair_key}` : `file:${source.id}`;
-    for (let candidate = current + direction; candidate >= 0 && candidate < files.length; candidate += direction) {
-      const file = files[candidate];
-      const matches = motion.startsWith("capture-day-")
-        ? file.captured_local.slice(0, 10) !== day
-        : motion.startsWith("tag-")
-          ? file.tags.some((tag) => tags.has(tag.toLocaleLowerCase()))
-          : motion.startsWith("untagged-")
-            ? file.tags.length === 0
-            : (file.pair_key ? `pair:${file.pair_key}` : `file:${file.id}`) !== group;
-      if (matches) {
-        found = candidate;
-        break;
-      }
-    }
-    if (found < 0) return current;
-    current = found;
-  }
-  return current;
-}
-
 export function Lightbox({
   files,
   initialIndex,
@@ -105,6 +76,7 @@ export function Lightbox({
   actions,
   bulk,
   selection,
+  lastTagOperation,
   onFindNearby,
 }: LightboxProps) {
   const [index, setIndex] = useState(initialIndex);
@@ -160,30 +132,33 @@ export function Lightbox({
 
       switch (command.kind) {
         case "motion": {
-          const contextual = ["capture-day-next", "capture-day-previous", "tag-next", "tag-previous", "untagged-next", "untagged-previous", "pair-next", "pair-previous"].includes(command.motion);
-          const next = contextual
-            ? contextMotion(files, index, command.motion, command.count)
-            : resolveMotion(command.motion, command.count, geometry);
-          if (contextual && next === index && command.motion.endsWith("next") && hasMore) {
+          const contextual = isContextMotion(command.motion);
+          const result = contextual
+            ? resolveContextMotion(files, index, command.motion, command.count, hasMore)
+            : { index: resolveMotion(command.motion, command.count, geometry), complete: true };
+          if (!result.complete) {
             pendingContext.current = { command, loadedLength: files.length };
             onLoadMore();
             return true;
           }
-          goTo(next);
+          goTo(result.index);
           return true;
         }
 
         case "operator": {
           const selectionWins = (command.operator === "tag" || command.operator === "untag") && selection.count > 0;
-          const contextual = command.target.kind === "motion" && ["capture-day-next", "capture-day-previous", "tag-next", "tag-previous", "untagged-next", "untagged-previous", "pair-next", "pair-previous"].includes(command.target.motion);
-          const contextTarget = contextual && command.target.kind === "motion"
-            ? contextMotion(files, index, command.target.motion, command.target.count)
-            : index;
-          if (contextual && command.target.kind === "motion" && contextTarget === index && command.target.motion.endsWith("next") && hasMore) {
+          const contextual = command.target.kind === "motion" && isContextMotion(command.target.motion);
+          const contextResult = contextual && command.target.kind === "motion"
+            ? resolveContextMotion(files, index, command.target.motion, command.target.count, hasMore)
+            : { index, complete: true };
+          if (!contextResult.complete) {
             pendingContext.current = { command, loadedLength: files.length };
             onLoadMore();
             return true;
           }
+          const contextTarget = contextual && command.target.kind === "motion"
+            ? contextOperatorEndpoint(command.target.motion, index, contextResult.index)
+            : index;
           const span = selectionWins || command.target.kind === "selection"
               ? { from: index, to: index }
               : contextual && command.target.kind === "motion"
@@ -240,10 +215,10 @@ export function Lightbox({
 
   useEffect(() => {
     const pending = pendingContext.current;
-    if (!pending || files.length <= pending.loadedLength) return;
+    if (!pending || (files.length <= pending.loadedLength && hasMore)) return;
     pendingContext.current = null;
     handle(pending.command);
-  }, [files.length, handle]);
+  }, [files.length, handle, hasMore]);
 
   // Touch/swipe support
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -462,6 +437,7 @@ export function Lightbox({
           files={files}
           initialIndex={index}
           actions={actions}
+          lastTagOperation={lastTagOperation}
           onIndexChange={goTo}
           onClose={() => setDescriptionOpen(false)}
         />

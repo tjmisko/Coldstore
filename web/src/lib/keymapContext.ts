@@ -6,6 +6,9 @@ import type { Command, Scope } from "../keymap/types";
 export interface KeymapLayer {
   scope: Scope;
   handler: RefObject<((command: Command) => boolean) | null>;
+  /** Observes normalized keys before grammar resolution. Used for ephemeral UI
+   * state that must react even when a dead sequence emits no command. */
+  rawHandler?: RefObject<((key: string) => void) | null>;
 }
 
 export interface KeymapApi {

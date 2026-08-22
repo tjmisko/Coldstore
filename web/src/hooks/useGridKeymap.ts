@@ -8,28 +8,12 @@ import type { Selection } from "./useSelection";
 import type { BulkActions } from "./useBulkActions";
 import { useKeymapLayer } from "./useKeymapLayer";
 import { quickSlotFromAction } from "./useQuickSlots";
-import { resolveCaptureDayJump } from "../lib/capture";
-
-interface ContextMotionResult {
-  index: number;
-  complete: boolean;
-}
+import { contextOperatorEndpoint, isContextMotion, resolveContextMotion, type ContextMotionResult } from "../lib/contextMotion";
 
 type MotionCommand = Extract<Command, { kind: "motion" }>;
 type OperatorCommand = Extract<Command, { kind: "operator" }>;
 
 const noop = () => {};
-
-function isContextMotion(motion: MotionId): boolean {
-  return [
-    "capture-day-next", "capture-day-previous", "tag-next", "tag-previous",
-    "untagged-next", "untagged-previous", "pair-next", "pair-previous",
-  ].includes(motion);
-}
-
-function motionDirection(motion: MotionId): -1 | 1 {
-  return motion.endsWith("previous") ? -1 : 1;
-}
 
 interface Options {
   scope: Extract<Scope, "gallery" | "browser">;
@@ -39,6 +23,9 @@ interface Options {
   columns: number;
   /** Rows on screen, for <C-d> and <C-f>. */
   visibleRows: number;
+  /** Starts of the rows actually rendered. Capture-day sections restart their
+   * CSS grid, so their short final rows cannot be inferred from one modulus. */
+  rowStarts?: readonly number[];
   selection: Selection;
   actions: FileActions;
   bulk: BulkActions;
@@ -79,7 +66,7 @@ export function useGridKeymap(options: Options): GridCursor {
   const {
     scope, files, columns, visibleRows, selection, actions, bulk,
     conflictMode, onOpen, onContextMenu, onEditDescription, resolveCaptureDay,
-    hasMore = false, loading = false, loadMore = noop, onTagMode = noop,
+    rowStarts, hasMore = false, loading = false, loadMore = noop, onTagMode = noop,
     active = true, reveal = null,
   } = options;
 
@@ -126,8 +113,9 @@ export function useGridKeymap(options: Options): GridCursor {
       total: files.length,
       columns: Math.max(1, columns),
       rows: Math.max(1, visibleRows),
+      rowStarts,
     }),
-    [clamped, files.length, columns, visibleRows],
+    [clamped, files.length, columns, rowStarts, visibleRows],
   );
 
   const setIndex = useCallback((next: number) => {
@@ -186,56 +174,11 @@ export function useGridKeymap(options: Options): GridCursor {
     return result;
   }, [files]);
 
-  const resolveContext = useCallback((motion: MotionId, count: number, at: number): ContextMotionResult => {
-    const direction = motionDirection(motion);
-    if (motion === "capture-day-next" || motion === "capture-day-previous") {
-      const result = resolveCaptureDay?.(at, direction, count) ?? resolveCaptureDayJump(files, at, direction, count);
-      if (direction > 0 && !result.complete && !hasMore) {
-        return { index: Math.max(at, files.length - 1), complete: true };
-      }
-      return { ...result, complete: result.complete || direction < 0 || !hasMore };
-    }
-
-    const distance = count > 0 ? count : 1;
-    let current = at;
-    for (let step = 0; step < distance; step += 1) {
-      const source = files[current];
-      if (!source) return { index: at, complete: true };
-      let found = -1;
-      if (motion === "tag-next" || motion === "tag-previous") {
-        if (source.tags.length === 0) return { index: current, complete: true };
-        const sourceTags = new Set(source.tags.map((tag) => tag.toLocaleLowerCase()));
-        for (let index = current + direction; index >= 0 && index < files.length; index += direction) {
-          if (files[index].tags.some((tag) => sourceTags.has(tag.toLocaleLowerCase()))) {
-            found = index;
-            break;
-          }
-        }
-      } else if (motion === "untagged-next" || motion === "untagged-previous") {
-        for (let index = current + direction; index >= 0 && index < files.length; index += direction) {
-          if (files[index].tags.length === 0) {
-            found = index;
-            break;
-          }
-        }
-      } else {
-        const group = source.pair_key ? `pair:${source.pair_key}` : `file:${source.id}`;
-        for (let index = current + direction; index >= 0 && index < files.length; index += direction) {
-          const candidate = files[index];
-          const candidateGroup = candidate.pair_key ? `pair:${candidate.pair_key}` : `file:${candidate.id}`;
-          if (candidateGroup !== group) {
-            found = index;
-            break;
-          }
-        }
-      }
-      if (found < 0) {
-        return { index: current, complete: direction < 0 || !hasMore };
-      }
-      current = found;
-    }
-    return { index: current, complete: true };
-  }, [files, hasMore, resolveCaptureDay]);
+  const resolveContext = useCallback(
+    (motion: MotionId, count: number, at: number) =>
+      resolveContextMotion(files, at, motion, count, hasMore, resolveCaptureDay),
+    [files, hasMore, resolveCaptureDay],
+  );
 
   /** The ids an operator should act on.
    *
@@ -334,7 +277,7 @@ export function useGridKeymap(options: Options): GridCursor {
         return true;
       }
       resolvedTo = result.index;
-      if (command.target.motion === "capture-day-next" && resolvedTo > at) resolvedTo -= 1;
+      resolvedTo = contextOperatorEndpoint(command.target.motion, at, resolvedTo);
     }
     bulk.perform(command.operator, targetIDs(command.target, at, resolvedTo, keepPairs));
     return true;

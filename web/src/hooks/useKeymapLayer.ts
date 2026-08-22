@@ -11,9 +11,11 @@ export function useKeymapLayer(
   scope: Scope,
   handler: (command: Command) => boolean,
   active = true,
+  onRawKey?: (key: string) => void,
 ): void {
   const keymap = useKeymap();
   const handlerRef = useRef<((command: Command) => boolean) | null>(null);
+  const rawHandlerRef = useRef<((key: string) => void) | null>(null);
 
   // Publish the handler in the layout phase. A passive effect leaves a window
   // after a commit where newly visible fetched rows are paired with the
@@ -22,10 +24,11 @@ export function useKeymapLayer(
   // concurrency bug: an abandoned render could leak an uncommitted closure.
   useLayoutEffect(() => {
     handlerRef.current = handler;
+    rawHandlerRef.current = onRawKey ?? null;
   });
 
   useEffect(() => {
     if (!active) return;
-    return keymap.register({ scope, handler: handlerRef });
+    return keymap.register({ scope, handler: handlerRef, rawHandler: rawHandlerRef });
   }, [keymap, scope, active]);
 }

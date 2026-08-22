@@ -21,13 +21,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const show = useCallback(
-    (kind: ToastKind, message: string) => {
+    (kind: ToastKind, message: string, durationMs?: number) => {
       const id = ++nextID.current;
       setToasts((prev) => [...prev, { id, kind, message }]);
       const timer = setTimeout(() => {
         timers.current.delete(timer);
         dismiss(id);
-      }, DISMISS_MS[kind]);
+      }, durationMs ?? DISMISS_MS[kind]);
       timers.current.add(timer);
     },
     [dismiss],

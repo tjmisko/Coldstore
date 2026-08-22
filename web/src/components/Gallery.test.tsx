@@ -264,6 +264,38 @@ describe("Gallery", () => {
     expect(document.querySelector("[data-tag-mode-status]")).not.toHaveTextContent("Enter repeats");
   });
 
+  it("attributes a delayed quick-tag response to the file it left and disarms carry on an unbound key", async () => {
+    localStorage.setItem("coldstore.quick-tags.CameraRoll", JSON.stringify(["Reviewed", "", "", "", "", "", "", "", ""]));
+    let release: (() => void) | undefined;
+    const delayed = new Promise<void>((resolve) => { release = resolve; });
+    renderGallery();
+    await screen.findByLabelText("one.jpg");
+    stub!.route({
+      method: "POST",
+      url: "/api/v1/files/tags",
+      delay: delayed,
+      body: { updated: 1, created: [], undo: { changes: [{ ids: [1], remove: ["Reviewed"] }] } },
+    });
+
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    fireEvent.keyDown(window, { key: "e" });
+    await screen.findByRole("dialog", { name: "Tag mode for one.jpg" });
+    fireEvent.keyDown(window, { key: "," });
+    fireEvent.keyDown(window, { key: " ", code: "Space" });
+    fireEvent.keyDown(window, { key: "1" });
+    await waitFor(() => expect(stub!.calls.filter((call) => call.method === "POST")).toHaveLength(1));
+    fireEvent.keyDown(window, { key: "j" });
+    await screen.findByRole("dialog", { name: "Tag mode for two.jpg" });
+
+    release?.();
+    expect(await screen.findByText(/Enter repeats tag Reviewed/)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "z" });
+    await waitFor(() => expect(document.querySelector("[data-tag-mode-status]")).not.toHaveTextContent("Enter repeats"));
+    fireEvent.keyDown(window, { key: "Enter" });
+    await Promise.resolve();
+    expect(stub!.calls.filter((call) => call.method === "POST")).toHaveLength(1);
+  });
+
   it("uses i for description editing inside Tag mode while j remains caption text", async () => {
     renderGallery();
     await screen.findByLabelText("one.jpg");
@@ -418,6 +450,67 @@ describe("Gallery", () => {
     fireEvent.keyDown(window, { key: "}", shiftKey: true });
 
     expect(await screen.findByText("Tag 2 files")).toHaveAttribute("data-tag-prompt-count");
+  });
+
+  it("navigates and ranges over the rows actually rendered by ragged capture-day grids", async () => {
+    renderGallery([
+      aFile({ id: 1, filename: "day-one-only.jpg", captured_local: "2024-03-03 10:00:00" }),
+      aFile({ id: 2, filename: "next-day-first.jpg", captured_local: "2024-03-02 10:00:00" }),
+      aFile({ id: 3, filename: "next-day-second.jpg", captured_local: "2024-03-02 09:00:00" }),
+    ]);
+    await screen.findByLabelText("day-one-only.jpg");
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Sort gallery" }), "captured");
+    await screen.findByRole("heading", { name: "March 3, 2024" });
+
+    fireEvent.keyDown(window, { key: "j" });
+    await waitFor(() => expect(tile(2)).toHaveAttribute("data-cursor", "true"));
+    stub!.route({ url: "/api/v1/tags", body: [] });
+    fireEvent.keyDown(window, { key: "k" });
+    fireEvent.keyDown(window, { key: "t" });
+    fireEvent.keyDown(window, { key: "j" });
+    expect(await screen.findByText("Tag 2 files")).toHaveAttribute("data-tag-prompt-count");
+  });
+
+  it("keeps the next capture day out of a lightbox tag-operator range", async () => {
+    renderGallery([
+      aFile({ id: 1, filename: "one.jpg", captured_local: "2024-03-02 10:00:00" }),
+      aFile({ id: 2, filename: "two.jpg", captured_local: "2024-03-02 09:00:00" }),
+      aFile({ id: 3, filename: "three.jpg", captured_local: "2024-03-01 23:00:00" }),
+    ]);
+    await userEvent.click(await screen.findByLabelText("one.jpg"));
+    stub!.route({ url: "/api/v1/tags", body: [] });
+
+    fireEvent.keyDown(window, { key: "t" });
+    fireEvent.keyDown(window, { key: "}", shiftKey: true });
+
+    expect(await screen.findByText("Tag 2 files")).toHaveAttribute("data-tag-prompt-count");
+  });
+
+  it("finishes a counted Lightbox metadata motion after loading another page", async () => {
+    const firstPage = Array.from({ length: 60 }, (_, index) =>
+      aFile({
+        id: index + 1,
+        filename: index === 0 ? "start.jpg" : index === 1 ? "first-untagged.jpg" : `tagged-${index + 1}.jpg`,
+        tags: index === 1 ? [] : ["Reviewed"],
+      }),
+    );
+    stub = stubFetch([
+      { url: /\/api\/v1\/files\?.*offset=0/, body: firstPage },
+      { url: /\/api\/v1\/files\?.*offset=60/, body: [aFile({ id: 61, filename: "second-untagged.jpg", tags: [] })] },
+    ]);
+    renderWithToasts(
+      <KeymapProvider>
+        <Gallery folder="CameraRoll" filterKey="all" onFilterChange={() => {}} onFolderChanged={() => {}} />
+      </KeymapProvider>,
+    );
+    await userEvent.click(await screen.findByLabelText("start.jpg"));
+
+    fireEvent.keyDown(window, { key: "2" });
+    fireEvent.keyDown(window, { key: "]" });
+    fireEvent.keyDown(window, { key: "u" });
+
+    expect(await screen.findByRole("dialog", { name: "second-untagged.jpg" })).toBeInTheDocument();
+    expect(stub.urls().some((url) => url.includes("offset=60"))).toBe(true);
   });
 
   it("should finish a capture-day jump after paging past a day boundary", async () => {

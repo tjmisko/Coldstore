@@ -21,6 +21,9 @@ interface OverlayProps {
   /** Most overlays use the generic exclusive scope. The tag picker has its
    * own exclusive scope so browser tests and programmatic dispatch can name it. */
   scope?: Scope;
+  /** Command-line surfaces need an exclusive key scope without pretending to
+   * be modal: no backdrop, focus trap, scroll lock, or aria-modal contract. */
+  modal?: boolean;
 }
 
 /** One overlay primitive: portal, focus trap, scroll lock, backdrop, z-index,
@@ -39,9 +42,10 @@ export function Overlay({
   className = "",
   testAttribute,
   scope = "overlay",
+  modal = true,
 }: OverlayProps) {
-  const containerRef = useFocusTrap(true);
-  useScrollLock(true);
+  const containerRef = useFocusTrap(modal);
+  useScrollLock(modal);
 
   // The overlay scope is exclusive, so no TYPED key produces a command here
   // except cancel, which means close. Anything else arriving is a programmatic
@@ -58,18 +62,19 @@ export function Overlay({
   );
   useKeymapLayer(scope, handle);
 
-  const dialogProps =
-    role === "dialog" ? ({ role: "dialog", "aria-modal": true } as const) : ({} as const);
+  const dialogProps = role === "dialog"
+    ? ({ role: "dialog", ...(modal ? { "aria-modal": true as const } : {}) } as const)
+    : ({} as const);
 
   return (
     <Portal>
       <div
         style={{ zIndex }}
-        className={`fixed inset-0 flex ${
+        className={`fixed inset-0 flex ${modal ? "bg-black/70 p-4" : "pointer-events-none p-2"} ${
           align === "top" ? "items-start pt-[10vh]" : align === "bottom" ? "items-end pb-[3vh]" : "items-center"
-        } justify-center bg-black/70 p-4`}
+        } justify-center`}
         onMouseDown={(event) => {
-          if (event.target === event.currentTarget) onClose();
+          if (modal && event.target === event.currentTarget) onClose();
         }}
       >
         <div
@@ -81,7 +86,7 @@ export function Overlay({
           tabIndex={-1}
           data-overlay={testAttribute ?? label}
           data-keyscope={scope}
-          className={`w-full outline-none ${className}`}
+          className={`w-full outline-none ${modal ? "" : "pointer-events-auto"} ${className}`}
         >
           {children}
         </div>

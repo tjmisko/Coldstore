@@ -36,6 +36,8 @@ describe("TagManager", () => {
   });
 
   it("makes an existing-name rename an explicit merge and reports affected files", async () => {
+    localStorage.setItem("coldstore.quick-tags.CameraRoll", JSON.stringify(["Trips/Icland", "", "", "", "", "", "", "", ""]));
+    localStorage.setItem("coldstore.quick-tags.Books", JSON.stringify(["Trips/Icland/Edited", "", "", "", "", "", "", "", ""]));
     stub = stubFetch([
       { url: "/api/v1/tags", body: TAGS },
       { method: "PUT", url: "/api/v1/tags/Trips%2FIcland", body: { merged: true, files_affected: 1 } },
@@ -53,9 +55,13 @@ describe("TagManager", () => {
     await waitFor(() => expect(stub!.calls.find((call) => call.method === "PUT")?.body)
       .toEqual({ name: "Trips/Iceland" }));
     expect(toasts.messages().join(" ")).toContain("Merged Trips/Icland; 1 file kept its tag assignments");
+    expect(JSON.parse(localStorage.getItem("coldstore.quick-tags.CameraRoll") ?? "[]")[0]).toBe("Trips/Iceland");
+    expect(JSON.parse(localStorage.getItem("coldstore.quick-tags.Books") ?? "[]")[0]).toBe("Trips/Iceland/Edited");
   });
 
   it("names cascade consequences before deleting a whole subtree", async () => {
+    localStorage.setItem("coldstore.quick-tags.CameraRoll", JSON.stringify(["Trips", "Trips/Iceland", "Keep", "", "", "", "", "", ""]));
+    localStorage.setItem("coldstore.quick-tags.Books", JSON.stringify(["Trips/Icland", "", "", "", "", "", "", "", ""]));
     stub = stubFetch([
       { url: "/api/v1/tags", body: TAGS },
       { method: "DELETE", url: "/api/v1/tags/Trips?cascade=1", body: { deleted: 3, files_affected: 4 } },
@@ -71,5 +77,7 @@ describe("TagManager", () => {
     await waitFor(() => expect(stub!.calls.some(
       (call) => call.method === "DELETE" && call.url === "/api/v1/tags/Trips?cascade=1",
     )).toBe(true));
+    expect(JSON.parse(localStorage.getItem("coldstore.quick-tags.CameraRoll") ?? "[]").slice(0, 3)).toEqual(["", "", "Keep"]);
+    expect(JSON.parse(localStorage.getItem("coldstore.quick-tags.Books") ?? "[]")[0]).toBe("");
   });
 });

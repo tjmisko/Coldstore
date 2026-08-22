@@ -35,22 +35,26 @@ export function TagMode({ files, index, actions, lastOperation, onClose }: TagMo
   const [carry, setCarry] = useState(false);
   const [seenIndex, setSeenIndex] = useState(index);
   const [seenOperation, setSeenOperation] = useState(lastOperation);
-  const [appliedIndex, setAppliedIndex] = useState<number | null>(null);
+  const [arrivedFromID, setArrivedFromID] = useState<number | null>(null);
   const [pending, setPending] = useState<TagOperation | null>(null);
   const quick = useQuickSlots(file?.folder_label ?? "");
   useScrollLock(true);
 
   if (seenOperation !== lastOperation) {
     setSeenOperation(lastOperation);
-    setAppliedIndex(lastOperation ? index : null);
+    if (carry && lastOperation && arrivedFromID !== null && lastOperation.ids.includes(arrivedFromID)) {
+      setPending(lastOperation);
+    }
   }
 
   // React's supported "adjust state while rendering" pattern avoids painting
   // the next file once without the carry prompt. It also avoids an effect that
   // would synchronously set state after every motion.
   if (seenIndex !== index) {
+    const departedID = files[seenIndex]?.id ?? null;
     setSeenIndex(index);
-    setPending(carry && lastOperation && appliedIndex === seenIndex ? lastOperation : null);
+    setArrivedFromID(departedID);
+    setPending(carry && lastOperation && departedID !== null && lastOperation.ids.includes(departedID) ? lastOperation : null);
   }
 
   const handle = useCallback((command: Command): boolean => {
@@ -81,7 +85,10 @@ export function TagMode({ files, index, actions, lastOperation, onClose }: TagMo
     }
     return false;
   }, [actions, file, files, onClose, pending]);
-  useKeymapLayer("tagging", handle);
+  const observeRawKey = useCallback((key: string) => {
+    if (pending && key !== "<CR>") setPending(null);
+  }, [pending]);
+  useKeymapLayer("tagging", handle, true, observeRawKey);
 
   if (!file) return null;
   const preview = resolvePreview(file);

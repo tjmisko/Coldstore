@@ -1,8 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { aFile } from "../test/fixtures";
 import { stubFetch } from "../test/harness";
-import { useFileWorkspace } from "./useFileWorkspace";
+import { ToastContext } from "../lib/toast";
+import { TAG_UNDO_TOAST_MS, useFileWorkspace } from "./useFileWorkspace";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
 
@@ -34,10 +36,15 @@ describe("useFileWorkspace tag mutations", () => {
       }
       return { ok: true, status: 200, json: async () => body } as Response;
     }));
-    const { result } = renderHook(() => useFileWorkspace({ folder: "CameraRoll", filterKey: "all" }));
+    const show = vi.fn();
+    const { result } = renderHook(
+      () => useFileWorkspace({ folder: "CameraRoll", filterKey: "all" }),
+      { wrapper: ({ children }: { children: ReactNode }) => <ToastContext value={{ show }}>{children}</ToastContext> },
+    );
     await waitFor(() => expect(result.current.files.files).toHaveLength(1));
 
     await act(async () => { await result.current.actions.tagFiles([1], ["Favorite"], []); });
+    expect(show).toHaveBeenCalledWith("success", expect.stringContaining("U to undo"), TAG_UNDO_TOAST_MS);
     await act(async () => { await result.current.actions.undoTags(); });
     expect(result.current.tagRedo).toEqual({ changes: [{ ids: [1], add: ["Favorite"] }] });
     await act(async () => { await result.current.actions.redoTags(); });

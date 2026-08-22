@@ -10,6 +10,9 @@ export interface Geometry {
   total: number;
   columns: number;
   rows: number;
+  /** Optional starts of the rows actually painted. Separate capture-day CSS
+   * grids restart after a ragged row, so `index % columns` is insufficient. */
+  rowStarts?: readonly number[];
 }
 
 export interface Span {
@@ -22,7 +25,31 @@ function sane(geometry: Geometry): Geometry {
   const columns = Math.max(1, Math.floor(geometry.columns));
   const rows = Math.max(1, Math.floor(geometry.rows));
   const index = total === 0 ? 0 : Math.min(Math.max(0, Math.floor(geometry.index)), total - 1);
-  return { index, total, columns, rows };
+  const rowStarts = geometry.rowStarts
+    ?.filter((start, at, all) => Number.isInteger(start) && start >= 0 && start < total && (at === 0 || start > all[at - 1]));
+  return { index, total, columns, rows, rowStarts: rowStarts?.length ? rowStarts : undefined };
+}
+
+function rowBounds(index: number, geometry: Geometry): { row: number; start: number; end: number; column: number } {
+  const starts = geometry.rowStarts;
+  if (!starts) {
+    const start = index - (index % geometry.columns);
+    return {
+      row: Math.floor(index / geometry.columns),
+      start,
+      end: Math.min(start + geometry.columns - 1, geometry.total - 1),
+      column: index - start,
+    };
+  }
+  let row = 0;
+  while (row + 1 < starts.length && starts[row + 1] <= index) row += 1;
+  const start = starts[row];
+  return {
+    row,
+    start,
+    end: (starts[row + 1] ?? geometry.total) - 1,
+    column: index - start,
+  };
 }
 
 /** moveRows is where every vertical motion ends up, so `j`, `<C-d>` and
@@ -33,8 +60,23 @@ function sane(geometry: Geometry): Geometry {
  *  tile in the folder; a clamp to `total - 1` would have moved the cursor
  *  sideways, which is not what `j` means anywhere else the owner types it. */
 function moveRows(delta: number, geometry: Geometry): number {
-  const { index, total, columns } = geometry;
+  const { index, total, columns, rowStarts } = geometry;
   if (delta === 0 || total === 0) return index;
+
+  if (rowStarts) {
+    const current = rowBounds(index, geometry);
+    const direction = delta < 0 ? -1 : 1;
+    const wanted = Math.max(0, Math.min(current.row + delta, rowStarts.length - 1));
+    let row = wanted;
+    while (row !== current.row) {
+      const start = rowStarts[row];
+      const end = (rowStarts[row + 1] ?? total) - 1;
+      const target = start + current.column;
+      if (target <= end) return target;
+      row -= direction;
+    }
+    return index;
+  }
 
   let target = index + delta * columns;
   if (delta > 0) {
@@ -50,18 +92,19 @@ function moveRows(delta: number, geometry: Geometry): number {
  *  nothing returns an index outside the list. */
 export function resolveMotion(motion: MotionId, count: number, geometry: Geometry): number {
   const geo = sane(geometry);
-  const { index, total, columns, rows } = geo;
+  const { index, total, rows } = geo;
   if (total === 0) return 0;
 
   const n = count > 0 ? count : 1;
-  const column = index % columns;
-  const rowStart = index - column;
+  const bounds = rowBounds(index, geo);
+  const column = bounds.column;
+  const rowStart = bounds.start;
 
   switch (motion) {
     case "left":
       return rowStart + Math.max(0, column - n);
     case "right": {
-      const lastColumn = Math.min(columns - 1, total - 1 - rowStart);
+      const lastColumn = bounds.end - rowStart;
       return rowStart + Math.min(lastColumn, column + n);
     }
     case "up":
@@ -71,7 +114,7 @@ export function resolveMotion(motion: MotionId, count: number, geometry: Geometr
     case "row-start":
       return rowStart;
     case "row-end":
-      return Math.min(rowStart + columns - 1, total - 1);
+      return bounds.end;
     case "first":
       // `gg` is the first item; `12gg` is item 12. Vim's rule, and the reason
       // NO_COUNT has to be distinguishable from a count of 1.
@@ -144,8 +187,8 @@ export function visualSpan(
   const to = Math.max(0, Math.min(hi, geo.total - 1));
   if (!linewise) return { from, to };
 
-  const rowStart = from - (from % geo.columns);
-  const rowEnd = Math.min(to - (to % geo.columns) + geo.columns - 1, geo.total - 1);
+  const rowStart = rowBounds(from, geo).start;
+  const rowEnd = rowBounds(to, geo).end;
   return { from: rowStart, to: rowEnd };
 }
 
