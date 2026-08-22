@@ -51,6 +51,8 @@ grace_period_minutes = 10
 
 [server]
 listen_addr = "127.0.0.1:9090"
+auth_mode = "tailscale"
+tailscale_allowed_users = ["owner@example.com", "co-owner@example.com"]
 
 [[folders]]
 label = "Photos"
@@ -93,6 +95,12 @@ budget = "5GB"
 	}
 	if cfg.Server.ListenAddr != "127.0.0.1:9090" {
 		t.Errorf("ListenAddr = %q, want 127.0.0.1:9090", cfg.Server.ListenAddr)
+	}
+	if cfg.Server.AuthenticationMode() != AuthModeTailscale {
+		t.Errorf("AuthenticationMode = %q, want %q", cfg.Server.AuthenticationMode(), AuthModeTailscale)
+	}
+	if len(cfg.Server.TailscaleAllowedUsers) != 2 || cfg.Server.TailscaleAllowedUsers[1] != "co-owner@example.com" {
+		t.Errorf("TailscaleAllowedUsers = %v, want the two configured logins", cfg.Server.TailscaleAllowedUsers)
 	}
 
 	if len(cfg.Folders) != 2 {
@@ -187,6 +195,8 @@ cold_storage_path = "/srv/coldstore"
 
 [server]
 listen_addr = "0.0.0.0:8090"
+auth_mode = "tailscale"
+tailscale_allowed_users = ["private-login@example.com"]
 username = "file-user-secret"
 password = "file-password-secret"
 
@@ -205,7 +215,7 @@ budget = "10GB"
 	if err != nil {
 		t.Fatalf("LoadForInspection rejected an offline report config: %v", err)
 	}
-	if cfg.Server.Username != "" || cfg.Server.Password != "" ||
+	if cfg.Server.Username != "" || cfg.Server.Password != "" || len(cfg.Server.TailscaleAllowedUsers) != 0 ||
 		cfg.Syncthing.APIURL != "" || cfg.Syncthing.APIKey != "" ||
 		cfg.Folders[0].SyncthingID != "" {
 		t.Errorf("inspection config retained secrets or device identifiers: %+v", cfg)

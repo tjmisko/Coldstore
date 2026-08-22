@@ -65,6 +65,109 @@ func TestShouldStartWhenBoundToLoopbackWithoutCredentials(t *testing.T) {
 	}
 }
 
+func TestShouldAcceptTailscaleAuthOnlyOnLoopbackWithAnAllowlist(t *testing.T) {
+	s := &ServerConfig{
+		ListenAddr:            DefaultListenAddr,
+		AuthMode:              AuthModeTailscale,
+		TailscaleAllowedUsers: []string{"owner@example.com", "co-owner@example.com"},
+	}
+	if err := ValidateServerBinding(s); err != nil {
+		t.Fatalf("valid Tailscale Serve auth config = %v", err)
+	}
+	if got := s.AuthenticationMode(); got != AuthModeTailscale {
+		t.Errorf("AuthenticationMode = %q, want %q", got, AuthModeTailscale)
+	}
+}
+
+func TestShouldRejectUnsafeTailscaleAuthConfigurations(t *testing.T) {
+	tests := map[string]struct {
+		server ServerConfig
+		want   string
+	}{
+		"missing allowlist": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: AuthModeTailscale},
+			want:   "at least one exact Tailscale login",
+		},
+		"network listener": {
+			server: ServerConfig{ListenAddr: "192.168.1.10:8090", AuthMode: AuthModeTailscale, TailscaleAllowedUsers: []string{"owner@example.com"}},
+			want:   "could forge Tailscale identity headers",
+		},
+		"Basic credentials remain": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: AuthModeTailscale, TailscaleAllowedUsers: []string{"owner@example.com"}, Username: "old", Password: "old"},
+			want:   "cannot be combined with Basic Auth credentials",
+		},
+		"blank login": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: AuthModeTailscale, TailscaleAllowedUsers: []string{""}},
+			want:   "entry 1 is empty",
+		},
+		"login with whitespace": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: AuthModeTailscale, TailscaleAllowedUsers: []string{" owner@example.com"}},
+			want:   "leading or trailing whitespace",
+		},
+		"duplicate login": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: AuthModeTailscale, TailscaleAllowedUsers: []string{"owner@example.com", "owner@example.com"}},
+			want:   "duplicate login",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateServerBinding(&tt.server)
+			if err == nil {
+				t.Fatal("unsafe Tailscale authentication config was accepted")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldRejectAmbiguousOrUnknownAuthenticationModes(t *testing.T) {
+	tests := map[string]struct {
+		server ServerConfig
+		want   string
+	}{
+		"explicit Basic without credentials": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: AuthModeBasic},
+			want:   EnvPassword,
+		},
+		"Tailscale users without mode": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, TailscaleAllowedUsers: []string{"owner@example.com"}},
+			want:   "requires auth_mode",
+		},
+		"Tailscale users in Basic mode": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: AuthModeBasic, TailscaleAllowedUsers: []string{"owner@example.com"}, Username: "owner", Password: "secret"},
+			want:   "cannot be combined",
+		},
+		"unknown mode": {
+			server: ServerConfig{ListenAddr: DefaultListenAddr, AuthMode: "proxy-magic"},
+			want:   "not supported",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateServerBinding(&tt.server)
+			if err == nil {
+				t.Fatal("ambiguous authentication config was accepted")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %q, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthenticationModeShouldPreserveLegacyBasicAuthInference(t *testing.T) {
+	if got := (ServerConfig{Username: "owner", Password: "secret"}).AuthenticationMode(); got != AuthModeBasic {
+		t.Errorf("credentials inferred mode %q, want %q", got, AuthModeBasic)
+	}
+	if got := (ServerConfig{}).AuthenticationMode(); got != AuthModeNone {
+		t.Errorf("credential-free mode = %q, want %q", got, AuthModeNone)
+	}
+}
+
 func TestShouldRefuseToStartWhenOnlyOneCredentialIsSet(t *testing.T) {
 	cases := map[string]ServerConfig{
 		"username without password": {ListenAddr: DefaultListenAddr, Username: "owner"},
@@ -75,9 +178,9 @@ func TestShouldRefuseToStartWhenOnlyOneCredentialIsSet(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			err := ValidateServerBinding(&s)
 			if err == nil {
-				t.Fatal("half a credential was accepted; basic auth would be silently disabled")
+				t.Fatal("half a credential was accepted")
 			}
-			if !strings.Contains(err.Error(), "silently disabled") {
+			if !strings.Contains(err.Error(), "Basic Auth is incomplete") {
 				t.Errorf("message does not explain the consequence: %v", err)
 			}
 		})

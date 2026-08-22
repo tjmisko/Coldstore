@@ -24,13 +24,12 @@ documents and tagging-design branches are already integrated; do not merge them 
    only unfinished part of `TASKLIST.md` item 8.
 4. Tagging implementation issues #1–#14 are complete locally. The unfiled XMP export
    follow-up, GitHub tracker bookkeeping and external verification/deployment gates remain.
-5. The owner selected Tailscale Serve plus Basic Auth for v1. Prepare a loopback-only,
-   no-Funnel runbook; do not deploy it without separate approval. Public guest sessions are
-   deferred, with opaque browser tokens and scoped API tokens available as later upgrades.
-   Two co-owners share one stored Basic Auth credential, and remote access deliberately
-   retains the full existing mutating web UI/API. The second co-owner will use a separate
-   Tailscale account and has not been onboarded; prefer a revocable server-machine share.
-   Serve/Funnel/loopback-auth preflight passed; tailnet policy review is the next gate.
+5. Tailscale Serve HTTPS is operational and the owner verified it through the temporary
+   production Basic Auth gate. The selected application gate is now an exact two-login
+   Tailscale identity allowlist, with separately revocable co-owners and full existing
+   mutating UI/API access. The implementation is on this branch; keep the backend loopback,
+   never enable Funnel, and follow `onboarding.md` for the owner-mediated build/config/restart
+   and second-account machine share. Basic Auth must remain until the new binary is deployed.
 6. Treat every production/deployment checkbox as owner-mediated. No host access or rollout
    was authorized during this integration.
 

@@ -39,6 +39,7 @@ func newReportFixture(t *testing.T) *reportFixture {
 		Daemon:  config.DaemonConfig{CatalogSyncIntervalMinutes: 30},
 		Server: config.ServerConfig{
 			Username: "server-user-secret", Password: "server-password-secret",
+			TailscaleAllowedUsers: []string{"private-tailscale-login"},
 		},
 		Syncthing: config.SyncthingConfig{APIURL: "http://private-device:8384", APIKey: "api-key-secret"},
 		Folders: []config.FolderConfig{{
@@ -281,7 +282,7 @@ func TestReportShouldSurfaceStaleScanWedgeJobsFailuresAndSafeEvents(t *testing.T
 	}
 	combined := human.String() + structured.String()
 	for _, secret := range []string{
-		"server-user-secret", "server-password-secret", "api-key-secret", "private-device",
+		"server-user-secret", "server-password-secret", "private-tailscale-login", "api-key-secret", "private-device",
 		"syncthing-device-folder-id", "catalog-device-id", "thumbnail-secret-detail",
 		"metadata-secret-detail", "job-secret-detail", "scan failure secret", "conflict secret",
 		"private/path", "data safety secret",

@@ -1,7 +1,7 @@
 # Coldstore Deployment Runbook
 
 **Deploying for the first time?** Read
-[Security posture](#security-posture-lan-only-basic-auth), then work straight
+[Security posture](#security-posture-explicit-authentication-boundary), then work straight
 through [First deployment on a fresh Debian box](#first-deployment-on-a-fresh-debian-box).
 Everything after that is reference material.
 
@@ -124,7 +124,7 @@ make test           # go test ./...
 
 ---
 
-## Security posture: LAN only, basic auth
+## Security posture: explicit authentication boundary
 
 Read this before you change `listen_addr`.
 
@@ -136,43 +136,41 @@ propagate that deletion to every device you own. An unauthenticated
 `POST /api/v1/jobs {"action":"archive"}` is a remote delete button for your phone's
 camera roll.
 
-The currently shipped posture is deliberately small and remains authoritative until a
-separate public guest surface is implemented:
+The server supports three deliberate shapes:
 
-| | |
+| Shape | Reachability and authentication |
 |---|---|
-| Reachability | LAN only. Never port-forwarded, never on a public address. |
-| Authentication | HTTP Basic Auth, checked in constant time on every route. |
-| Transport | Plain HTTP. **Cleartext basic auth on the LAN is an accepted tradeoff.** |
-| Not present, on purpose | TLS, reverse proxy, sessions, OAuth, user accounts, roles. |
+| Local/SSH tunnel | Loopback, no application authentication. |
+| LAN compatibility | One explicit LAN address plus HTTP Basic Auth, checked in constant time. Never port-forward it. |
+| Selected private owner path | Loopback plus Tailscale Serve HTTPS and an exact `Tailscale-User-Login` allowlist. Never Funnel. |
 
-A home LAN daemon does not need an identity system. It does need to be impossible
-to leave open by accident, which is what the rest of this section is about.
+An omitted `auth_mode` preserves the legacy behavior: complete Basic credentials select
+Basic Auth; otherwise only a loopback listener is allowed. An explicit Tailscale mode adds a
+stronger refusal: it is never accepted on a network-visible listener.
 
-### Selected v1 remote path — Tailscale Serve, not yet deployed
+### Selected v1 remote path — Tailscale Serve identity
 
 The owner selected Tailscale Serve for private HTTPS access from their iPhone, macOS, Linux
-and Windows devices, with Basic Auth retained as a second application gate. Tailscale is
-already installed for another project on several owner devices. The intended shape is:
+and Windows devices. Serve is configured and the owner has verified the HTTPS path with the
+temporary production Basic Auth gate. The application target is:
 
 ```text
 owner browser -> private Tailscale HTTPS -> Tailscale Serve -> 127.0.0.1:8090
-                                                       -> coldstore Basic Auth
+                                                       -> exact login allowlist
 ```
 
 Keep `listen_addr` on loopback. Do not enable Tailscale Funnel, do not expose the raw port,
-and do not trust Tailscale identity headers for v1 authorization. A reviewed command/runbook
-and separate owner approval are required before changing the host. Public guest access and
-application sessions are deferred; future browser sessions can use opaque revocable cookie
-tokens without replacing the Tailscale transport.
+and do not place another proxy path around Serve. Serve removes caller-supplied identity
+headers and inserts `Tailscale-User-Login`; Coldstore accepts only exact configured logins.
+It rejects missing/unlisted identities, applies same-origin checks to browser mutations and
+records each accepted mutation's login in the journal. This trust is safe only because the
+backend is loopback-only. A local process on the server remains inside that trust boundary.
 
-This is full owner access, not a remote viewer. After Tailscale and Basic Auth succeed, the
+This is full owner access, not a remote viewer. After Tailscale identity succeeds, the
 existing web UI/API retains archive, restore, rename, tagging, configuration and every other
-current operation. Two co-owners will share the existing credential, which is already stored
-in the owner's password manager. That is intentional, so every admitted tailnet device and
-both credential holders remain part of the control-plane trust boundary. Basic Auth cannot
-attribute actions to one co-owner or revoke them independently; accept that limitation for
-v1 and use separate identities/tokens if it becomes unacceptable.
+current operation. Each co-owner has a separately revocable Tailscale login; no shared
+Coldstore password is distributed. Basic Auth remains a supported alternative deployment
+mode, not a fallback that bypasses the Tailscale allowlist.
 
 The second co-owner is not yet onboarded and will use a separate Tailscale account. Prefer a
 revocable share of this server machine over inviting that account into the whole tailnet;
@@ -222,9 +220,9 @@ and [Cloudflare media policy](https://developers.cloudflare.com/fundamentals/ref
 
 ### The startup refusal
 
-**coldstore refuses to start when `listen_addr` is not loopback and either
-credential is empty.** This is a hard error, exit 1, before the catalog is opened
-and before any socket is bound. There is no flag to skip it.
+**Coldstore refuses a non-loopback listener without complete Basic credentials, and refuses
+Tailscale identity mode on every non-loopback listener.** These are hard errors before the
+catalog opens or a socket binds. There is no override flag.
 
 ```
 $ coldstore --config /etc/coldstore/coldstore.toml
@@ -251,7 +249,7 @@ is `0.0.0.0` -- the exact outcome the example exists to prevent. Loopback works
 verbatim on any machine, and it is genuinely usable over an SSH tunnel with zero
 network exposure.
 
-To reach the UI from your phone or laptop, do both of these:
+To use the Basic Auth LAN compatibility shape, do both of these:
 
 1. Set `listen_addr` to **this machine's actual LAN address**, e.g.
    `192.168.1.10:8090`. Not `0.0.0.0:8090`: a wildcard bind also listens on any
@@ -296,9 +294,10 @@ environment wins when both are present.
 - **There is no rate limiting and no lockout.** The constant-time comparison stops
   a byte-by-byte timing oracle, not an offline-speed guessing attack. Use a long
   random password, not a memorable one.
-- **There is no CSRF protection.** With basic auth the browser will attach
-  credentials to a cross-site form post once you have authenticated. Do not leave
-  the tab authenticated on a machine you are also browsing untrusted sites from.
+- **Basic Auth mode has no CSRF protection.** A browser can attach cached Basic credentials
+  to a cross-site form post. Tailscale identity mode separately rejects cross-site browser
+  mutations using `Origin` and Fetch Metadata, while permitting headerless non-browser API
+  clients through Serve.
 - **`IPAddressAllow=` in the unit is defence in depth, not the control.** The
   control is the bind address plus the credential.
 
@@ -663,11 +662,12 @@ journalctl -u coldstore -b --no-pager | head -40
 ```
 
 Expect, in order: `seeded folder policy from coldstore.toml` once per folder,
-`API server starting ... authenticated=true`, `running initial catalog scan`, one
+`API server starting ... auth_mode=basic` (or `auth_mode=tailscale`),
+`running initial catalog scan`, one
 `folder scan complete` per folder, then `thumbnail pass complete`.
 
-`authenticated=false` in that line means the daemon is on loopback with no
-credentials. On any other address it could not have started at all.
+`auth_mode=none` means the daemon is on loopback with no application authentication. On any
+other address it could not have started at all.
 
 Then from another machine on the LAN:
 
@@ -750,7 +750,8 @@ coldstore --config /etc/coldstore/coldstore.toml --status --json
 ```
 
 `--status` is an inspection mode, not daemon startup. It does not load credential
-environment variables, require Basic Auth for the configured listener, perform
+environment variables, retain Tailscale login identities, enforce the configured server
+authentication mode, perform
 writability probes, reconcile TOML, resume jobs, scan folders, migrate SQLite, create a
 catalog, change journal mode, or write the schema marker. `--json` is valid only with
 `--status`; `--status`, `--check`, and `--scan` are mutually exclusive.
@@ -812,7 +813,9 @@ volume rather than an empty mountpoint directory, and that the unit's
 | Config parses as TOML | `parsing config: ...` | yes |
 | `listen_addr` is `host:port` | `not a valid host:port` | yes |
 | Non-loopback bind has credentials | `refusing to start: ...` | yes |
-| Both credentials set, or neither | `basic auth would be silently disabled` | yes |
+| Both credentials set, or neither | `Basic Auth is incomplete` | yes |
+| Tailscale auth is loopback-only | `could forge Tailscale identity headers` | yes |
+| Tailscale auth has an exact login allowlist | `requires at least one exact Tailscale login` | yes |
 | At least one `[[folders]]` block | `no [[folders]] are declared` | yes |
 | `cold_storage_path` is absolute | `must be absolute` | yes |
 | `cold_storage_path` exists and is a directory | `does not exist. coldstore will not create it` | yes |
@@ -975,13 +978,15 @@ Where it applies:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `listen_addr` | string | `"127.0.0.1:8090"` | Address and port for the web UI and REST API. **Loopback by default.** Any other value requires credentials -- see [Security posture](#security-posture-lan-only-basic-auth). |
+| `listen_addr` | string | `"127.0.0.1:8090"` | Address and port for the web UI and REST API. **Loopback by default.** Any other value requires Basic credentials; Tailscale identity mode always requires loopback. |
+| `auth_mode` | string | `""` | `"tailscale"` requires Serve identity and the exact allowlist; `"basic"` explicitly selects Basic Auth. Empty preserves legacy inference from credentials. |
+| `tailscale_allowed_users` | string array | `[]` | Exact `Tailscale-User-Login` values admitted in Tailscale mode. At least one is required; private production identities do not belong in tracked files. |
 | `username` | string | `""` | HTTP Basic Auth username. Overridden by `COLDSTORE_USERNAME`. |
 | `password` | string | `""` | HTTP Basic Auth password. Overridden by `COLDSTORE_PASSWORD`. Prefer the environment variable so the password is not in this file. |
 
-Both credential fields must be set or neither. Setting one and not the other is a
-startup error, because `Server.Handler()` falls back to the bare mux when either
-is empty -- you would believe auth was on when it was off.
+Both credential fields must be set or neither. Setting one and not the other is a startup
+error, and the HTTP handler also fails closed if an invalid configuration somehow reaches
+it. Tailscale mode rejects either Basic credential rather than retaining a bypass path.
 
 | Environment variable | Effect |
 |---|---|
@@ -1520,7 +1525,9 @@ precise threshold.
 | Level | Message | Meaning |
 |---|---|---|
 | `INFO` | `coldstore daemon starting` | Daemon started successfully. |
-| `INFO` | `API server starting` | Carries `addr` and `authenticated`. `authenticated=false` is only reachable on a loopback bind -- on any other address the daemon refuses to start. |
+| `INFO` | `API server starting` | Carries `addr` and `auth_mode` (`none`, `basic`, or `tailscale`). `none` and `tailscale` are loopback-only. |
+| `INFO` | `API mutation completed` | Audit record containing authenticated `actor`, `auth_provider`, method, path, status and duration. Tailscale mode attributes each mutation to its exact login. |
+| `WARN` | `cross-origin API mutation rejected` | Tailscale-authenticated browser attempted a mutation from a foreign origin. The handler was not run. |
 | `WARN` | `API server starting without authentication; reachable only from this host` | Loopback bind with no credentials. Fine for an SSH-tunnel setup; wrong if you meant to expose it on the LAN. |
 | `WARN` | `preflight` | A folder path is missing or has no `.stfolder`. Not fatal -- the folder is skipped until it appears. Persisting past the boot means a real mount or path problem. |
 | `INFO` | `running initial catalog scan` | Startup scan in progress. |
@@ -1671,7 +1678,10 @@ binding a port, and prints the same message the daemon would.
 | Message starts with | Meaning | Fix |
 |---|---|---|
 | `refusing to start: [server] listen_addr` | Non-loopback bind with no credentials. | Set `COLDSTORE_USERNAME`/`COLDSTORE_PASSWORD`, or bind loopback. See [the startup refusal](#the-startup-refusal). There is no override flag. |
-| `[server] username is set but password is empty` | Half a credential; basic auth would be silently off. | Set both, or neither. |
+| `[server] username is set but password is empty` | Half a credential; Basic Auth is incomplete. | Set both, or neither. |
+| `[server] auth_mode = "tailscale" requires a loopback` | A direct network listener could accept forged identity headers. | Restore `127.0.0.1:8090` and use only Tailscale Serve HTTPS. |
+| `[server] auth_mode = "tailscale" cannot be combined` | Basic credentials remain in TOML or the service environment. | Remove both Basic credentials as one reviewed change; do not print the environment file. |
+| `[server] auth_mode = "tailscale" requires at least one` | The exact-login allowlist is empty. | Add the intended owner login(s) to `tailscale_allowed_users`. |
 | `[server] listen_addr ... is not a valid host:port` | Missing port, or a stray space. | `"192.168.1.10:8090"`. |
 | `no [[folders]] are declared` | Empty or truncated config, or the wrong `--config` path. | Check the path in `ExecStart=`. |
 | `cold_storage_path ... does not exist` | The volume is not mounted, or a typo. | `findmnt /srv/coldstore`; then `btrfs device stats` or `zpool status`. coldstore will not create it. |

@@ -57,8 +57,8 @@ The current product designs are:
 - `docs/keymap-design.md` — keyboard grammar and interaction contract; and
 - `docs/tagging-design.md` — verified metadata findings plus the tagging, Live Photo and
   rename plan; and
-- `docs/access-and-export-interview.md` — plain-language XMP guidance, access/session
-  options and the pending owner decision record.
+- `docs/access-and-export-interview.md` — plain-language XMP guidance plus the decided
+  Tailscale owner-auth and deferred public-session record.
 
 The operational co-owner procedure is `onboarding.md`. It exposes only Coldstore HTTPS over
 Tailscale, contains no private identifiers, and does not authorize production changes.

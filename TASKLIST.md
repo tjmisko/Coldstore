@@ -153,14 +153,21 @@ it was a real half-archive data bug.
 Use `docs/access-and-export-interview.md` to record the owner choices that gate this section.
 
 - [x] Treat the current loopback SSH tunnel as the safe interim state.
-- [x] Select Tailscale Serve plus Basic Auth for v1 owner access. Public-domain,
-      zero-install guest access is deferred until it becomes a real requirement.
-- [x] Keep the coldstore listener private; do not expose the raw Basic Auth port directly to
-      the public internet.
+- [x] Select Tailscale Serve plus exact-login application authentication for v1 owner access.
+      Public-domain, zero-install guest access is deferred until it becomes a real requirement.
+- [x] Keep the coldstore listener private; do not expose raw port 8090 directly to the LAN,
+      tailnet or public internet.
 - [x] Add an owner-facing Tailscale Serve runbook that proxies HTTPS only to the loopback
-      listener, retains Basic Auth, does not enable Funnel and includes rollback/revocation.
+      listener, uses separately revocable Tailscale identities, does not enable Funnel and
+      includes rollback/revocation.
       Cover sharing the server with the second co-owner's separate Tailscale account without
       admitting that account to unrelated tailnet resources. See `onboarding.md`.
+- [x] Implement `auth_mode = "tailscale"` with an exact login allowlist, whole-mux protection,
+      loopback-only validation, fail-closed header parsing and no Basic Auth bypass.
+- [x] Reject cross-origin browser mutations in Tailscale mode and journal accepted mutations
+      with login, authentication provider, method, path and response status.
+- [ ] Deploy the reviewed identity build, remove the temporary Basic credentials from the
+      service environment, and verify direct loopback requests fail without a Serve identity.
 - [ ] After separate owner approval, verify the private URL from iPhone, macOS, Linux and
       Windows where available, including one off-LAN connection and the existing mutating
       owner API. Do not expose the raw port or create a reduced remote-only API.
@@ -173,7 +180,7 @@ Use `docs/access-and-export-interview.md` to record the owner choices that gate 
 
 These are future public/guest requirements, not v1 blockers. A later token upgrade can use
 opaque, revocable server-side browser sessions and separately scoped API bearer tokens;
-Tailscale plus Basic Auth does not prevent either migration.
+Tailscale identity authentication does not prevent either migration.
 
 - [ ] Add owner password-to-opaque-session exchange with `HttpOnly`, `SameSite=Lax`, `Path=/`
       cookie, plus individually revocable and expiring read-only guest grants.

@@ -222,8 +222,16 @@ func reportPreflight(w io.Writer, cfg *config.Config, configPath string, warning
 		reach = "this host only"
 	}
 	auth := "DISABLED"
-	if cfg.Server.Username != "" && cfg.Server.Password != "" {
+	switch cfg.Server.AuthenticationMode() {
+	case config.AuthModeBasic:
 		auth = "basic auth as " + cfg.Server.Username
+	case config.AuthModeTailscale:
+		count := len(cfg.Server.TailscaleAllowedUsers)
+		principal := "users"
+		if count == 1 {
+			principal = "user"
+		}
+		auth = fmt.Sprintf("Tailscale Serve identity allowlist (%d %s)", count, principal)
 	}
 
 	fmt.Fprintf(w, "config           %s\n", configPath)

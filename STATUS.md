@@ -1,11 +1,13 @@
 # Status — coldstore closeout
 
-Snapshot date: 2026-08-21. Integrated code state: `feat/interface-refresh` through
-`0ed5572`. The Git tree is authoritative for changes after this snapshot.
+Snapshot date: 2026-08-21. Integrated code state: the current `feat/interface-refresh`
+working tree and draft PR #16. The Git tree is authoritative; production remains separate.
 
 ## Executive state
 
-- Production is live behind Basic Auth on a loopback listener reached by SSH tunnel.
+- Production Coldstore remains on its existing loopback + Basic Auth gate and is reachable
+  through both the prior SSH tunnel and the newly configured private Tailscale Serve HTTPS
+  proxy. The identity-aware binary/configuration is not deployed yet.
 - Production remains at repository commit `37ad497` and catalog schema 2. Nothing from this
   integration was deployed or run against the host.
 - Local `main` is `9bcb7e8`, nine commits ahead of the deployed baseline, including the real
@@ -15,8 +17,8 @@ Snapshot date: 2026-08-21. Integrated code state: `feat/interface-refresh` throu
   migration 8; the locally supported schema is 8.
 - The folder-label identity guard, Live Photo atomicity, metadata/tagging/search surfaces and
   durable rename jobs are implemented locally and tested. None is deployed.
-- All GitHub issues were still open at the last reachable snapshot. Issue-body migration
-  edits could not be made because `api.github.com` is unreachable from this environment.
+- GitHub connectivity is restored and draft PR #16 tracks this branch. The issue-body
+  migration-number bookkeeping remains separate follow-up work.
 
 ## Integrated repository state
 
@@ -102,25 +104,25 @@ already-offloaded archive rows.
 
 ## Access and authority
 
-- Current access is the safe interim state: loopback + Basic Auth + SSH tunnel.
-- The owner selected Tailscale Serve plus Basic Auth for v1 private access. Tailscale is
-  already installed for another project on several owner devices. The selected topology is
-  not yet deployed or authorized for deployment.
-- Keep the backend loopback-only, do not enable Funnel, and do not trust Tailscale identity
-  headers for v1. A future token upgrade can add opaque browser sessions and separately
-  scoped API bearer tokens without changing the Tailscale transport.
+- Current production application auth remains loopback + Basic Auth until the new identity
+  build is deployed. Tailscale Serve HTTPS is now enabled on the server, and the owner
+  successfully loaded Coldstore through it using the temporary Basic gate.
+- The selected v1 application auth is an exact allowlist of Tailscale Serve login identities.
+  The implementation refuses non-loopback binding, rejects missing/unlisted headers and
+  cross-origin browser mutations, and attributes accepted mutations in the journal. Keep
+  Funnel disabled and the raw listener private.
 - An authenticated remote owner receives the same full web UI/API as at home, including all
   existing mutating operations. No read-only remote owner role is planned for v1.
-- Two co-owners will share the existing Basic Auth credential, already stored in the owner's
-  password manager. Per-person attribution and revocation are deferred to later identities
-  or tokens.
+- Two co-owners use separate Tailscale identities, allowing per-person attribution and
+  revocation. The existing Basic credential remains only as temporary production/rollback
+  material and is not shared for the new onboarding.
 - The second co-owner is not yet onboarded and will use a separate Tailscale account. The
   selected least-privilege path is a revocable share of the server machine, restricted to
   TCP 443 and the Coldstore Serve proxy. SSH, Syncthing, raw port 8090 and every other server
   service remain out of scope. `onboarding.md` is the runbook.
-- Owner-provided preflight on 2026-08-21 confirmed Tailscale 1.102.3, no existing Serve or
-  Funnel configuration, and the expected `401` Basic challenge from the loopback Coldstore
-  listener. Tailnet policy review is the next gate; no Serve configuration has been applied.
+- Owner-provided preflight on 2026-08-21 confirmed Tailscale 1.102.3, the initial absence of
+  Serve/Funnel configuration and the expected loopback Basic challenge. The owner then
+  reviewed the restricted tailnet policy, enabled Serve and verified the private HTTPS URL.
 - Public-domain, zero-install guest access is deferred. If selected later, it requires a
   domain/proxy trust boundary, session authentication, app-enforced authorization, CSRF
   defense and rate limiting.
@@ -138,8 +140,9 @@ already-offloaded archive rows.
 
 ### Product and operations
 
-- Prepare the loopback-only Tailscale Serve runbook, then complete an owner-approved
-  cross-platform/off-LAN verification. Public session auth is deferred beyond v1.
+- Finish review/CI for the loopback-only Tailscale identity implementation, then complete an
+  owner-approved build/config/restart and cross-platform/off-LAN verification using
+  `onboarding.md`. Public guest sessions remain deferred.
 - Run Playwright and the live Syncthing tier in a listener-capable environment.
 - Benchmark PDF thumbnail generation on the actual two-core host from owner-provided output.
 - Complete the owner-mediated backup, deployment, throwaway quota, snapshot and Syncthing

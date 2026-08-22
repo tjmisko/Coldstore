@@ -26,17 +26,20 @@ The plain-language option comparison, staged recommendation and unanswered owner
 are maintained in `docs/access-and-export-interview.md`. This section remains the technical
 acceptance contract after those decisions are made.
 
-**V1 decision, 2026-08-21:** use Tailscale Serve for private HTTPS access from the owner's
-devices, proxy only to the loopback listener, and retain Basic Auth as the application gate.
-The owner already has Tailscale on several machines. Do not use Funnel, expose the raw port,
-or trust Serve identity headers for v1. An authenticated remote owner receives the same full
-web UI/API and mutating operations available at home; there is no reduced remote role.
+**V1 decision, updated 2026-08-21:** use Tailscale Serve for private HTTPS access from the
+owner's devices and proxy only to the loopback listener. Coldstore authenticates an exact
+allowlist using Serve's sanitized `Tailscale-User-Login` header, refuses this mode on a
+non-loopback listener, rejects cross-origin browser mutations and attributes accepted
+mutations. The owner already has Tailscale on several machines. Do not use Funnel or expose
+the raw port. An authenticated remote owner receives the same full web UI/API and mutating
+operations available at home; there is no reduced remote role.
 Public-domain, zero-install guest access and its session/authorization work are deferred;
 B2, B3, B6, B7 and B9 are not v1 blockers.
 
-The current loopback SSH tunnel is the safe interim owner path. Tailscale Serve is also a
-good private owner/admin path, but it cannot satisfy the guest requirement without making
-every guest install a client and join the tailnet.
+Tailscale Serve is now the operational private transport, with Basic Auth remaining only
+until the identity-aware build is deployed. The loopback SSH tunnel remains a rollback path.
+This private design cannot satisfy a casual guest requirement without making every guest
+install Tailscale and accept a machine share.
 
 The smallest credible public candidate is a purchased-domain, DNS-only hostname terminating
 at Caddy, with only ports 80/443 forwarded to Caddy and Caddy proxying to
@@ -47,9 +50,10 @@ IPv6 firewalling and an owner-selected domain/DNS/DDNS arrangement. See
 [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https) and
 [reverse-proxy streaming behavior](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
 
-Direct Caddy is **not safe with today's application auth**. Basic Auth grants the whole
-mutating mux. The public hostname must be a read-only guest surface backed by individually
-revocable, expiring grants; owner/admin operations remain private. Authorization must be
+Direct Caddy is **not safe with the private Tailscale application auth** because Caddy does
+not establish the selected Serve identity. A public hostname must be a read-only guest
+surface backed by individually revocable, expiring grants; owner/admin operations remain
+private. Authorization must be
 enforced in Go on API, thumbnail, preview and download routes, not by hiding buttons or by
 Caddy method filters alone.
 
@@ -406,14 +410,12 @@ Not in the owner's notes -- found by screenshotting the running UI at 1440x900 a
 
 ## Decisions (owner interview, 2026-08-21)
 
-1. **Access -- still open.** The owner had not met Tailscale, and asked back: *"Is it possible
-   to setup full web routing with a domain name? Might that be the way to go?"* They also
-   want **guests** to be able to reach it ("other people's devices -- a guest showing photos,
-   a family member"), which is the one requirement Tailscale genuinely cannot serve: a guest
-   would have to install a VPN and be invited to the tailnet. That pushes toward a real
-   domain, which changes B6 from optional to required. Not resolved; see "Still open" below.
-2. **Auth: keep basic auth for now**, with the note *"we may revisit this if we do full web"* --
-   i.e. B6/B7 becomes mandatory if the domain path wins.
+1. **Private owner access decided.** Use Tailscale Serve HTTPS to the loopback backend. The
+   public-domain question now applies only to a future zero-install guest surface, which is
+   deferred beyond v1.
+2. **Private auth updated.** Use an exact allowlist of sanitized Tailscale Serve login headers,
+   with same-origin mutation checks and journal attribution. Basic Auth remains temporary in
+   production until that build is deployed and remains a compatibility mode elsewhere.
 3. **Dark only.** No light mode. Design for dark properly.
 4. **Aesthetic: restrained and utilitarian** -- `htop`/`lazygit`/Prometheus register, dense
    and high-information, colour only where it means something. But explicitly: *"The existing
@@ -438,14 +440,15 @@ Not in the owner's notes -- found by screenshotting the running UI at 1440x900 a
     keyboard-driven culling flow, durable path rename, and capture-date + location metadata
     are implemented locally through issues #1–#14; see `docs/tagging-design.md`.
 
-## Still-open access decision
+## Deferred guest-access decision
 
-The sole unresolved product-access decision is **domain/topology and guest scope**. Other
-project work remains externally gated in `TASKLIST.md`, but this decision is what blocks
-section B's session-auth implementation.
+The sole unresolved product-access decision is **future public domain/topology and guest
+scope**. It does not block v1 private-owner access. It does block section B's public
+session/guest authorization work if that work is resumed.
 
-- Tailscale covers the owner's own phone and laptops, on and off the LAN, free, with a real
-  certificate and no code change. It cannot serve a guest without that guest installing a VPN.
+- Tailscale covers the two co-owners' phones and laptops, on and off the LAN, with a real
+  certificate and a small identity-aware backend mode. It cannot serve a casual guest without
+  that guest installing Tailscale and accepting a machine share.
 - A purchased domain (~$15/yr) plus Cloudflare Tunnel + Cloudflare Access, or a reverse proxy
   on a forwarded port, serves guests -- at the cost of putting a control plane whose archive
   button propagates deletions through Syncthing to every device the owner owns on the public

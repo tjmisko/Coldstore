@@ -69,6 +69,34 @@ func TestShouldListEveryWarningWhenPreflightReportsWarnings(t *testing.T) {
 	}
 }
 
+func TestShouldReportTailscaleAuthenticationWithoutPrintingLogins(t *testing.T) {
+	cfg := preflightCfg()
+	cfg.Server = config.ServerConfig{
+		ListenAddr:            config.DefaultListenAddr,
+		AuthMode:              config.AuthModeTailscale,
+		TailscaleAllowedUsers: []string{"private-owner@example.com", "private-co-owner@example.com"},
+	}
+	var buf bytes.Buffer
+	reportPreflight(&buf, cfg, "/etc/coldstore/coldstore.toml", nil)
+	got := buf.String()
+
+	if !strings.Contains(got, "auth             Tailscale Serve identity allowlist (2 users)") {
+		t.Errorf("preflight did not report Tailscale auth mode:\n%s", got)
+	}
+	for _, private := range cfg.Server.TailscaleAllowedUsers {
+		if strings.Contains(got, private) {
+			t.Errorf("preflight leaked private login %q:\n%s", private, got)
+		}
+	}
+
+	cfg.Server.TailscaleAllowedUsers = cfg.Server.TailscaleAllowedUsers[:1]
+	buf.Reset()
+	reportPreflight(&buf, cfg, "/etc/coldstore/coldstore.toml", nil)
+	if got := buf.String(); !strings.Contains(got, "Tailscale Serve identity allowlist (1 user)") {
+		t.Errorf("preflight did not use the singular user label:\n%s", got)
+	}
+}
+
 func TestCheckShouldReportACataloguedPathUnderAnotherLabel(t *testing.T) {
 	coldDir := t.TempDir()
 	dbPath := filepath.Join(coldDir, "catalog.db")

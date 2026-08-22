@@ -1,7 +1,7 @@
 # Owner interview — metadata export and browser access
 
-Status: prepared for owner review on 2026-08-21. This document explains the choices and
-records decisions; it does not authorize deployment, public exposure, or production changes.
+Status: owner decisions updated on 2026-08-21. This document explains the choices and records
+decisions; it does not authorize application deployment, public exposure or service restart.
 
 ## Current summary
 
@@ -10,8 +10,7 @@ The owner has stated these requirements:
 - coldstore must work from an iPhone, Linux, macOS and probably Windows;
 - access away from home would be useful, but is not required for v1;
 - Tailscale is already installed for another project on several owner devices;
-- two co-owners will share full control through one existing Basic Auth credential, which is
-  already stored in the owner's password manager; and
+- two co-owners will have full control through separately revocable Tailscale identities;
 - the second co-owner is not yet onboarded to Tailscale and will use a separate Tailscale
   account rather than sharing the first owner's account; and
 - that co-owner's Tailscale reachability is limited to Coldstore HTTPS, not SSH, Syncthing,
@@ -32,8 +31,8 @@ The owner selected this v1 direction on 2026-08-21:
 
 - defer XMP export implementation and retain it as a portability follow-up;
 - use Tailscale Serve as the private HTTPS path for the owner's devices;
-- keep the Go server on loopback and require the existing Basic Auth through Serve;
-- do not trust Tailscale identity headers for v1 authorization;
+- keep the Go server on loopback and require an exact Tailscale login allowlist;
+- trust Serve's sanitized login header only across that loopback proxy boundary;
 - expose the same owner web UI and API remotely that are available at home, including all
   existing mutating operations; and
 - defer public-domain guest sessions until zero-install guest access is required.
@@ -177,9 +176,10 @@ policy must still limit the reachable server services to the scope the owner app
 
 **Selected for v1.** The owner already uses Tailscale on several machines. This path supports
 every named platform, supplies optional away-from-home access, avoids router port forwarding,
-and does not make coldstore public. Basic Auth remains a separate application gate. An
-authenticated owner receives the existing full web UI/API; v1 does not introduce a reduced
-remote role.
+and does not make coldstore public. The Serve transport is operational. Coldstore will consume
+Serve's sanitized `Tailscale-User-Login` header through an exact two-owner allowlist, with the
+backend remaining loopback-only. An authenticated owner receives the existing full web UI/API;
+v1 does not introduce a reduced remote role.
 
 ### Option C — public domain plus Caddy
 
@@ -213,18 +213,20 @@ as a shortcut around authorization.
 The browser sends the same username/password on every request. It is small and useful for
 CLI/runbook compatibility, but browser logout is poor, every user effectively shares one
 credential, and individual sessions or guests cannot be revoked. Keep it as a compatibility
-path; do not use it as the public guest model. The owner selected it behind Tailscale for v1.
-Two co-owners will share the existing full-control credential, already kept in the owner's
-password manager. Changing or revoking it affects both people at once, and requests cannot be
-attributed to one co-owner by Basic Auth alone; those are accepted v1 limitations.
+path for existing deployments; do not use it as the public guest model. It remains production's
+temporary gate while the Tailscale identity build is reviewed and deployed, but it will not be
+shared with the second co-owner.
 
 ### Tailscale identity
 
-Tailscale authenticates the device/user before traffic reaches Serve, which can add verified
-identity headers for a loopback backend. For a later private co-owner model this may remove
-the need for a new coldstore login/session entirely. Coldstore would still need explicit
-mapping from the Tailscale identity to owner permissions, and Basic Auth can remain for
-existing tools.
+Tailscale authenticates the device/user before traffic reaches Serve. Serve removes
+caller-supplied identity headers and inserts the verified login for a loopback backend.
+
+**Selected for private owner access.** Coldstore's `tailscale` authentication mode requires an
+exact allowlist, rejects missing/unlisted identities, refuses non-loopback binding, applies a
+same-origin guard to browser mutations and attributes accepted mutations in the journal. The
+two Tailscale logins can be removed independently. Basic Auth remains a supported alternative
+mode for other deployments, not a fallback that bypasses this allowlist.
 
 ### Opaque server-side session cookie
 
@@ -264,10 +266,9 @@ different token uses:
   with a hash stored server-side, an expiry, explicit scopes and individual revocation. Send
   them only over HTTPS in the `Authorization` header.
 
-Tailscale device/user identity is a third kind of authentication and can also be evaluated
-later. For v1, Coldstore does not consume Serve's identity headers: Tailscale controls network
-membership and Basic Auth controls the application. This keeps the first rollout small and
-allows session or API tokens to be added without making the backend public.
+Tailscale device/user identity is the selected private-owner authentication. It does not
+replace the later public/guest session design: opaque browser sessions and scoped API tokens
+can still be added without making the raw backend public.
 
 ## Part 5 — proposed application session if public access is selected
 
@@ -320,8 +321,8 @@ The first four questions choose v1. The rest specify public sessions only if nee
 ### Identity and permissions
 
 8. Is there exactly one owner/admin identity?
-   - **Answer:** no. There are two co-owners with full control. They will share the existing
-     Basic Auth credential, which is already stored in the owner's password manager.
+   - **Answer:** no. There are two co-owners with full control. Each will use a separately
+     revocable Tailscale identity in Coldstore's exact-login allowlist.
    - The second co-owner is not yet enrolled. They will use a separate Tailscale account;
      sharing the server machine is the provisional least-privilege onboarding path.
 9. Should guests see the entire library, selected folders/albums, or explicit shared items?
@@ -352,8 +353,8 @@ provisional recommendation appears above.
 |---|---|---|
 | XMP export in v1 | Pending | Provisionally defer |
 | V1 network path | Decided | Tailscale Serve to the loopback backend |
-| V1 application auth | Decided | Retain Basic Auth through Serve |
-| V1 full-control principals | Decided | Two co-owners sharing one stored credential |
+| V1 application auth | Decided | Exact allowlist of Tailscale Serve login identities |
+| V1 full-control principals | Decided | Two separately revocable Tailscale co-owners |
 | Second co-owner Tailscale identity | Decided | Separate account; onboarding still pending |
 | Tailscale sharing scope | Decided | Shared server machine, TCP 443/Coldstore only |
 | Later token upgrade | Direction set | Opaque browser sessions; scoped API tokens if needed |

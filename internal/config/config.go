@@ -19,6 +19,10 @@ import (
 const (
 	EnvUsername = "COLDSTORE_USERNAME"
 	EnvPassword = "COLDSTORE_PASSWORD"
+
+	AuthModeNone      = "none"
+	AuthModeBasic     = "basic"
+	AuthModeTailscale = "tailscale"
 )
 
 // DefaultListenAddr is loopback on purpose. An absent or empty listen_addr must
@@ -69,9 +73,26 @@ type DaemonConfig struct {
 }
 
 type ServerConfig struct {
-	ListenAddr string `toml:"listen_addr"`
-	Username   string `toml:"username"`
-	Password   string `toml:"password"`
+	ListenAddr            string   `toml:"listen_addr"`
+	AuthMode              string   `toml:"auth_mode"`
+	TailscaleAllowedUsers []string `toml:"tailscale_allowed_users"`
+	Username              string   `toml:"username"`
+	Password              string   `toml:"password"`
+}
+
+// AuthenticationMode returns the effective server authentication mode. An
+// omitted auth_mode retains the original configuration contract: two Basic
+// Auth credentials enable Basic Auth, while a credential-free loopback listener
+// is local-only and unauthenticated. Callers use this only after validation, so
+// an unknown explicit mode cannot reach the HTTP server.
+func (s ServerConfig) AuthenticationMode() string {
+	if s.AuthMode != "" {
+		return s.AuthMode
+	}
+	if s.Username != "" && s.Password != "" {
+		return AuthModeBasic
+	}
+	return AuthModeNone
 }
 
 type SyncthingConfig struct {
@@ -136,6 +157,7 @@ func load(path string, inspection bool) (*Config, error) {
 func (c *Config) scrubInspectionSecrets() {
 	c.Server.Username = ""
 	c.Server.Password = ""
+	c.Server.TailscaleAllowedUsers = nil
 	c.Syncthing.APIURL = ""
 	c.Syncthing.APIKey = ""
 	for i := range c.Folders {
@@ -281,12 +303,15 @@ func pathContains(parent, child string) bool {
 
 // ValidateServerBinding is the D5 refusal. A control plane that can pin, archive,
 // restore, run bulk jobs and rewrite folder policy must not be reachable from the
-// network without a credential, and the previous behaviour -- one WARN line that
-// scrolls out of the journal -- is not a decision the owner ever consciously made.
+// network without an authentication boundary, and the previous behaviour -- one
+// WARN line that scrolls out of the journal -- is not a decision the owner ever
+// consciously made.
 //
-// There is deliberately no override flag. The two safe shapes are cheap: bind
-// loopback, or set a username and password. A flag would exist only to be
-// copy-pasted out of a forum post.
+// Tailscale Serve identity headers are safe to trust only when the backend is
+// loopback-only. Serve removes caller-supplied identity headers and inserts its
+// authenticated value, but a client that can reach the backend directly can
+// supply any header it wants. The loopback refusal therefore is part of the
+// Tailscale authentication mechanism, not merely a deployment preference.
 func ValidateServerBinding(s *ServerConfig) error {
 	loopback, err := IsLoopbackListenAddr(s.ListenAddr)
 	if err != nil {
@@ -296,20 +321,50 @@ func ValidateServerBinding(s *ServerConfig) error {
 	hasUser := s.Username != ""
 	hasPass := s.Password != ""
 
-	// Half a credential is worse than none: Handler() falls back to the bare mux,
-	// so the owner believes auth is on when it is off.
+	// Half a credential is worse than none. Retain the original refusal even when
+	// auth_mode is explicit so a stale environment override cannot be overlooked.
 	if hasUser != hasPass {
 		missing, present := "password", "username"
 		if hasPass {
 			missing, present = "username", "password"
 		}
-		return fmt.Errorf("[server] %s is set but %s is empty, so basic auth would be "+
-			"silently disabled. Set both, or neither (see %s / %s)",
+		return fmt.Errorf("[server] %s is set but %s is empty, so Basic Auth is incomplete. "+
+			"Set both, or neither (see %s / %s)",
 			present, missing, EnvUsername, EnvPassword)
 	}
 
-	if hasUser || loopback {
+	switch s.AuthMode {
+	case "":
+		if len(s.TailscaleAllowedUsers) != 0 {
+			return errors.New("[server] tailscale_allowed_users requires auth_mode = \"tailscale\"")
+		}
+		if hasUser || loopback {
+			return nil
+		}
+	case AuthModeBasic:
+		if len(s.TailscaleAllowedUsers) != 0 {
+			return errors.New("[server] tailscale_allowed_users cannot be combined with auth_mode = \"basic\"")
+		}
+		if !hasUser {
+			return fmt.Errorf("[server] auth_mode = %q requires both %s and %s",
+				AuthModeBasic, EnvUsername, EnvPassword)
+		}
 		return nil
+	case AuthModeTailscale:
+		if hasUser {
+			return errors.New("[server] auth_mode = \"tailscale\" cannot be combined with Basic Auth credentials; remove username/password and their environment overrides")
+		}
+		if !loopback {
+			return fmt.Errorf("[server] auth_mode = %q requires a loopback listen_addr (for example %q); clients that reach %q directly could forge Tailscale identity headers",
+				AuthModeTailscale, DefaultListenAddr, s.ListenAddr)
+		}
+		if err := validateTailscaleAllowedUsers(s.TailscaleAllowedUsers); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("[server] auth_mode %q is not supported; use %q or %q (or omit it for the legacy default)",
+			s.AuthMode, AuthModeBasic, AuthModeTailscale)
 	}
 
 	return fmt.Errorf(`refusing to start: [server] listen_addr = %q is reachable from the network but no credentials are set.
@@ -330,6 +385,26 @@ Fix it in one of two ways:
        ssh -N -L 8090:127.0.0.1:8090 you@this-host
 
 There is no flag to skip this check.`, s.ListenAddr, DefaultListenAddr)
+}
+
+func validateTailscaleAllowedUsers(users []string) error {
+	if len(users) == 0 {
+		return errors.New("[server] auth_mode = \"tailscale\" requires at least one exact Tailscale login in tailscale_allowed_users")
+	}
+	seen := make(map[string]struct{}, len(users))
+	for i, user := range users {
+		if user == "" {
+			return fmt.Errorf("[server] tailscale_allowed_users entry %d is empty", i+1)
+		}
+		if user != strings.TrimSpace(user) {
+			return fmt.Errorf("[server] tailscale_allowed_users entry %d has leading or trailing whitespace", i+1)
+		}
+		if _, exists := seen[user]; exists {
+			return fmt.Errorf("[server] tailscale_allowed_users contains duplicate login %q", user)
+		}
+		seen[user] = struct{}{}
+	}
+	return nil
 }
 
 // IsLoopbackListenAddr reports whether addr can only be reached from this
