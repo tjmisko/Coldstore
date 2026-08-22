@@ -20,11 +20,10 @@ documents and tagging-design branches are already integrated; do not merge them 
    above.
 2. PR #16 merged with all six CI jobs green, including the corrected frontend regression,
    embedded-UI Playwright and two-device containerized Syncthing E2E jobs.
-3. When GitHub connectivity exists, update every issue body that still calls tagging schema
-   migration 6 or rename migration 7. The landed plan uses 7 and 8; issue-body edits are the
-   only unfinished part of `TASKLIST.md` item 8.
-4. Tagging implementation issues #1–#14 are deployed. The unfiled XMP export follow-up,
-   GitHub tracker bookkeeping and external verification gates remain.
+3. GitHub #23 tracks updating every stale issue body from planned tagging/rename migrations
+   6/7 to the shipped 7/8 numbering, closing deployed issues #1–#14 and closing tracker #15.
+4. Tagging implementation issues #1–#14 are deployed. XMP export is deferred in #19; the
+   remaining access, performance and operations follow-ups are #17, #18 and #20–#22.
 5. Production runs merged `main` at schema 8 behind loopback-only Tailscale Serve identity
    authentication. Basic credentials are inactive and Funnel is disabled. Both exact-login
    allowlisted users can access Coldstore; an unallowlisted third identity was denied in the
@@ -35,6 +34,18 @@ documents and tagging-design branches are already integrated; do not merge them 
    `autogroup:shared` unless the account is first moved to a separate receiving tailnet.
 7. Treat every future production/deployment checkbox as owner-mediated. The completed rollout
    does not grant continuing host or restart authority.
+
+The current follow-up issue map is:
+
+| Issue | Scope |
+|---|---|
+| #17 | Remaining cross-platform, off-LAN and network-boundary acceptance |
+| #18 | PDF thumbnail benchmark on the N40L |
+| #19 | Deferred XMP metadata export |
+| #20 | Mount, snapshot, quota and temp-file safety gates |
+| #21 | Syncthing upgrade and file-versioning decision |
+| #22 | Deferred public/guest session authentication |
+| #23 | Migration-number and deployed-tracker cleanup |
 
 ## Integrated branch
 

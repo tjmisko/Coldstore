@@ -74,7 +74,7 @@ deployment.
 - [x] Mark H0a–H8 and BUG-3 complete only after the combined branch passes verification.
 - [x] Decide H9: larger preview derivative versus full original/browser rendering.
 - [ ] Complete H10: benchmark PDF thumbnail generation on the actual two-core N40L using
-      owner-provided command output; agents have no host access.
+      owner-provided command output; agents have no host access. Tracked by GitHub #18.
 
 ### 6. Prove the integrated branch
 
@@ -113,11 +113,12 @@ by the local execution sandbox.
 - [x] Amend all affected references in `docs/tagging-design.md`.
 - [ ] Amend GitHub issues #2, #3, #7, #8, #14 and tracker #15 where they name the old
       versions; search all issue bodies rather than trusting this list to be exhaustive.
+      Tracked by GitHub #23.
 - [x] Keep the migration rule explicit: assign versions in landing order and never reuse a
       number already shipped on another branch.
 
-GitHub issue edits remain open because both normal and scoped-escalation attempts could not
-reach `api.github.com` from this environment.
+GitHub connectivity is restored. The deferred body edits and deployed-issue closeout now live
+in #23.
 
 ## P0 — live data-safety bugs
 
@@ -173,9 +174,10 @@ Use `docs/access-and-export-interview.md` to record the owner choices that gate 
 - [x] Admit the second non-admin Tailscale identity through the narrow TCP 443 group grant and
       Coldstore exact-login allowlist; verify both allowlisted users can load Coldstore.
 - [x] Verify an unallowlisted third Tailscale identity cannot access Coldstore.
-- [ ] After separate owner approval, finish platform coverage from iPhone, Linux and Windows
-      where available, including one off-LAN connection and the existing mutating owner API.
-      macOS access is verified. Do not expose the raw port or create a reduced remote-only API.
+- [ ] After separate owner approval, finish platform coverage from Linux and Windows where
+      available, plus cellular/off-LAN coverage and the existing mutating owner API. macOS and
+      iPhone access are verified. Do not expose the raw port or create a reduced remote-only
+      API. Tracked by GitHub #17.
 - [x] Reconcile the existing contradictory Cloudflare Tunnel guidance before choosing a
       provider or topology.
 - [x] Document certificate renewal, DNS ownership, proxy trust boundaries, request-size/range
@@ -185,7 +187,8 @@ Use `docs/access-and-export-interview.md` to record the owner choices that gate 
 
 These are future public/guest requirements, not v1 blockers. A later token upgrade can use
 opaque, revocable server-side browser sessions and separately scoped API bearer tokens;
-Tailscale identity authentication does not prevent either migration.
+Tailscale identity authentication does not prevent either migration. The deferred bundle is
+tracked by GitHub #22.
 
 - [ ] Add owner password-to-opaque-session exchange with `HttpOnly`, `SameSite=Lax`, `Path=/`
       cookie, plus individually revocable and expiring read-only guest grants.
@@ -246,8 +249,8 @@ Follow the dependency order in GitHub #15 after the migration renumbering above.
 - [x] #14 — migration 8 and durable, group-preserving directory/file rename jobs; cosmetic
       `display_name` shipped earlier in migration 7.
 - [x] #11 — tag operators, quick slots and dedicated Tag mode on the existing grammar.
-- [ ] File a separate XMP export issue; tracker #15 currently names it without an issue.
-- [ ] Close tracker #15 only when its children and the export follow-up are accounted for.
+- [x] File separate XMP export issue #19; tracker #15 previously named it without an issue.
+- [ ] Close tracker #15 only when its children and #19 are accounted for. Tracked by #23.
 
 ## P1 — deployment and operations follow-up
 
@@ -257,13 +260,14 @@ requires the owner.
 ### 15. Before the next production upgrade
 
 - [ ] Ask the owner to confirm whether btrfs snapshots are actually scheduled; current
-      evidence is contradictory.
+      evidence is contradictory. Tracked by GitHub #20.
 - [x] Take a fresh SQLite `.backup` immediately before applying schema migrations.
 - [x] Deploy merged `main` and migrate the production catalog from schema 5 to schema 8.
 - [ ] Reconcile the optional `require_mountpoint` guard, intentionally absent from the
       production TOML, with the distinct systemd `RequiresMountsFor=` dependency; record why
-      each is enabled or disabled.
+      each is enabled or disabled. Tracked by GitHub #20.
 - [ ] Confirm the unit still requires the real archive mount after any service-file update.
+      Tracked by GitHub #20.
 - [x] Confirm the deployed binary reports schema 8 and remains active after restart.
 - [x] Keep `thumbnail_workers=1` unless measured memory evidence supports increasing it;
       production is configured at one worker and no contrary memory evidence exists.
@@ -272,12 +276,14 @@ requires the owner.
 
 - [ ] Run the isolated throwaway-folder test before relying on automatic quota enforcement:
       oldest-first, grace period, persistent paths, archive layout, exact restore and pinning.
-- [ ] Verify no coldstore temp/superseded file appears as a synced item.
+      Tracked by GitHub #20.
+- [ ] Verify no coldstore temp/superseded file appears as a synced item. Tracked by #20.
 - [x] Production manual archive/deletion propagation/restore is already confirmed; do not
       repeat destructive tests merely for ceremony.
 - [ ] Upgrade the server's Syncthing v1.19.2 through an owner-approved maintenance plan.
+      Tracked by GitHub #21; reconfirm the installed version before acting.
 - [ ] Decide separately whether to enable Syncthing file versioning. The owner currently
-      considers backups sufficient, so this is not a release blocker.
+      considers backups sufficient, so this is not a release blocker. Tracked by #21.
 
 ## P2 — documentation and maintenance cleanup
 
@@ -301,7 +307,7 @@ requires the owner.
 - [x] Update PDF/EPUB dependency and thumbnail/preview behavior after documents lands.
 - [x] Record actual rollout progress: initial scan plus real manual archive propagation and
       successful restore; throwaway quota test remains open.
-- [ ] Record snapshot scheduling only after the owner confirms it.
+- [ ] Record snapshot scheduling only after the owner confirms it. Tracked by #20.
 
 ## Settled or completed — do not reopen without new evidence
 

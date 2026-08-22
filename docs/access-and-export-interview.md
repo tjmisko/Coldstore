@@ -29,7 +29,7 @@ Two unrelated decisions appear beside each other in the tasklist:
 
 The owner selected this v1 direction on 2026-08-21:
 
-- defer XMP export implementation and retain it as a portability follow-up;
+- defer XMP export implementation and retain it as portability follow-up #19;
 - use Tailscale Serve as the private HTTPS path for the owner's devices;
 - keep the Go server on loopback and require an exact Tailscale login allowlist;
 - trust Serve's sanitized login header only across that loopback proxy boundary;
@@ -351,7 +351,7 @@ provisional recommendation appears above.
 
 | Decision | State | Owner answer |
 |---|---|---|
-| XMP export in v1 | Pending | Provisionally defer |
+| XMP export in v1 | Deferred | Portability follow-up #19 |
 | V1 network path | Decided | Tailscale Serve to the loopback backend |
 | V1 application auth | Decided | Exact allowlist of Tailscale Serve login identities |
 | V1 full-control principals | Decided | Two separately revocable Tailscale co-owners |

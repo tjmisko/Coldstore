@@ -152,22 +152,21 @@ closed.
 
 ### Load-bearing
 
-- Implementation issues #1–#14 are deployed. The remaining tagging follow-up is XMP export
-  into cold storage; it still needs a separate GitHub issue when connectivity exists.
+- Implementation issues #1–#14 are deployed. Deferred XMP export into cold storage is tracked
+  by GitHub #19; tracker reconciliation and closure are tracked by #23.
 - The 5-to-8 migration and identity rollout are complete. No remaining engineering item
   authorizes another service restart or filesystem operation against production.
 
 ### Product and operations
 
-- Complete the remaining cross-platform/off-LAN and service-isolation checks in
-  `onboarding.md`. Two-user onboarding and the unallowlisted-user denial test are complete;
-  public guest sessions remain deferred.
+- Complete #17's remaining cross-platform/off-LAN and service-isolation checks in
+  `onboarding.md`. Two-user onboarding, macOS/iPhone access and the unallowlisted-user denial
+  test are complete; public guest sessions remain deferred in #22.
 - Reconcile and record the intentionally removed mountpoint setting versus the separate
-  systemd mount dependency; do not infer either from the successful one-time rollout.
-- Benchmark PDF thumbnail generation on the actual two-core host from owner-provided output.
-- Complete the owner-mediated throwaway quota, snapshot and Syncthing upgrade gates in
-  `TASKLIST.md`.
-- Update the still-stale GitHub issue bodies from planned migration 6/7 to 7/8.
+  systemd mount dependency in #20; do not infer either from the successful one-time rollout.
+- Benchmark PDF thumbnail generation on the actual two-core host under #18.
+- Complete #20's owner-mediated throwaway quota/snapshot gates and #21's Syncthing maintenance.
+- Update and close the stale deployed GitHub tracker under #23.
 
 ## Metadata decisions already settled
 

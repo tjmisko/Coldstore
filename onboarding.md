@@ -243,6 +243,8 @@ Funnel URL. The supported path is the private HTTPS Serve URL.
 
 ## Acceptance checks
 
+Remaining acceptance work is tracked by GitHub #17.
+
 - [ ] With Tailscale disconnected, the private Coldstore URL is unreachable.
 - [x] With Tailscale connected as each allowlisted co-owner, the URL loads without Basic Auth.
 - [x] Direct loopback access without Serve identity returns `401` and no Basic challenge.
@@ -254,7 +256,8 @@ Funnel URL. The supported path is the private HTTPS Serve URL.
 - [x] An unallowlisted third Tailscale identity is denied access to Coldstore. The owner did
       not record the exact response body/status for this acceptance report.
 - [x] The second co-owner successfully reaches Coldstore from macOS.
-- [ ] The iPhone works on Wi-Fi and once over cellular when convenient.
+- [x] The iPhone reaches Coldstore through the private URL. A separate cellular/off-LAN check
+      remains open in #17.
 - [ ] At least one desktop works away from the home LAN when convenient.
 - [ ] A reboot or restart leaves the background Serve mapping unchanged.
 - [x] `tailscale funnel status` still shows no public configuration.
