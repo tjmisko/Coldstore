@@ -166,7 +166,7 @@ Use `docs/access-and-export-interview.md` to record the owner choices that gate 
       loopback-only validation, fail-closed header parsing and no Basic Auth bypass.
 - [x] Reject cross-origin browser mutations in Tailscale mode and journal accepted mutations
       with login, authentication provider, method, path and response status.
-- [ ] Deploy the reviewed identity build, remove the temporary Basic credentials from the
+- [x] Deploy the reviewed identity build, remove the temporary Basic credentials from the
       service environment, and verify direct loopback requests fail without a Serve identity.
 - [ ] After separate owner approval, verify the private URL from iPhone, macOS, Linux and
       Windows where available, including one off-LAN connection and the existing mutating
@@ -253,11 +253,12 @@ requires the owner.
 
 - [ ] Ask the owner to confirm whether btrfs snapshots are actually scheduled; current
       evidence is contradictory.
-- [ ] Take a fresh SQLite `.backup` immediately before applying schema migrations.
-- [ ] Deploy the local `main` safety fixes, including real `require_mountpoint`, before or as
-      part of the integrated feature release.
+- [x] Take a fresh SQLite `.backup` immediately before applying schema migrations.
+- [x] Deploy merged `main` and migrate the production catalog from schema 5 to schema 8.
+- [ ] Reconcile the owner-deferred runtime `require_mountpoint` option with the distinct
+      systemd `RequiresMountsFor=` dependency; record why each is enabled or disabled.
 - [ ] Confirm the unit still requires the real archive mount after any service-file update.
-- [ ] Confirm the newer binary reports the expected schema before restarting production.
+- [x] Confirm the deployed binary reports schema 8 and remains active after restart.
 - [ ] Keep `thumbnail_workers=1` unless measured memory evidence supports increasing it.
 
 ### 16. Finish rollout coverage
@@ -305,6 +306,6 @@ requires the owner.
 - [x] Real iPhone HEIC removed the synthetic GPS blocker; metadata issue #1 is unblocked.
 - [x] Static wired address is outside the DHCP pool.
 - [x] Real manual archive propagated its deletion through Syncthing and restore works.
-- [x] Production remains private behind loopback + SSH tunnel until replacement access is
-      designed and approved.
+- [x] Production remains private behind loopback-only Tailscale Serve; Funnel and the raw
+      network listener remain disabled.
 - [x] Direct agent SSH/host access is not authorized.

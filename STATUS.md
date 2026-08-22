@@ -1,28 +1,33 @@
 # Status — coldstore closeout
 
-Snapshot date: 2026-08-21. Integrated code state: the current `feat/interface-refresh`
-working tree and draft PR #16. The Git tree is authoritative; production remains separate.
+Snapshot date: 2026-08-21 (America/Los_Angeles). Code state: `main` at merge commit
+`5e1dc67`; PR #16 is merged. Production is now running the integrated release. The Git tree
+and the owner-reported deployment evidence below are authoritative for handoff.
 
 ## Executive state
 
-- Production Coldstore remains on its existing loopback + Basic Auth gate and is reachable
-  through both the prior SSH tunnel and the newly configured private Tailscale Serve HTTPS
-  proxy. The identity-aware binary/configuration is not deployed yet.
-- Production remains at repository commit `37ad497` and catalog schema 2. Nothing from this
-  integration was deployed or run against the host.
-- Local `main` is `9bcb7e8`, nine commits ahead of the deployed baseline, including the real
-  `require_mountpoint` guard and build/runbook corrections.
-- `feat/interface-refresh` integrates keymap, document-preview and tagging work. Document
+- Production was built from merged `main` at `5e1dc67`, installed, preflighted and restarted
+  successfully. Startup migrated the catalog from schema 5 to schema 8.
+- Immediately before migration, the owner stopped Coldstore, created a fresh SQLite
+  `.backup` outside cold storage, verified `PRAGMA quick_check` and confirmed the backup's
+  schema was 5. The private backup location is intentionally not tracked here.
+- Production now uses private Tailscale Serve HTTPS plus Coldstore's exact-login Tailscale
+  authentication. The backend remains on `127.0.0.1:8090`, the temporary Basic credentials
+  were removed from the service configuration/environment, and Funnel remains disabled.
+- Owner verification passed: the service stayed active, the schema marker reported 8, the
+  private URL loaded without a Basic prompt, and direct loopback access failed closed without
+  a Serve identity.
+- The integrated release includes keymap, document-preview and tagging work. Document
   preview owns migration 6, metadata/tagging owns migration 7, and durable rename jobs own
-  migration 8; the locally supported schema is 8.
+  migration 8; production and the current binary now agree on schema 8.
 - The folder-label identity guard, Live Photo atomicity, metadata/tagging/search surfaces and
-  durable rename jobs are implemented locally and tested. None is deployed.
-- GitHub connectivity is restored and draft PR #16 tracks this branch. The issue-body
-  migration-number bookkeeping remains separate follow-up work.
+  durable rename jobs are deployed after passing the full PR verification matrix.
+- PR #16 merged with all six GitHub Actions jobs green. Issue-body migration-number
+  bookkeeping remains separate follow-up work.
 
 ## Integrated repository state
 
-The active branch carries:
+The merged `main` branch carries:
 
 - identity/title/icon/PWA assets and the dark token system;
 - BUG-1 touch selection and BUG-2 mobile heading repairs;
@@ -75,9 +80,8 @@ denies esbuild's npm postinstall self-exec even with scoped escalation; setting
 which the normal TypeScript/Vite and Go build completed.
 
 The local sandbox still cannot bind the listeners those last two tiers require. GitHub
-Actions supplied the missing listener-capable environment: both jobs passed on draft PR #16
-at `b7f8910`, so their tasklist boxes are closed. That run's frontend job exposed the
-pending-context-motion lifecycle race; the current branch contains the locally verified fix.
+Actions supplied the missing listener-capable environment: both jobs and the corrected
+frontend tier passed on PR #16 at `16a7bf6`, so their tasklist boxes are closed.
 
 ## Production environment
 
@@ -88,6 +92,8 @@ The operational facts needed for planning are:
 - default `GOAMD64=v1`; v2/v3 binaries are not supported by this CPU;
 - Go 1.27 and Node 24 are installed, so the host can run `make build` directly;
 - hot folders live on the root filesystem; cold storage is a dedicated btrfs RAID1;
+- the deployment preflight confirmed cold storage was an actual btrfs mount with roughly
+  2 TB free, and the owner's privileged btrfs device check reported no errors;
 - `thumbnail_workers=1` is intentional on this memory-constrained host;
 - ffmpeg, SQLite, poppler-utils and ExifTool are installed;
 - managed Syncthing folders were healthy, Send & Receive and protected by the required
@@ -97,24 +103,31 @@ The operational facts needed for planning are:
 - snapshot scheduling is unresolved. Do not claim it is configured or absent without owner
   confirmation.
 
-A fresh SQLite `.backup` is a mandatory gate immediately before production schema changes.
-The catalog cannot be reconstructed from hot folders because scans do not rediscover
-already-offloaded archive rows.
+A fresh SQLite `.backup` remains mandatory immediately before every future production schema
+change. The 5-to-8 deployment satisfied that gate. The catalog cannot be reconstructed from
+hot folders because scans do not rediscover already-offloaded archive rows.
+
+The owner notes that the runtime `require_mountpoint` option had previously been removed.
+This update does not claim that it or systemd `RequiresMountsFor=` was re-enabled; reconcile
+and document those two distinct mount-safety controls separately before considering that
+deployment task closed.
 
 ## Access and authority
 
-- Current production application auth remains loopback + Basic Auth until the new identity
-  build is deployed. Tailscale Serve HTTPS is now enabled on the server, and the owner
-  successfully loaded Coldstore through it using the temporary Basic gate.
-- The selected v1 application auth is an exact allowlist of Tailscale Serve login identities.
-  The implementation refuses non-loopback binding, rejects missing/unlisted headers and
+- Current production application auth is an exact allowlist of Tailscale Serve login
+  identities. The identity-aware build is deployed and the temporary Basic credentials are
+  absent from the service configuration/environment.
+- Tailscale Serve HTTPS is enabled on the server. The backend remains loopback-only, direct
+  access without a Serve identity returns 401, and the owner successfully loaded the private
+  URL without a Basic prompt.
+- The v1 implementation refuses non-loopback binding, rejects missing/unlisted headers and
   cross-origin browser mutations, and attributes accepted mutations in the journal. Keep
   Funnel disabled and the raw listener private.
 - An authenticated remote owner receives the same full web UI/API as at home, including all
   existing mutating operations. No read-only remote owner role is planned for v1.
-- Two co-owners use separate Tailscale identities, allowing per-person attribution and
-  revocation. The existing Basic credential remains only as temporary production/rollback
-  material and is not shared for the new onboarding.
+- Two co-owners will use separate Tailscale identities, allowing per-person attribution and
+  revocation. The old Basic credential may remain in the owner's password manager as rollback
+  material, but it is not active and is not shared for the new onboarding.
 - The second co-owner is not yet onboarded and will use a separate Tailscale account. The
   selected least-privilege path is a revocable share of the server machine, restricted to
   TCP 443 and the Coldstore Serve proxy. SSH, Syncthing, raw port 8090 and every other server
@@ -132,19 +145,20 @@ already-offloaded archive rows.
 
 ### Load-bearing
 
-- Implementation issues #1–#14 are complete locally. The remaining tagging follow-up is XMP
-  export into cold storage; it still needs a separate GitHub issue when connectivity exists.
-- No local engineering item authorizes a schema migration, service restart or filesystem
-  operation against production.
+- Implementation issues #1–#14 are deployed. The remaining tagging follow-up is XMP export
+  into cold storage; it still needs a separate GitHub issue when connectivity exists.
+- The 5-to-8 migration and identity rollout are complete. No remaining engineering item
+  authorizes another service restart or filesystem operation against production.
 
 ### Product and operations
 
-- Finish review/CI for the loopback-only Tailscale identity implementation, then complete an
-  owner-approved build/config/restart and cross-platform/off-LAN verification using
+- Complete second-co-owner onboarding and cross-platform/off-LAN verification using
   `onboarding.md`. Public guest sessions remain deferred.
+- Reconcile and record the intentionally removed mountpoint setting versus the separate
+  systemd mount dependency; do not infer either from the successful one-time rollout.
 - Benchmark PDF thumbnail generation on the actual two-core host from owner-provided output.
-- Complete the owner-mediated backup, deployment, throwaway quota, snapshot and Syncthing
-  upgrade gates in `TASKLIST.md`.
+- Complete the owner-mediated throwaway quota, snapshot and Syncthing upgrade gates in
+  `TASKLIST.md`.
 - Update GitHub issue bodies from planned migration 6/7 to 7/8 when network access exists.
 
 ## Metadata decisions already settled

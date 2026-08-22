@@ -10,29 +10,26 @@ Read these before changing anything:
 6. `docs/access-and-export-interview.md` — owner answers for Tailscale, auth and XMP.
 7. `onboarding.md` — Coldstore-only Tailscale Serve and co-owner onboarding runbook.
 
-Work in `.worktrees/feat/interface-refresh` on `feat/interface-refresh`. The keyboard,
-documents and tagging-design branches are already integrated; do not merge them again.
+PR #16 is merged into `main` at `5e1dc67`. Start future work from updated `main` on a new
+branch. The keyboard, documents and tagging-design branches are already integrated; do not
+merge them again.
 
 ## Immediate pickup
 
-1. Confirm `git status --short --branch` and read the two authoritative files above.
-2. Keep draft PR #16 green. Its first GitHub Actions run passed both the embedded-UI
-   Playwright job and the two-device containerized Syncthing E2E job, but exposed a Gallery
-   pending-context-motion race. The current branch fixes that replay lifecycle and passes
-   the exact regression 20 consecutive times plus the complete 334-test frontend suite.
+1. Confirm `git status --short --branch`, update `main`, and read the two authoritative files
+   above.
+2. PR #16 merged with all six CI jobs green, including the corrected frontend regression,
+   embedded-UI Playwright and two-device containerized Syncthing E2E jobs.
 3. When GitHub connectivity exists, update every issue body that still calls tagging schema
    migration 6 or rename migration 7. The landed plan uses 7 and 8; issue-body edits are the
    only unfinished part of `TASKLIST.md` item 8.
-4. Tagging implementation issues #1–#14 are complete locally. The unfiled XMP export
-   follow-up, GitHub tracker bookkeeping and external verification/deployment gates remain.
-5. Tailscale Serve HTTPS is operational and the owner verified it through the temporary
-   production Basic Auth gate. The selected application gate is now an exact two-login
-   Tailscale identity allowlist, with separately revocable co-owners and full existing
-   mutating UI/API access. The implementation is on this branch; keep the backend loopback,
-   never enable Funnel, and follow `onboarding.md` for the owner-mediated build/config/restart
-   and second-account machine share. Basic Auth must remain until the new binary is deployed.
-6. Treat every production/deployment checkbox as owner-mediated. No host access or rollout
-   was authorized during this integration.
+4. Tagging implementation issues #1–#14 are deployed. The unfiled XMP export follow-up,
+   GitHub tracker bookkeeping and external verification gates remain.
+5. Production runs merged `main` at schema 8 behind loopback-only Tailscale Serve identity
+   authentication. Basic credentials are inactive, Funnel is disabled, and owner access is
+   verified. Follow `onboarding.md` for the still-open second-account machine share.
+6. Treat every future production/deployment checkbox as owner-mediated. The completed rollout
+   does not grant continuing host or restart authority.
 
 ## Integrated branch
 
@@ -57,8 +54,8 @@ documents and tagging-design branches are already integrated; do not merge them 
   command output; do not probe the host indirectly.
 - Do not deploy, restart the service, migrate the production catalog, change budgets or run
   archive/restore operations without separate approval.
-- Production remains loopback-only behind an SSH tunnel. A permanent route must work in an
-  ordinary browser, accommodate guests and keep the backend private.
+- Production remains loopback-only behind private Tailscale Serve HTTPS. Public guest access
+  is deferred; do not enable Funnel or expose the raw listener.
 - Take a fresh SQLite `.backup` immediately before any production schema upgrade.
 - The owner already confirmed one real archive propagated deletion through Syncthing and a
   restore succeeded. Do not repeat destructive production checks for ceremony.
@@ -88,15 +85,15 @@ bytes for the binary.
 The fresh checkout needed `npm_config_ignore_scripts=true` because this sandbox denies
 esbuild's npm postinstall self-exec; the target still performed its own `npm ci` and built
 the real bundle and binary. Local loopback restrictions still prevent those two harnesses
-from running here, but GitHub Actions passed both Playwright and live Syncthing E2E on PR
-#16 at `b7f8910`.
+from running here, but GitHub Actions passed the corrected frontend tier, Playwright and live
+Syncthing E2E on PR #16 at `16a7bf6`.
 
 ## Branch map
 
 | Branch | State |
 |---|---|
-| `main` | Local baseline `9bcb7e8`; production/upstream remains `37ad497`. |
-| `feat/interface-refresh` | Active integrated branch; all work above is committed. |
+| `main` | PR #16 merge `5e1dc67`; deployed in production at schema 8. |
+| `feat/interface-refresh` | Merged source branch; do not continue new work here. |
 | `feat/keymap` | Merged ancestor. Do not merge again. |
 | `feat/documents` | Merged by `752c210`. Do not merge again. |
 | `feat/tagging-design` | Merged by `9b5be84`; its source branch retains obsolete 6/7 numbers, while the integrated document is authoritative at 7/8. |
