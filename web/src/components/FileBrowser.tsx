@@ -13,6 +13,7 @@ import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
 import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
+import { RenameFileDialog } from "./RenameFileDialog";
 import { SelectionBar } from "./SelectionBar";
 import { TagChips } from "./TagChips";
 import { TagMode } from "./TagMode";
@@ -120,6 +121,7 @@ export function FileBrowser({
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
+  const [renameIndex, setRenameIndex] = useState<number | null>(null);
   const [locationIndex, setLocationIndex] = useState<number | null>(null);
   const [tagPrompt, setTagPrompt] = useState<{
     ids: number[];
@@ -206,7 +208,7 @@ export function FileBrowser({
     loading,
     loadMore,
     onTagMode: () => setTagMode(true),
-    active: previewIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
+    active: previewIndex === null && menu === null && descriptionIndex === null && renameIndex === null && locationIndex === null && tagPrompt === null,
     reveal,
   });
 
@@ -240,11 +242,14 @@ export function FileBrowser({
         </p>
       )}
 
-      <div className="-m-1 overflow-x-auto p-1">
-        <table className="w-full text-base">
+      <div className="overflow-x-auto py-1">
+        {/* Keep the row cursor clear of the scroll viewport on both sides. The
+            first cell gets its own inset below so the checkbox is not pressed
+            against the cursor's rounded edge. */}
+        <table className="mx-1 w-[calc(100%-0.5rem)] text-base">
           <thead>
             <tr className="text-left text-ink-faint border-b border-line-strong text-micro uppercase tracking-wider">
-              <th className="pb-2 pr-2 w-8">
+              <th className="pb-2 pl-2 pr-2 w-10">
                 <label className="inline-flex p-1 cursor-pointer align-middle">
                   <input
                     ref={headerCheckbox}
@@ -369,11 +374,20 @@ export function FileBrowser({
           actions={actions}
           bulk={bulk}
           onOpen={() => setPreviewIndex(files.findIndex((file) => file.id === menu.file.id))}
+          onRename={() => setRenameIndex(files.findIndex((file) => file.id === menu.file.id))}
           onEditDescription={() => setDescriptionIndex(files.findIndex((file) => file.id === menu.file.id))}
           onEditLocation={() => setLocationIndex(files.findIndex((file) => file.id === menu.file.id))}
           onEditTags={(mode) => setTagPrompt({ ids: menu.ids, mode })}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {renameIndex !== null && files[renameIndex] && (
+        <RenameFileDialog
+          file={files[renameIndex]}
+          onRenamed={onFinished}
+          onClose={() => setRenameIndex(null)}
         />
       )}
 
@@ -486,7 +500,7 @@ function Row({
         selected ? "bg-ink/[0.055]" : ""
       } ${cursor ? "keyboard-cursor" : ""}`}
     >
-      <td className="py-2.5 pr-2">
+      <td className="py-2.5 pl-2 pr-2">
         <label className="inline-flex p-1 cursor-pointer align-middle">
           <input
             type="checkbox"

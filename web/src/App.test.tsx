@@ -212,4 +212,52 @@ describe("App", () => {
     expect(document.querySelector('[data-view-nav="files"]')).toHaveClass("bg-raised-hover");
     expect(document.querySelector("[data-fuzzy-finder]")).toBeNull();
   });
+
+  it("should toggle the folder sidebar with F1", async () => {
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+    const sidebar = document.querySelector("[data-folder-sidebar]");
+    const toggle = screen.getByRole("button", { name: "Toggle sidebar" });
+
+    expect(sidebar).toHaveClass("translate-x-0");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(window, { key: "F1" });
+    expect(sidebar).toHaveClass("-translate-x-full", "md:hidden");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector("main")).toHaveClass("md:pl-12");
+    fireEvent.keyDown(window, { key: "F1" });
+    expect(sidebar).toHaveClass("translate-x-0", "md:flex");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("should navigate folders with Ctrl+Down and Ctrl+Up", async () => {
+    stub = stubFetch([
+      {
+        url: "/api/v1/status",
+        body: aStatus({
+          folders: [
+            { ...aStatus().folders[0], label: "CameraRoll" },
+            { ...aStatus().folders[0], label: "Documents" },
+            { ...aStatus().folders[0], label: "Books" },
+          ],
+        }),
+      },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+
+    fireEvent.keyDown(window, { key: "ArrowDown", ctrlKey: true });
+    expect(await screen.findByRole("heading", { name: "Documents", level: 2 })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "ArrowDown", ctrlKey: true });
+    expect(await screen.findByRole("heading", { name: "Books", level: 2 })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "ArrowUp", ctrlKey: true });
+    expect(await screen.findByRole("heading", { name: "Documents", level: 2 })).toBeInTheDocument();
+  });
 });

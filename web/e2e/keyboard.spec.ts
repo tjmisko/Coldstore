@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openFolder, openView } from "./helpers";
+import { fileByName, openFolder, openView } from "./helpers";
 
 /** Type a vim sequence the way the binding table spells one. */
 async function type(page: Page, written: string) {
@@ -156,4 +156,63 @@ test("leaves the budget editor alone: a typed size is not a motion", async ({ pa
   // folder. The guard runs before normalisation, so none of it is looked at.
   await expect(budget).toHaveValue("20 GB");
   await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("toggles the folder sidebar and steps folders with the requested keys", async ({ page }) => {
+  const sidebar = page.locator("[data-folder-sidebar]");
+  await expect(sidebar).toBeVisible();
+
+  await page.keyboard.press("F1");
+  await expect(sidebar).toBeHidden();
+  await expect(page.getByRole("button", { name: "Toggle sidebar" })).toHaveAttribute("aria-expanded", "false");
+
+  await page.keyboard.press("F1");
+  await expect(sidebar).toBeVisible();
+  await page.keyboard.press("Control+ArrowDown");
+  await expect(page.getByRole("heading", { name: "Backups", level: 2 })).toBeVisible();
+  await page.keyboard.press("Control+ArrowUp");
+  await expect(page.getByRole("heading", { name: "CameraRoll", level: 2 })).toBeVisible();
+});
+
+test("keeps the file-row cursor and checkbox inset from the scroll edge", async ({ page }) => {
+  await openView(page, "files");
+  const table = page.getByRole("table");
+  const viewport = table.locator("..");
+  const row = page.locator('[data-cursor-scope="browser"][data-cursor="true"]');
+  const box = row.locator("td").first().locator("span").first();
+  const [viewportBounds, rowBounds, boxBounds] = await Promise.all([
+    viewport.boundingBox(),
+    row.boundingBox(),
+    box.boundingBox(),
+  ]);
+
+  expect(viewportBounds).not.toBeNull();
+  expect(rowBounds).not.toBeNull();
+  expect(boxBounds).not.toBeNull();
+  expect(rowBounds!.x - viewportBounds!.x).toBeGreaterThanOrEqual(3);
+  expect(boxBounds!.x - rowBounds!.x).toBeGreaterThanOrEqual(11);
+});
+
+test("renames a file from its context menu", async ({ page }) => {
+  await openFolder(page, "Documents");
+  await openView(page, "files");
+  const file = await fileByName(page, "Documents", "README.txt");
+  const row = page.locator(`[data-file-id="${file.id}"]`);
+  await expect(row).toBeVisible();
+
+  await row.click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Pin" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Unpin" })).toHaveCount(0);
+  await expect(menu.locator("[data-menu-icon]")).toHaveCount(await menu.getByRole("menuitem").count());
+  await menu.getByRole("menuitem", { name: "Rename" }).click();
+
+  const dialog = page.getByRole("dialog", { name: "Rename README.txt" });
+  const input = dialog.getByRole("textbox", { name: "New name for README.txt" });
+  await input.fill("README-renamed.txt");
+  await dialog.getByRole("button", { name: "Rename" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(row).toContainText("README-renamed.txt");
+  expect((await fileByName(page, "Documents", "README-renamed.txt")).id).toBe(file.id);
 });

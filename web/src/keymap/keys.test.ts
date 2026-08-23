@@ -35,6 +35,7 @@ describe("normalizeKey", () => {
     expect(normalizeKey({ key: "F10" })).toBe("<F10>");
     expect(normalizeKey({ key: "ContextMenu" })).toBe("<Menu>");
     expect(normalizeKey({ key: "Tab", shiftKey: true })).toBe("<S-Tab>");
+    expect(normalizeKey({ key: "ArrowDown", ctrlKey: true })).toBe("<C-Down>");
   });
 
   it("should return null when the key is only a modifier going down", () => {

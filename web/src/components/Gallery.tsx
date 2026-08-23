@@ -14,6 +14,7 @@ import { FilterBar } from "./FilterBar";
 import { Lightbox } from "./Lightbox";
 import { LocationEditor } from "./LocationEditor";
 import { PinToggle } from "./PinToggle";
+import { RenameFileDialog } from "./RenameFileDialog";
 import { SelectionBar } from "./SelectionBar";
 import { TagChips } from "./TagChips";
 import { TagMode } from "./TagMode";
@@ -62,6 +63,7 @@ export function Gallery({
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
   const [descriptionIndex, setDescriptionIndex] = useState<number | null>(null);
+  const [renameIndex, setRenameIndex] = useState<number | null>(null);
   const [locationIndex, setLocationIndex] = useState<number | null>(null);
   const [tagPrompt, setTagPrompt] = useState<{
     ids: number[];
@@ -144,7 +146,7 @@ export function Gallery({
     loading,
     loadMore,
     onTagMode: () => setTagMode(true),
-    active: lightboxIndex === null && menu === null && descriptionIndex === null && locationIndex === null && tagPrompt === null,
+    active: lightboxIndex === null && menu === null && descriptionIndex === null && renameIndex === null && locationIndex === null && tagPrompt === null,
   });
 
   if (!folder && !allFolders) {
@@ -280,11 +282,20 @@ export function Gallery({
           actions={actions}
           bulk={bulk}
           onOpen={() => setLightboxIndex(files.findIndex((f) => f.id === menu.file.id))}
+          onRename={() => setRenameIndex(files.findIndex((f) => f.id === menu.file.id))}
           onEditDescription={() => setDescriptionIndex(files.findIndex((f) => f.id === menu.file.id))}
           onEditLocation={() => setLocationIndex(files.findIndex((f) => f.id === menu.file.id))}
           onEditTags={(mode) => setTagPrompt({ ids: menu.ids, mode })}
           onShowInFiles={() => onShowInFiles(menu.file)}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {renameIndex !== null && files[renameIndex] && (
+        <RenameFileDialog
+          file={files[renameIndex]}
+          onRenamed={onFinished}
+          onClose={() => setRenameIndex(null)}
         />
       )}
 
