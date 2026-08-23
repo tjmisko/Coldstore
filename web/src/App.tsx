@@ -26,14 +26,18 @@ import type { FileRecord } from "./types/api";
 import type { FileReveal } from "./types/navigation";
 
 type View = "gallery" | "files" | "config";
+type BrowsingView = Exclude<View, "config">;
 
 const VIEWS: View[] = ["gallery", "files", "config"];
+const BROWSING_VIEWS: BrowsingView[] = ["gallery", "files"];
 const WORKSPACE_STORAGE_KEY = "coldstore.workspace.v1";
+const ALL_FOLDERS_VIEW_KEY = "*";
 
 interface SavedWorkspace {
   folder: string;
   allFolders: boolean;
   view: View;
+  folderViews: Record<string, BrowsingView>;
   filterKey: FilterKey;
   tags: string[];
 }
@@ -42,6 +46,7 @@ const DEFAULT_WORKSPACE: SavedWorkspace = {
   folder: "",
   allFolders: false,
   view: "gallery",
+  folderViews: {},
   filterKey: "all",
   tags: [],
 };
@@ -50,10 +55,31 @@ function readWorkspace(): SavedWorkspace {
   if (typeof localStorage === "undefined") return DEFAULT_WORKSPACE;
   try {
     const value = JSON.parse(localStorage.getItem(WORKSPACE_STORAGE_KEY) ?? "null") as Partial<SavedWorkspace> | null;
+    const folder = typeof value?.folder === "string" ? value.folder : "";
+    const allFolders = value?.allFolders === true;
+    const savedView = VIEWS.includes(value?.view as View) ? (value?.view as View) : "gallery";
+    const rawFolderViews = value?.folderViews;
+    const folderViews = rawFolderViews && typeof rawFolderViews === "object" && !Array.isArray(rawFolderViews)
+      ? Object.fromEntries(
+          Object.entries(rawFolderViews).filter(
+            (entry): entry is [string, BrowsingView] =>
+              entry[0] !== "" && BROWSING_VIEWS.includes(entry[1] as BrowsingView),
+          ),
+        )
+      : {};
+    const locationKey = allFolders ? ALL_FOLDERS_VIEW_KEY : folder;
+
+    // A v1 workspace saved only one global view. Seed the per-folder map from
+    // it so existing browsers keep their current choice when they upgrade.
+    if (locationKey && BROWSING_VIEWS.includes(savedView as BrowsingView) && !folderViews[locationKey]) {
+      folderViews[locationKey] = savedView as BrowsingView;
+    }
+
     return {
-      folder: typeof value?.folder === "string" ? value.folder : "",
-      allFolders: value?.allFolders === true,
-      view: VIEWS.includes(value?.view as View) ? (value?.view as View) : "gallery",
+      folder,
+      allFolders,
+      view: savedView === "config" ? savedView : folderViews[locationKey] ?? savedView,
+      folderViews,
       filterKey: FILTER_PRESETS.some((preset) => preset.key === value?.filterKey)
         ? (value?.filterKey as FilterKey)
         : "all",
@@ -96,6 +122,7 @@ function Shell() {
   const [selectedFolder, setSelectedFolder] = useState<string>(initialWorkspace.folder);
   const [allFolders, setAllFolders] = useState(initialWorkspace.allFolders);
   const [view, setView] = useState<View>(initialWorkspace.view);
+  const [folderViews, setFolderViews] = useState<Record<string, BrowsingView>>(initialWorkspace.folderViews);
   const [filterKey, setFilterKey] = useState<FilterKey>(initialWorkspace.filterKey);
   const [tagFilters, setTagFilters] = useState<string[]>(initialWorkspace.tags);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -105,6 +132,7 @@ function Shell() {
   const selectedDisplayName = allFolders
     ? "All folders"
     : selectedFolderStatus?.display_name || selectedFolder;
+  const viewLocationKey = allFolders ? ALL_FOLDERS_VIEW_KEY : selectedFolder;
 
   const keymap = useKeymap();
   const toast = useToast();
@@ -119,7 +147,7 @@ function Shell() {
   if (!allFolders && folders.length > 0 && !folders.some((folder) => folder.label === selectedFolder)) {
     const first = folders[0];
     setSelectedFolder(first.label);
-    if (selectedFolder === "") setView(isImageFolder(first.label) ? "gallery" : "files");
+    setView(folderViews[first.label] ?? (isImageFolder(first.label) ? "gallery" : "files"));
   }
 
   useDocumentTitle(view === "config" ? "Settings" : selectedDisplayName);
@@ -144,25 +172,33 @@ function Shell() {
     try {
       localStorage.setItem(
         WORKSPACE_STORAGE_KEY,
-        JSON.stringify({ folder: selectedFolder, allFolders, view, filterKey, tags: tagFilters }),
+        JSON.stringify({ folder: selectedFolder, allFolders, view, folderViews, filterKey, tags: tagFilters }),
       );
     } catch {
       // Browsing must keep working when private-mode storage is unavailable.
     }
-  }, [allFolders, filterKey, selectedFolder, tagFilters, view]);
+  }, [allFolders, filterKey, folderViews, selectedFolder, tagFilters, view]);
+
+  const changeView = useCallback((next: View) => {
+    setView(next);
+    if (!viewLocationKey || !BROWSING_VIEWS.includes(next as BrowsingView)) return;
+    setFolderViews((current) => current[viewLocationKey] === next
+      ? current
+      : { ...current, [viewLocationKey]: next as BrowsingView });
+  }, [viewLocationKey]);
 
   const selectFolder = useCallback((label: string, filter: FilterKey = "all") => {
     setSelectedFolder(label);
     setAllFolders(false);
     setFilterKey(filter);
     if (filter !== "all") setTagFilters([]);
-    setView(isImageFolder(label) ? "gallery" : "files");
-  }, []);
+    setView(folderViews[label] ?? (isImageFolder(label) ? "gallery" : "files"));
+  }, [folderViews]);
 
   const selectAllFolders = useCallback(() => {
     setAllFolders(true);
-    setView((current) => (current === "config" ? "files" : current));
-  }, []);
+    setView(folderViews[ALL_FOLDERS_VIEW_KEY] ?? (view === "config" ? "files" : view));
+  }, [folderViews, view]);
 
   const onFolderChanged = useCallback(() => {
     void refetch();
@@ -182,8 +218,8 @@ function Shell() {
   );
 
   const stepView = useCallback((delta: number) => {
-    setView((current) => VIEWS[(VIEWS.indexOf(current) + delta + VIEWS.length) % VIEWS.length]);
-  }, []);
+    changeView(VIEWS[(VIEWS.indexOf(view) + delta + VIEWS.length) % VIEWS.length]);
+  }, [changeView, view]);
 
   const rescan = useCallback(async () => {
     try {
@@ -201,13 +237,13 @@ function Shell() {
       if (command.kind !== "action") return false;
       switch (command.action) {
         case "view-gallery":
-          setView("gallery");
+          changeView("gallery");
           return true;
         case "view-files":
-          setView("files");
+          changeView("files");
           return true;
         case "view-settings":
-          setView("config");
+          changeView("config");
           return true;
         case "next-view":
           stepView(1);
@@ -246,7 +282,7 @@ function Shell() {
           return false;
       }
     },
-    [rescan, stepFolder, stepView],
+    [changeView, rescan, stepFolder, stepView],
   );
   useKeymapLayer("global", handle);
 
@@ -267,7 +303,7 @@ function Shell() {
           setFilterKey(action.key as FilterKey);
           return null;
         case "view":
-          setView(action.view as View);
+          changeView(action.view as View);
           return null;
         case "operator": {
           const ran = keymap.dispatch({
@@ -339,7 +375,7 @@ function Shell() {
           return null;
       }
     },
-    [keymap, onFolderChanged, rescan, selectFolder, selectedFolder, toast, updateFolder],
+    [changeView, keymap, onFolderChanged, rescan, selectFolder, selectedFolder, toast, updateFolder],
   );
 
   const showInFiles = useCallback(
@@ -349,6 +385,9 @@ function Shell() {
       setFilterKey("all");
       setTagFilters([]);
       setView("files");
+      setFolderViews((current) => current[file.folder_label] === "files"
+        ? current
+        : { ...current, [file.folder_label]: "files" });
       setReveal((current) => ({ file, token: (current?.token ?? 0) + 1 }));
       setOverlay(null);
     },
@@ -381,7 +420,14 @@ function Shell() {
           sidebarOpen ? "translate-x-0 md:flex" : "-translate-x-full md:hidden"
         } fixed md:static w-72 h-full bg-surface border-r border-line flex flex-col transition-transform`}
       >
-        <div className="p-4 border-b border-line">
+        <div className="flex min-h-16 items-center gap-2.5 border-b border-line px-4 pl-14 md:pl-4">
+          <img
+            src="/favicon.svg"
+            alt=""
+            aria-hidden="true"
+            data-brand-logo
+            className="size-8 shrink-0"
+          />
           <h1 className="text-lg font-semibold tracking-tight">Coldstore</h1>
         </div>
 
@@ -436,51 +482,60 @@ function Shell() {
         />
       )}
 
-      <main className={`flex-1 overflow-y-auto flex flex-col ${sidebarOpen ? "" : "md:pl-12"}`}>
-        <ViewToggle view={view} onChange={setView} />
-        {error && <ErrorBanner message={error} status={errorStatus} />}
+      <main className={`min-w-0 flex-1 flex flex-col ${sidebarOpen ? "" : "md:pl-12"}`}>
+        <header data-app-toolbar className="flex min-h-16 shrink-0 items-center justify-end px-3">
+          <ViewToggle
+            view={view}
+            onChange={changeView}
+            onHelp={() => setOverlay({ kind: "cheatsheet" })}
+          />
+        </header>
 
-        <div className="flex-1">
-          {view === "gallery" && (
-            <Gallery
-              key={`gallery-${allFolders ? "all" : selectedFolder}`}
-              folder={selectedFolder}
-              displayName={selectedDisplayName}
-              allFolders={allFolders}
-              filterKey={filterKey}
-              onFilterChange={setFilterKey}
-              tagFilters={tagFilters}
-              onTagFiltersChange={setTagFilters}
-              onFolderChanged={onFolderChanged}
-              onShowInFiles={showInFiles}
-            />
-          )}
-          {view === "files" && (
-            <FileBrowser
-              key={`files-${allFolders ? "all" : selectedFolder}`}
-              folder={selectedFolder}
-              displayName={selectedDisplayName}
-              allFolders={allFolders}
-              filterKey={filterKey}
-              onFilterChange={setFilterKey}
-              tagFilters={tagFilters}
-              onTagFiltersChange={setTagFilters}
-              onFolderChanged={onFolderChanged}
-              reveal={reveal}
-              onShowInFiles={showInFiles}
-            />
-          )}
-          {view === "config" && (
-            <ConfigPanel
-              status={status}
-              selectedFolder={selectedFolder}
-              onSelectFolder={(label) => {
-                setSelectedFolder(label);
-                setAllFolders(false);
-              }}
-              onChanged={onFolderChanged}
-            />
-          )}
+        <div data-content-scroll className="min-h-0 flex-1 overflow-y-auto">
+          {error && <ErrorBanner message={error} status={errorStatus} />}
+
+          <div className="min-h-full">
+            {view === "gallery" && (
+              <Gallery
+                key={`gallery-${allFolders ? "all" : selectedFolder}`}
+                folder={selectedFolder}
+                displayName={selectedDisplayName}
+                allFolders={allFolders}
+                filterKey={filterKey}
+                onFilterChange={setFilterKey}
+                tagFilters={tagFilters}
+                onTagFiltersChange={setTagFilters}
+                onFolderChanged={onFolderChanged}
+                onShowInFiles={showInFiles}
+              />
+            )}
+            {view === "files" && (
+              <FileBrowser
+                key={`files-${allFolders ? "all" : selectedFolder}`}
+                folder={selectedFolder}
+                displayName={selectedDisplayName}
+                allFolders={allFolders}
+                filterKey={filterKey}
+                onFilterChange={setFilterKey}
+                tagFilters={tagFilters}
+                onTagFiltersChange={setTagFilters}
+                onFolderChanged={onFolderChanged}
+                reveal={reveal}
+                onShowInFiles={showInFiles}
+              />
+            )}
+            {view === "config" && (
+              <ConfigPanel
+                status={status}
+                selectedFolder={selectedFolder}
+                onSelectFolder={(label) => {
+                  setSelectedFolder(label);
+                  setAllFolders(false);
+                }}
+                onChanged={onFolderChanged}
+              />
+            )}
+          </div>
         </div>
       </main>
 
@@ -516,7 +571,15 @@ function Shell() {
   );
 }
 
-function ViewToggle({ view, onChange }: { view: View; onChange(view: View): void }) {
+function ViewToggle({
+  view,
+  onChange,
+  onHelp,
+}: {
+  view: View;
+  onChange(view: View): void;
+  onHelp(): void;
+}) {
   const labels: Record<View, string> = {
     gallery: "Gallery",
     files: "Files",
@@ -524,30 +587,40 @@ function ViewToggle({ view, onChange }: { view: View; onChange(view: View): void
   };
 
   return (
-    <nav
-      aria-label="Views"
-      style={{ zIndex: Z.viewToggle }}
-      className="fixed right-3 top-3 flex rounded-lg border border-line-strong bg-surface/95 p-1 shadow-lg backdrop-blur-sm"
-    >
-      {VIEWS.map((option) => (
-        <button
-          key={option}
-          type="button"
-          data-view-nav={option}
-          aria-label={`${labels[option]} view`}
-          aria-current={view === option ? "page" : undefined}
-          title={labels[option]}
-          onClick={() => onChange(option)}
-          className={`rounded-md p-2 transition-[background-color,color,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
-            view === option
-              ? "bg-raised-hover text-ink"
-              : "text-ink-faint hover:bg-raised hover:text-ink"
-          }`}
-        >
-          <ViewIcon view={option} />
-        </button>
-      ))}
-    </nav>
+    <div className="flex items-center gap-2">
+      <nav
+        aria-label="Views"
+        className="flex rounded-lg border border-line-strong bg-surface p-1 shadow-lg"
+      >
+        {VIEWS.map((option) => (
+          <button
+            key={option}
+            type="button"
+            data-view-nav={option}
+            aria-label={`${labels[option]} view`}
+            aria-current={view === option ? "page" : undefined}
+            title={labels[option]}
+            onClick={() => onChange(option)}
+            className={`rounded-md p-2 transition-[background-color,color,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
+              view === option
+                ? "bg-raised-hover text-ink"
+                : "text-ink-faint hover:bg-raised hover:text-ink"
+            }`}
+          >
+            <ViewIcon view={option} />
+          </button>
+        ))}
+      </nav>
+      <button
+        type="button"
+        aria-label="Keyboard shortcuts"
+        title="Keyboard shortcuts (?)"
+        onClick={onHelp}
+        className="flex size-10 items-center justify-center rounded-lg border border-line-strong bg-surface font-mono text-base text-ink-faint shadow-lg transition-colors hover:bg-raised hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+      >
+        ?
+      </button>
+    </div>
   );
 }
 

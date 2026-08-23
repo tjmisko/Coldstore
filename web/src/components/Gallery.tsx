@@ -159,10 +159,7 @@ export function Gallery({
 
   return (
     <div className="p-4 md:p-6 pb-24">
-      {/* ml-11 clears the fixed sidebar toggle, which is md:hidden and sat on
-          top of the first few characters of the folder name at 390px. Margin,
-          not padding: the box has to move for a bounding-box test to see it. */}
-      <h2 className="mb-4 ml-11 pr-32 text-title font-medium tracking-tight md:ml-0">{displayName}</h2>
+      <h2 className="mb-4 text-title font-medium tracking-tight">{displayName}</h2>
       <FilterBar
         active={filterKey}
         onChange={onFilterChange}

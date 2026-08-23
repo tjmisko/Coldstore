@@ -227,20 +227,32 @@ test("shows warning-class activity for the selected folder", async ({ page }) =>
 test.describe("on a phone-sized viewport", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("does not park the sidebar toggle on top of the folder name", async ({ page }) => {
-    // The toggle is `fixed top-3 left-3 md:hidden` and the heading had no left
-    // inset below that breakpoint, so "CameraRoll" rendered as "meraRoll".
+  test("keeps the app controls clear of the sidebar brand and folder content", async ({ page }) => {
+    const toggle = page.getByRole("button", { name: "Toggle sidebar" });
+    const brand = page.getByRole("heading", { name: "Coldstore", level: 1 });
+    await expect(page.locator("[data-brand-logo]")).toBeVisible();
+    await expect(brand).toBeVisible();
+
+    const openToggleBox = await toggle.boundingBox();
+    const brandBox = await brand.boundingBox();
+    expect(openToggleBox).not.toBeNull();
+    expect(brandBox).not.toBeNull();
+    expect(brandBox!.x).toBeGreaterThanOrEqual(openToggleBox!.x + openToggleBox!.width);
+
     await page.locator('[data-folder-nav="CameraRoll"]').click();
 
-    const toggle = page.getByRole("button", { name: "Toggle sidebar" });
     const heading = page.getByRole("heading", { name: "CameraRoll", level: 2 });
+    const toolbar = page.locator("[data-app-toolbar]");
     await expect(heading).toBeVisible();
 
     const toggleBox = await toggle.boundingBox();
     const headingBox = await heading.boundingBox();
+    const toolbarBox = await toolbar.boundingBox();
     expect(toggleBox).not.toBeNull();
     expect(headingBox).not.toBeNull();
-    expect(headingBox!.x).toBeGreaterThanOrEqual(toggleBox!.x + toggleBox!.width);
+    expect(toolbarBox).not.toBeNull();
+    expect(headingBox!.y).toBeGreaterThanOrEqual(toggleBox!.y + toggleBox!.height);
+    expect(headingBox!.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height);
   });
 
   test("should let a touch device select a photo when nothing is selected yet", async ({ page }) => {

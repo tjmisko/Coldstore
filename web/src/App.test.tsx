@@ -140,6 +140,58 @@ describe("App", () => {
     });
   });
 
+  it("should remember the browsing view separately for each folder", async () => {
+    stub = stubFetch([
+      {
+        url: "/api/v1/status",
+        body: aStatus({
+          folders: [
+            { ...aStatus().folders[0], label: "CameraRoll" },
+            { ...aStatus().folders[0], label: "Documents" },
+          ],
+        }),
+      },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    const app = render(<App />);
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+
+    await userEvent.click(screen.getByRole("button", { name: "Files view" }));
+    await userEvent.click(document.querySelector<HTMLButtonElement>('[data-folder-nav="Documents"]')!);
+    await userEvent.click(screen.getByRole("button", { name: "Gallery view" }));
+
+    await userEvent.click(document.querySelector<HTMLButtonElement>('[data-folder-nav="CameraRoll"]')!);
+    expect(document.querySelector('[data-view-nav="files"]')).toHaveAttribute("aria-current", "page");
+
+    await userEvent.click(document.querySelector<HTMLButtonElement>('[data-folder-nav="Documents"]')!);
+    expect(document.querySelector('[data-view-nav="gallery"]')).toHaveAttribute("aria-current", "page");
+    await waitFor(() => expect(
+      JSON.parse(localStorage.getItem("coldstore.workspace.v1") ?? "{}").folderViews,
+    ).toEqual({ CameraRoll: "files", Documents: "gallery" }));
+
+    app.unmount();
+    render(<App />);
+    await screen.findByRole("heading", { name: "Documents", level: 2 });
+    expect(document.querySelector('[data-view-nav="gallery"]')).toHaveAttribute("aria-current", "page");
+    await userEvent.click(document.querySelector<HTMLButtonElement>('[data-folder-nav="CameraRoll"]')!);
+    expect(document.querySelector('[data-view-nav="files"]')).toHaveAttribute("aria-current", "page");
+  });
+
+  it("should brand the sidebar with the favicon and offer shortcut help from the toolbar", async () => {
+    stub = stubFetch([
+      { url: "/api/v1/status", body: aStatus() },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+
+    expect(document.querySelector("[data-brand-logo]")).toHaveAttribute("src", "/favicon.svg");
+    await userEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }));
+    expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+  });
+
   it("should filter by tags inside one folder and across all folders", async () => {
     stub = stubFetch([
       { url: "/api/v1/status", body: aStatus() },

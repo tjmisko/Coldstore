@@ -15,8 +15,6 @@ export const Z = {
   sidebarBackdrop: 30,
   sidebar: 40,
   selectionBar: 40,
-  /** Persistent view switcher in the top-right corner. */
-  viewToggle: 44,
   /** Below the lightbox, so a full-screen photo is not overlaid by a
    *  hamburger. This was the tie. */
   sidebarToggle: 45,
