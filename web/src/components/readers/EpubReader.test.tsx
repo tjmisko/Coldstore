@@ -1,7 +1,8 @@
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { stubFetch } from "../../test/harness";
+import { KeymapProvider } from "../KeymapProvider";
 import EpubReader from "./EpubReader";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
@@ -21,7 +22,11 @@ const SPINE = {
 
 function renderReader(body: unknown = SPINE, status = 200) {
   stub = stubFetch([{ url: "/api/v1/files/9/epub", body, status }]);
-  return render(<EpubReader fileId={9} filename="guide.epub" />);
+  return render(
+    <KeymapProvider>
+      <EpubReader fileId={9} filename="guide.epub" />
+    </KeymapProvider>,
+  );
 }
 
 describe("EpubReader", () => {
@@ -58,6 +63,25 @@ describe("EpubReader", () => {
 
     const frame = document.querySelector("[data-epub-frame]") as HTMLIFrameElement;
     expect(frame.getAttribute("src")).toBe("/api/v1/files/9/epub/OEBPS/text/ch2.xhtml");
+  });
+
+  it("should move between sections with PageDown and PageUp", async () => {
+    renderReader();
+    await waitFor(() => {
+      expect(document.querySelector("[data-epub-frame]")).not.toBeNull();
+    });
+
+    fireEvent.keyDown(window, { key: "PageDown" });
+    await waitFor(() =>
+      expect(document.querySelector("[data-epub-frame]")?.getAttribute("src"))
+        .toBe("/api/v1/files/9/epub/OEBPS/text/ch2.xhtml"),
+    );
+
+    fireEvent.keyDown(window, { key: "PageUp" });
+    await waitFor(() =>
+      expect(document.querySelector("[data-epub-frame]")?.getAttribute("src"))
+        .toBe("/api/v1/files/9/epub/OEBPS/text/ch1.xhtml"),
+    );
   });
 
   it("should label a section with the book's own title for it when one exists", async () => {

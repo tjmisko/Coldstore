@@ -55,6 +55,9 @@ func (e *recoveryEnv) devicePath(rel string) string { return filepath.Join(e.syn
 func (e *recoveryEnv) archivePath(rel string) string {
 	return filepath.Join(e.coldDir, "archive", "TestFolder", rel)
 }
+func (e *recoveryEnv) trashPath(rel string) string {
+	return filepath.Join(e.coldDir, "trash", "TestFolder", rel)
+}
 
 // plantRow catalogues a file with the given size and status without touching
 // the filesystem, so a test can describe any post-crash state exactly.
@@ -159,6 +162,62 @@ func mustContain(t *testing.T, path, want string) {
 	if string(got) != want {
 		t.Errorf("%s = %q, want %q", path, got, want)
 	}
+}
+
+func beginTrashState(t *testing.T, e *recoveryEnv, rel string, size int64, mtime time.Time, from catalog.FileStatus) *catalog.FileRecord {
+	t.Helper()
+	rec := e.plantRow(t, rel, size, mtime, from)
+	claimed, err := e.cat.BeginTrash(rec.ID, from)
+	if err != nil || !claimed {
+		t.Fatalf("BeginTrash = %v, %v", claimed, err)
+	}
+	return rec
+}
+
+// ---------------------------------------------------------------------------
+// rows stuck in trash transitions
+// ---------------------------------------------------------------------------
+
+func TestRecoverTrashingShouldPromoteTheLastCopyToRecoverableTrash(t *testing.T) {
+	e := setupRecoveryEnv(t)
+	now := time.Now().Truncate(time.Second)
+	rec := beginTrashState(t, e, "deleted.txt", 10, now, catalog.StatusSynced)
+	writeAt(t, e.trashPath("deleted.txt"), "0123456789", now)
+
+	e.recover(t)
+
+	got, err := e.cat.GetFileByID(rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != catalog.StatusTrashed || got.TrashedFrom != catalog.StatusSynced || got.TrashedAt == nil {
+		t.Fatalf("recovered row = status %q, from %q, at %v", got.Status, got.TrashedFrom, got.TrashedAt)
+	}
+	mustContain(t, e.trashPath("deleted.txt"), "0123456789")
+}
+
+func TestRecoverUntrashingShouldCommitTheRecordedOriginalState(t *testing.T) {
+	e := setupRecoveryEnv(t)
+	now := time.Now().Truncate(time.Second)
+	rec := beginTrashState(t, e, "old.txt", 10, now, catalog.StatusArchived)
+	if marked, err := e.cat.MarkTrashed(rec.ID, now); err != nil || !marked {
+		t.Fatalf("MarkTrashed = %v, %v", marked, err)
+	}
+	if claimed, err := e.cat.BeginUntrash(rec.ID); err != nil || !claimed {
+		t.Fatalf("BeginUntrash = %v, %v", claimed, err)
+	}
+	writeAt(t, e.archivePath("old.txt"), "0123456789", now)
+
+	e.recover(t)
+
+	got, err := e.cat.GetFileByID(rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != catalog.StatusArchived || got.TrashedFrom != "" || got.TrashedAt != nil {
+		t.Fatalf("recovered row = status %q, from %q, at %v", got.Status, got.TrashedFrom, got.TrashedAt)
+	}
+	mustContain(t, e.archivePath("old.txt"), "0123456789")
 }
 
 // ---------------------------------------------------------------------------

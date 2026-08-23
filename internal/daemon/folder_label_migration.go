@@ -113,7 +113,7 @@ type folderRootMove struct {
 
 func moveFolderLabelRoots(coldRoot, oldLabel, newLabel string) ([]folderRootMove, error) {
 	var moves []folderRootMove
-	for _, kind := range []string{"archive", "thumbnails"} {
+	for _, kind := range []string{"archive", "trash", "thumbnails"} {
 		parent := filepath.Join(coldRoot, kind)
 		source := filepath.Join(parent, oldLabel)
 		destination := filepath.Join(parent, newLabel)

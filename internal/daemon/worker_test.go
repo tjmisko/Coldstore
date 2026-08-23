@@ -159,6 +159,48 @@ func TestJobWorkerShouldPinEveryFileWhenABulkRestoreCompletes(t *testing.T) {
 	}
 }
 
+func TestJobWorkerShouldDriveTrashRestoreAndPermanentDelete(t *testing.T) {
+	env := newWorkerEnv(t)
+	file := seedSyncedFile(t, env.cat, env.syncDir, "photo.jpg", 100)
+
+	trashJob, err := env.cat.CreateJob(catalog.JobActionTrash, "", []int64{file.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.worker.RunOnce(context.Background())
+	assertTerminalCounters(t, env.job(t, trashJob))
+	if got := env.status(t, file.ID); got != catalog.StatusTrashed {
+		t.Fatalf("status after trash job = %q, want trashed", got)
+	}
+
+	restoreJob, err := env.cat.CreateJob(catalog.JobActionUntrash, "", []int64{file.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.worker.RunOnce(context.Background())
+	assertTerminalCounters(t, env.job(t, restoreJob))
+	if got := env.status(t, file.ID); got != catalog.StatusSynced {
+		t.Fatalf("status after untrash job = %q, want synced", got)
+	}
+
+	trashAgain, err := env.cat.CreateJob(catalog.JobActionTrash, "", []int64{file.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.worker.RunOnce(context.Background())
+	assertTerminalCounters(t, env.job(t, trashAgain))
+
+	deleteJob, err := env.cat.CreateJob(catalog.JobActionDelete, "", []int64{file.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.worker.RunOnce(context.Background())
+	assertTerminalCounters(t, env.job(t, deleteJob))
+	if _, err := env.cat.GetFileByID(file.ID); !errors.Is(err, catalog.ErrNoSuchFile) {
+		t.Fatalf("catalog row after delete job: %v, want ErrNoSuchFile", err)
+	}
+}
+
 func TestJobWorkerShouldRecordTheFailureAndEndFailedWhenOneIdDoesNotExist(t *testing.T) {
 	env := newWorkerEnv(t)
 	ids := env.seedMany(t, 5)

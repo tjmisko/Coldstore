@@ -51,7 +51,7 @@ export function aFolderStatus(overrides: Partial<FolderStatus> = {}): FolderStat
     present_in_toml: true,
     last_enforced_at: null,
     syncthing_type: "",
-    counts: { total: 100, synced: 80, archived: 18, missing: 2, pinned: 10 },
+    counts: { total: 100, synced: 80, archived: 18, missing: 2, trashed: 0, pinned: 10 },
     ...overrides,
   };
 }
@@ -62,6 +62,7 @@ export function aStatus(overrides: Partial<StatusResponse> = {}): StatusResponse
     synced_files: 80,
     archived_files: 18,
     missing_files: 2,
+    trashed_files: 0,
     cold_storage_free_bytes: 500_000_000_000,
     folders: [aFolderStatus()],
     ...overrides,

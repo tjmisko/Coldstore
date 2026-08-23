@@ -12,8 +12,7 @@ import (
 )
 
 // RecoverStartupState resolves every file row left in a transient state by a
-// previous run: "archiving" (a move out that never committed) and "restoring"
-// (a move in that never committed).
+// previous run: archive/restore and trash/untrash moves that never committed.
 //
 // It is a STARTUP-ONLY phase and it must stay one. It mutates the filesystem
 // and writes file rows without holding any mover lock, so running it from a
@@ -42,6 +41,12 @@ func RecoverStartupState(cfg *config.Config, cat *catalog.Catalog, logger *slog.
 	if err := r.recoverRestoring(); err != nil {
 		return fmt.Errorf("recovering interrupted restores: %w", err)
 	}
+	if err := r.recoverTrashing(); err != nil {
+		return fmt.Errorf("recovering interrupted trash moves: %w", err)
+	}
+	if err := r.recoverUntrashing(); err != nil {
+		return fmt.Errorf("recovering interrupted trash restores: %w", err)
+	}
 	return nil
 }
 
@@ -69,6 +74,28 @@ func (r *recovery) folderPath(label string) (string, error) {
 
 func (r *recovery) archivePath(f *catalog.FileRecord) string {
 	return filepath.Join(r.cfg.Storage.ColdStoragePath, "archive", f.FolderLabel, f.RelativePath)
+}
+
+func (r *recovery) trashPath(f *catalog.FileRecord) string {
+	return filepath.Join(r.cfg.Storage.ColdStoragePath, "trash", f.FolderLabel, f.RelativePath)
+}
+
+func (r *recovery) originalTrashPath(f *catalog.FileRecord) (string, error) {
+	switch f.TrashedFrom {
+	case catalog.StatusSynced:
+		root, err := r.folderPath(f.FolderLabel)
+		if err != nil {
+			return "", err
+		}
+		if err := FolderReady(root); err != nil {
+			return "", err
+		}
+		return filepath.Join(root, f.RelativePath), nil
+	case catalog.StatusArchived:
+		return r.archivePath(f), nil
+	default:
+		return "", fmt.Errorf("invalid trashed_from %q", f.TrashedFrom)
+	}
 }
 
 // removeStaleTemp deletes the temp sibling a killed copy may have left next to
@@ -307,6 +334,99 @@ func (r *recovery) recoverRestoring() error {
 	return nil
 }
 
+func (r *recovery) recoverTrashing() error {
+	files, err := r.cat.TrashingFiles()
+	if err != nil {
+		return err
+	}
+	for i := range files {
+		f := &files[i]
+		src, err := r.originalTrashPath(f)
+		if err != nil {
+			r.logger.Warn("cannot recover interrupted trash move", "folder", f.FolderLabel,
+				"path", f.RelativePath, "error", err)
+			continue
+		}
+		dst := r.trashPath(f)
+		r.removeStaleTemp(dst)
+		srcInfo, srcErr := os.Lstat(src)
+		dstInfo, dstErr := os.Lstat(dst)
+
+		switch {
+		case srcErr == nil && dstErr != nil:
+			r.abortTrash(f, "original copy intact; trash move never committed")
+		case srcErr != nil && dstErr == nil:
+			r.markTrashed(f, "trash copy complete; original already removed")
+		case srcErr == nil && dstErr == nil && dstInfo.Size() == f.SizeBytes && r.sourceUnchanged(f, srcInfo):
+			if err := os.Remove(src); err != nil {
+				r.logger.Error("cannot remove original after completed trash move", "path", src, "error", err)
+				continue
+			}
+			r.markTrashed(f, "trash copy complete; removed leftover original")
+		case srcErr == nil && dstErr == nil:
+			aside := r.setAside(dst)
+			r.abortTrash(f, "trash copy did not match the original")
+			r.cat.LogEvent("trash_conflict", f.FolderLabel, f.RelativePath,
+				fmt.Sprintf("unexpected trash copy kept as %s", filepath.Base(aside)))
+		case srcErr != nil && dstErr != nil:
+			r.markTrashMissing(f, "neither original nor trash copy exists")
+		default:
+			// The trash copy is the last known copy. Preserve and reference it
+			// even when its size is unexpected.
+			r.markTrashed(f, "trash copy is the only remaining copy")
+			r.cat.LogEvent("trash_unconfirmed", f.FolderLabel, f.RelativePath,
+				fmt.Sprintf("trash copy is %d bytes against a catalogued %d", dstInfo.Size(), f.SizeBytes))
+		}
+	}
+	return nil
+}
+
+func (r *recovery) recoverUntrashing() error {
+	files, err := r.cat.UntrashingFiles()
+	if err != nil {
+		return err
+	}
+	for i := range files {
+		f := &files[i]
+		src := r.trashPath(f)
+		dst, err := r.originalTrashPath(f)
+		if err != nil {
+			r.logger.Warn("cannot recover interrupted trash restore", "folder", f.FolderLabel,
+				"path", f.RelativePath, "error", err)
+			continue
+		}
+		r.removeStaleTemp(dst)
+		_, srcErr := os.Lstat(src)
+		dstInfo, dstErr := os.Lstat(dst)
+
+		switch {
+		case srcErr == nil && dstErr != nil:
+			r.abortUntrash(f, "trash copy intact; restore never committed")
+		case srcErr != nil && dstErr == nil:
+			r.markUntrashed(f, "restore completed; catalog commit was lost")
+			if dstInfo.Size() != f.SizeBytes {
+				r.cat.LogEvent("untrash_unconfirmed", f.FolderLabel, f.RelativePath,
+					fmt.Sprintf("restored copy is %d bytes against a catalogued %d", dstInfo.Size(), f.SizeBytes))
+			}
+		case srcErr == nil && dstErr == nil && r.sourceUnchanged(f, dstInfo):
+			if err := os.Remove(src); err != nil {
+				r.logger.Error("cannot remove trash copy after completed restore", "path", src, "error", err)
+				continue
+			}
+			r.markUntrashed(f, "restore completed; removed leftover trash copy")
+		case srcErr == nil && dstErr == nil:
+			// The destination is an independently recreated file. Keep both and
+			// leave the recoverable trash copy authoritative.
+			r.abortUntrash(f, "restore destination is occupied by a different file")
+			r.cat.LogEvent("untrash_conflict", f.FolderLabel, f.RelativePath,
+				"restore destination is occupied; the trash copy was kept")
+		default:
+			r.markTrashMissing(f, "neither trash nor restored copy exists")
+		}
+	}
+	return nil
+}
+
 // sourceUnchanged reports whether the file on the device still matches what the
 // catalog recorded. Mtimes are compared at second resolution because that is
 // what the catalog stores.
@@ -363,4 +483,53 @@ func (r *recovery) markRestored(f *catalog.FileRecord, why string) {
 	}
 	r.logger.Info("recovered interrupted move",
 		"path", f.RelativePath, "folder", f.FolderLabel, "status", catalog.StatusSynced, "reason", why)
+}
+
+func (r *recovery) abortTrash(f *catalog.FileRecord, why string) {
+	ok, err := r.cat.AbortTrash(f.ID, f.TrashedFrom)
+	if err != nil || !ok {
+		r.logger.Error("recovery could not roll back trash move", "id", f.ID, "path", f.RelativePath, "error", err)
+		return
+	}
+	r.logger.Info("recovered interrupted trash move", "path", f.RelativePath,
+		"folder", f.FolderLabel, "status", f.TrashedFrom, "reason", why)
+}
+
+func (r *recovery) markTrashed(f *catalog.FileRecord, why string) {
+	ok, err := r.cat.MarkTrashed(f.ID, time.Now())
+	if err != nil || !ok {
+		r.logger.Error("recovery could not mark file trashed", "id", f.ID, "path", f.RelativePath, "error", err)
+		return
+	}
+	r.logger.Info("recovered interrupted trash move", "path", f.RelativePath,
+		"folder", f.FolderLabel, "status", catalog.StatusTrashed, "reason", why)
+}
+
+func (r *recovery) abortUntrash(f *catalog.FileRecord, why string) {
+	ok, err := r.cat.AbortUntrash(f.ID)
+	if err != nil || !ok {
+		r.logger.Error("recovery could not roll back trash restore", "id", f.ID, "path", f.RelativePath, "error", err)
+		return
+	}
+	r.logger.Info("recovered interrupted trash restore", "path", f.RelativePath,
+		"folder", f.FolderLabel, "status", catalog.StatusTrashed, "reason", why)
+}
+
+func (r *recovery) markUntrashed(f *catalog.FileRecord, why string) {
+	ok, err := r.cat.MarkUntrashed(f.ID)
+	if err != nil || !ok {
+		r.logger.Error("recovery could not commit trash restore", "id", f.ID, "path", f.RelativePath, "error", err)
+		return
+	}
+	r.logger.Info("recovered interrupted trash restore", "path", f.RelativePath,
+		"folder", f.FolderLabel, "status", f.TrashedFrom, "reason", why)
+}
+
+func (r *recovery) markTrashMissing(f *catalog.FileRecord, why string) {
+	ok, err := r.cat.MarkTrashMissing(f.ID, f.TrashedFrom)
+	if err != nil || !ok {
+		r.logger.Error("recovery could not mark lost trash move missing", "id", f.ID, "path", f.RelativePath, "error", err)
+		return
+	}
+	r.cat.LogEvent("source_vanished", f.FolderLabel, f.RelativePath, why)
 }

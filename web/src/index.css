@@ -117,13 +117,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* The keyboard cursor sits just outside the item instead of crushing its
- * content. The short settle makes a moved cursor easy to reacquire without
- * turning every j/k press into a flourish. */
+/* Keep the keyboard cursor inside the item. An outside outline is clipped by
+ * the file table's horizontal scroll viewport at its first and last columns,
+ * which cuts off both rounded ends. The inset still leaves the content
+ * untouched while guaranteeing all four edges remain visible. */
 .keyboard-cursor {
   border-radius: 0.7rem;
   outline: 2px solid var(--color-cursor);
-  outline-offset: 4px;
+  outline-offset: -2px;
   transition: outline-color 140ms ease, outline-offset 140ms ease, background-color 140ms ease;
   animation: keyboard-cursor-in 160ms ease-out;
 }
@@ -131,11 +132,11 @@ body {
 @keyframes keyboard-cursor-in {
   from {
     outline-color: color-mix(in srgb, var(--color-cursor) 35%, transparent);
-    outline-offset: 1px;
+    outline-offset: -5px;
   }
   to {
     outline-color: var(--color-cursor);
-    outline-offset: 4px;
+    outline-offset: -2px;
   }
 }
 

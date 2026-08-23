@@ -50,7 +50,7 @@ const idChunkSize = 500
 // files uses it and scanFile is its only consumer, so adding a column is two
 // edits in one commit instead of eight coordinated ones.
 const fileColumns = `id, folder_label, relative_path, filename, extension, mime_type,
-	size_bytes, file_mtime, file_atime, first_seen, archived_at, status,
+	size_bytes, file_mtime, file_atime, first_seen, archived_at, trashed_at, trashed_from, status,
 	thumbnail_path, content_hash, pinned, pinned_at, pin_source, last_seen,
 	thumb_attempts, thumb_last_attempt, thumb_error, detected_type,
 	description, captured_local, captured_offset_minutes, captured_source,
@@ -138,11 +138,11 @@ func (c *Catalog) UpsertFile(f *FileRecord, scanGeneration int64) (conflict bool
 		INSERT INTO files (folder_label, relative_path, filename, extension, mime_type, size_bytes, file_mtime, file_atime, status, last_seen)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(folder_label, relative_path) DO UPDATE SET
-			filename   = CASE WHEN files.status = 'archived' THEN files.filename   ELSE excluded.filename   END,
-			size_bytes = CASE WHEN files.status = 'archived' THEN files.size_bytes ELSE excluded.size_bytes END,
-			file_mtime = CASE WHEN files.status = 'archived' THEN files.file_mtime ELSE excluded.file_mtime END,
-			file_atime = CASE WHEN files.status = 'archived' THEN files.file_atime ELSE excluded.file_atime END,
-			mime_type  = CASE WHEN files.status = 'archived' THEN files.mime_type  ELSE excluded.mime_type  END,
+			filename   = CASE WHEN files.status IN ('archived','trashing','trashed','untrashing') THEN files.filename   ELSE excluded.filename   END,
+			size_bytes = CASE WHEN files.status IN ('archived','trashing','trashed','untrashing') THEN files.size_bytes ELSE excluded.size_bytes END,
+			file_mtime = CASE WHEN files.status IN ('archived','trashing','trashed','untrashing') THEN files.file_mtime ELSE excluded.file_mtime END,
+			file_atime = CASE WHEN files.status IN ('archived','trashing','trashed','untrashing') THEN files.file_atime ELSE excluded.file_atime END,
+			mime_type  = CASE WHEN files.status IN ('archived','trashing','trashed','untrashing') THEN files.mime_type  ELSE excluded.mime_type  END,
 			-- The sniffed type describes bytes, so it survives everything
 			-- except the bytes changing. Clearing it back to '' is what puts
 			-- the row into FilesNeedingSniff again; without this arm a file
@@ -151,7 +151,7 @@ func (c *Catalog) UpsertFile(f *FileRecord, scanGeneration int64) (conflict bool
 			-- have changed under a scan of the syncthing folder, so it keeps
 			-- what it has.
 			detected_type = CASE
-				WHEN files.status = 'archived' THEN files.detected_type
+				WHEN files.status IN ('archived','trashing','trashed','untrashing') THEN files.detected_type
 				WHEN files.file_mtime <> excluded.file_mtime THEN ''
 				WHEN files.size_bytes <> excluded.size_bytes THEN ''
 				ELSE files.detected_type
@@ -259,6 +259,10 @@ func (q FileQuery) filter() (string, []any) {
 	if q.Status != "" {
 		clause.WriteString(" AND status = ?")
 		args = append(args, q.Status)
+	} else {
+		// Trash is a separate browsing surface. An unfiltered catalog listing,
+		// tag search or fuzzy find must not make deleted files look active.
+		clause.WriteString(" AND status NOT IN ('trashed','trashing','untrashing')")
 	}
 	if q.Extension != "" {
 		clause.WriteString(" AND extension = ?")
@@ -670,6 +674,16 @@ func (c *Catalog) RestoringFiles() ([]FileRecord, error) {
 	return c.queryFiles(`SELECT ` + fileColumns + ` FROM files WHERE status = 'restoring'`)
 }
 
+// TrashingFiles and UntrashingFiles are consumed only by startup recovery,
+// before the daemon, worker and HTTP server begin mutating files.
+func (c *Catalog) TrashingFiles() ([]FileRecord, error) {
+	return c.queryFiles(`SELECT ` + fileColumns + ` FROM files WHERE status = 'trashing'`)
+}
+
+func (c *Catalog) UntrashingFiles() ([]FileRecord, error) {
+	return c.queryFiles(`SELECT ` + fileColumns + ` FROM files WHERE status = 'untrashing'`)
+}
+
 // MarkFilesMissingBeforeGeneration marks as missing every synced file in a
 // folder that the scan identified by scanGeneration did not touch. It must be
 // called only after a walk that COMPLETED without error; an aborted or
@@ -690,12 +704,13 @@ func (c *Catalog) MarkFilesMissingBeforeGeneration(folder string, scanGeneration
 // FolderSizes returns the folder's on-device footprint and the pinned subset
 // of it, in one pass.
 //
-// Both figures count status IN ('synced','archiving','restoring'):
+// Both figures count statuses whose bytes are on-device or in flight there:
 //   - synced    : on device now
 //   - archiving : still on device, a move out is in flight
 //   - restoring : a move in is in flight; the bytes are about to land
 //
-// 'archived' and 'missing' are not on the device and are excluded from both.
+// A trash move/restore only counts when its recorded origin is synced.
+// 'archived', settled 'trashed' and 'missing' are excluded from both.
 //
 // pinned is a SUBSET of total, never an addend. Per D3 the budget is a hard cap
 // on the on-device footprint whether pinned or not.
@@ -704,7 +719,9 @@ func (c *Catalog) FolderSizes(folder string) (total, pinned int64, err error) {
 		SELECT COALESCE(SUM(size_bytes), 0),
 		       COALESCE(SUM(CASE WHEN pinned = 1 THEN size_bytes ELSE 0 END), 0)
 		FROM files
-		WHERE folder_label = ? AND status IN ('synced','archiving','restoring')
+		WHERE folder_label = ? AND (
+			status IN ('synced','archiving','restoring') OR
+			(status IN ('trashing','untrashing') AND trashed_from = 'synced'))
 	`, folder).Scan(&total, &pinned)
 	return total, pinned, err
 }
@@ -724,7 +741,8 @@ func (c *Catalog) FolderSizesForIDs(ids []int64) (map[string]int64, error) {
 		}
 		rows, err := c.db.Query(`
 			SELECT folder_label, COALESCE(SUM(size_bytes), 0)
-			FROM files WHERE id IN (`+placeholders(len(chunk))+`) AND status = 'archived'
+			FROM files WHERE id IN (`+placeholders(len(chunk))+`) AND
+				(status = 'archived' OR (status = 'trashed' AND trashed_from = 'synced'))
 			GROUP BY folder_label`, args...)
 		if err != nil {
 			return nil, err
@@ -880,11 +898,13 @@ func (c *Catalog) FolderCounts(folder string) (FolderCounts, error) {
 		       COALESCE(SUM(CASE WHEN status = 'synced' THEN 1 ELSE 0 END), 0),
 		       COALESCE(SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END), 0),
 		       COALESCE(SUM(CASE WHEN status = 'missing' THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN pinned = 1
-		                          AND status IN ('synced','archiving','restoring')
+		       COALESCE(SUM(CASE WHEN status = 'trashed' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN pinned = 1 AND
+		                         (status IN ('synced','archiving','restoring') OR
+		                          (status IN ('trashing','untrashing') AND trashed_from = 'synced'))
 		                     THEN 1 ELSE 0 END), 0)
 		FROM files WHERE folder_label = ?`, folder).
-		Scan(&fc.Total, &fc.Synced, &fc.Archived, &fc.Missing, &fc.Pinned)
+		Scan(&fc.Total, &fc.Synced, &fc.Archived, &fc.Missing, &fc.Trashed, &fc.Pinned)
 	return fc, err
 }
 
@@ -1424,12 +1444,12 @@ type fileScanner interface{ Scan(dest ...any) error }
 
 func scanFile(s fileScanner) (*FileRecord, error) {
 	var f FileRecord
-	var archivedAt sql.NullTime
+	var archivedAt, trashedAt sql.NullTime
 	var pinnedAt, thumbLastAttempt, capturedOffset, metaScannedAt, metaLastAttempt sql.NullInt64
 	var gpsLat, gpsLon, gpsAltitude, gpsAccuracy sql.NullFloat64
 	err := s.Scan(&f.ID, &f.FolderLabel, &f.RelativePath, &f.Filename, &f.Extension,
 		&f.MimeType, &f.SizeBytes, &f.FileMtime, &f.FileAtime, &f.FirstSeen, &archivedAt,
-		&f.Status, &f.ThumbnailPath, &f.ContentHash, &f.Pinned, &pinnedAt, &f.PinSource,
+		&trashedAt, &f.TrashedFrom, &f.Status, &f.ThumbnailPath, &f.ContentHash, &f.Pinned, &pinnedAt, &f.PinSource,
 		&f.LastSeen, &f.ThumbAttempts, &thumbLastAttempt, &f.ThumbError, &f.DetectedType,
 		&f.Description, &f.CapturedLocal, &capturedOffset, &f.CapturedSource,
 		&gpsLat, &gpsLon, &gpsAltitude, &gpsAccuracy, &f.GPSSource,
@@ -1442,6 +1462,9 @@ func scanFile(s fileScanner) (*FileRecord, error) {
 	}
 	if archivedAt.Valid {
 		f.ArchivedAt = &archivedAt.Time
+	}
+	if trashedAt.Valid {
+		f.TrashedAt = &trashedAt.Time
 	}
 	if pinnedAt.Valid {
 		f.PinnedAt = &pinnedAt.Int64

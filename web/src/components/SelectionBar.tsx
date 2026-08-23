@@ -12,9 +12,22 @@ interface SelectionBarProps {
   /** Owned by the view, because the keyboard needs the same instance: an
    *  operator and a button press must queue the same job, not two. */
   bulk: BulkActions;
+  /** Trash swaps archive/pin controls for restore and permanent deletion. */
+  trashMode?: boolean;
 }
 
-export function SelectionBar({ selection, files, bulk }: SelectionBarProps) {
+function jobVerb(action: string, complete = false): string {
+  const words: Record<string, [string, string]> = {
+    restore: ["Restoring", "Restored"],
+    archive: ["Archiving", "Archived"],
+    trash: ["Deleting", "Deleted"],
+    untrash: ["Restoring from trash", "Restored from trash"],
+    delete: ["Permanently deleting", "Permanently deleted"],
+  };
+  return (words[action] ?? ["Processing", "Processed"])[complete ? 1 : 0];
+}
+
+export function SelectionBar({ selection, files, bulk, trashMode = false }: SelectionBarProps) {
   const { runner } = bulk;
   const { job } = runner;
   const finished = job !== null && (job.state === "done" || job.state === "failed");
@@ -32,7 +45,7 @@ export function SelectionBar({ selection, files, bulk }: SelectionBarProps) {
           <div className="mx-auto max-w-5xl flex flex-wrap items-center gap-2 text-base">
             {runner.running && job ? (
               <span className="font-medium" data-job-progress>
-                {job.action === "restore" ? "Restoring" : "Archiving"} {formatCount(job.total)} files
+                {jobVerb(job.action)} {formatCount(job.total)} files
                 &mdash; {formatCount(job.done)}/{formatCount(job.total)}
               </span>
             ) : (
@@ -51,34 +64,62 @@ export function SelectionBar({ selection, files, bulk }: SelectionBarProps) {
                   Select all in folder
                 </button>
                 <span className="flex-1" />
-                <button
-                  onClick={() => bulk.runJob("restore", selection.ids)}
-                  disabled={disabled || selection.count === 0}
-                  className="px-3 py-1 rounded-md bg-ink text-ground font-medium hover:brightness-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-                >
-                  Restore
-                </button>
-                <button
-                  onClick={() => bulk.runJob("archive", selection.ids)}
-                  disabled={disabled || selection.count === 0}
-                  className="px-3 py-1 rounded-md bg-cold-dim text-cold ring-1 ring-cold/40 hover:bg-cold/25 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
-                >
-                  Archive
-                </button>
-                <button
-                  onClick={() => void bulk.setPinned(selection.ids, true)}
-                  disabled={disabled || selection.count === 0}
-                  className="px-3 py-1 rounded-md bg-held-dim text-held ring-1 ring-held/40 hover:bg-held/25 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
-                >
-                  Pin
-                </button>
-                <button
-                  onClick={() => void bulk.setPinned(selection.ids, false)}
-                  disabled={disabled || selection.count === 0}
-                  className="px-2.5 py-1 rounded-md text-ink-muted ring-1 ring-line-strong hover:bg-raised-hover hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
-                >
-                  Unpin
-                </button>
+                {trashMode ? (
+                  <>
+                    <button
+                      onClick={() => bulk.runJob("untrash", selection.ids)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-3 py-1 rounded-md bg-ink text-ground font-medium hover:brightness-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                    >
+                      Restore from Trash
+                    </button>
+                    <button
+                      onClick={() => bulk.perform("delete", selection.ids)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-3 py-1 rounded-md bg-alarm-dim text-alarm ring-1 ring-alarm/40 hover:brightness-125 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                    >
+                      Delete permanently
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => bulk.runJob("restore", selection.ids)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-3 py-1 rounded-md bg-ink text-ground font-medium hover:brightness-95 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                    >
+                      Restore
+                    </button>
+                    <button
+                      onClick={() => bulk.runJob("archive", selection.ids)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-3 py-1 rounded-md bg-cold-dim text-cold ring-1 ring-cold/40 hover:bg-cold/25 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                    >
+                      Archive
+                    </button>
+                    <button
+                      onClick={() => void bulk.setPinned(selection.ids, true)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-3 py-1 rounded-md bg-held-dim text-held ring-1 ring-held/40 hover:bg-held/25 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                    >
+                      Pin
+                    </button>
+                    <button
+                      onClick={() => void bulk.setPinned(selection.ids, false)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-2.5 py-1 rounded-md text-ink-muted ring-1 ring-line-strong hover:bg-raised-hover hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                    >
+                      Unpin
+                    </button>
+                    <button
+                      onClick={() => bulk.runJob("trash", selection.ids)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-2.5 py-1 rounded-md text-alarm ring-1 ring-alarm/40 hover:bg-alarm-dim disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={() => {
                     selection.clear();
@@ -106,7 +147,7 @@ export function SelectionBar({ selection, files, bulk }: SelectionBarProps) {
           {finished && job && (
             <div className="mx-auto max-w-5xl text-meta pt-1.5" data-job-summary>
               <p className={job.failed_count > 0 ? "text-alarm" : "text-ink-muted"}>
-                {job.action === "restore" ? "Restored" : "Archived"} {formatCount(job.done)} of{" "}
+                {jobVerb(job.action, true)} {formatCount(job.done)} of{" "}
                 {formatCount(job.total)}
                 {job.failed_count > 0 && `, ${formatCount(job.failed_count)} failed`}
                 {job.error !== "" && ` -- ${job.error}`}
@@ -164,7 +205,7 @@ export function SelectionBar({ selection, files, bulk }: SelectionBarProps) {
         <ConfirmDialog
           title={describeBulk(bulk.confirm.operator, bulk.confirm.ids.length).title}
           confirmLabel="Yes, do it"
-          destructive={bulk.confirm.operator === "archive"}
+          destructive={["archive", "trash", "delete"].includes(bulk.confirm.operator)}
           onCancel={bulk.confirmCancel}
           onConfirm={bulk.confirmProceed}
         >

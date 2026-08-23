@@ -56,12 +56,15 @@ type BtrfsReport struct {
 }
 
 type FileCounts struct {
-	Total     int64 `json:"total"`
-	Synced    int64 `json:"synced"`
-	Archiving int64 `json:"archiving"`
-	Archived  int64 `json:"archived"`
-	Restoring int64 `json:"restoring"`
-	Missing   int64 `json:"missing"`
+	Total      int64 `json:"total"`
+	Synced     int64 `json:"synced"`
+	Archiving  int64 `json:"archiving"`
+	Archived   int64 `json:"archived"`
+	Restoring  int64 `json:"restoring"`
+	Missing    int64 `json:"missing"`
+	Trashing   int64 `json:"trashing"`
+	Trashed    int64 `json:"trashed"`
+	Untrashing int64 `json:"untrashing"`
 }
 
 type FolderReport struct {
@@ -275,6 +278,9 @@ func (b *Builder) inspectCatalog(cfg *config.Config, cat *catalog.Catalog, r *Re
 		{catalog.StatusArchived, &r.Files.Archived},
 		{catalog.StatusRestoring, &r.Files.Restoring},
 		{catalog.StatusMissing, &r.Files.Missing},
+		{catalog.StatusTrashing, &r.Files.Trashing},
+		{catalog.StatusTrashed, &r.Files.Trashed},
+		{catalog.StatusUntrashing, &r.Files.Untrashing},
 	}
 	for _, item := range statuses {
 		count, err := cat.FileCount(item.status)
@@ -283,8 +289,9 @@ func (b *Builder) inspectCatalog(cfg *config.Config, cat *catalog.Catalog, r *Re
 		}
 		*item.dst = count
 	}
-	if r.Files.Archiving > 0 || r.Files.Restoring > 0 {
-		r.warning("transient_files", fmt.Sprintf("%d files remain in transient move states", r.Files.Archiving+r.Files.Restoring))
+	transient := r.Files.Archiving + r.Files.Restoring + r.Files.Trashing + r.Files.Untrashing
+	if transient > 0 {
+		r.warning("transient_files", fmt.Sprintf("%d files remain in transient move states", transient))
 	}
 	if r.Files.Missing > 0 {
 		r.warning("missing_files", fmt.Sprintf("%d catalogued files are missing", r.Files.Missing))

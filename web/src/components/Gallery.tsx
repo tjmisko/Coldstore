@@ -57,7 +57,7 @@ export function Gallery({
   });
   const { files: list, selection, actions, preset, filters } = workspace;
   const effectiveSort = preset.sort ?? sort;
-  const { files, loading, error, hasMore, loadMore, refetchIds } = list;
+  const { files, loading, error, hasMore, loadMore, refetch } = list;
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null);
@@ -87,11 +87,11 @@ export function Gallery({
   );
 
   const onFinished = useCallback(
-    async (ids: number[]) => {
-      await refetchIds(ids);
+    async () => {
+      await refetch();
       onFolderChanged();
     },
-    [refetchIds, onFolderChanged],
+    [refetch, onFolderChanged],
   );
 
   const openTagPrompt = useCallback((mode: TagPromptMode, ids: number[]) => {
@@ -333,7 +333,7 @@ export function Gallery({
         />
       )}
 
-      <SelectionBar selection={selection} files={files} bulk={bulk} />
+      <SelectionBar selection={selection} files={files} bulk={bulk} trashMode={preset.key === "trash"} />
     </div>
   );
 }
@@ -462,16 +462,18 @@ function Tile({
         </span>
       </label>
 
-      <div className="absolute top-1 right-1" onClick={(e) => e.stopPropagation()}>
-        <PinToggle file={file} onPin={onPin} compact />
-      </div>
+      {file.status !== "trashed" && (
+        <div className="absolute top-1 right-1" onClick={(e) => e.stopPropagation()}>
+          <PinToggle file={file} onPin={onPin} compact />
+        </div>
+      )}
 
       <div className="pointer-events-none absolute bottom-1.5 left-1.5 max-w-[70%] overflow-hidden">
         <TagChips tags={file.tags} />
       </div>
 
       <div className="absolute bottom-1.5 right-1.5 flex gap-1">
-        {file.pinned && (
+        {file.pinned && file.status !== "trashed" && (
           <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-held-dim/90 text-held ring-1 ring-held/40 backdrop-blur-[2px]" data-badge="pinned">
             pinned
           </span>
@@ -484,6 +486,11 @@ function Tile({
         {file.status === "missing" && (
           <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-alarm-dim/90 text-alarm ring-1 ring-alarm/40 backdrop-blur-[2px]" data-badge="missing">
             missing
+          </span>
+        )}
+        {file.status === "trashed" && (
+          <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-alarm-dim/90 text-alarm ring-1 ring-alarm/40 backdrop-blur-[2px]" data-badge="trashed">
+            trashed
           </span>
         )}
       </div>

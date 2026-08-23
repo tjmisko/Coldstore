@@ -50,6 +50,8 @@ function statusColor(status: string): string {
       return "text-ink";
     case "missing":
       return "text-alarm";
+    case "trashed":
+      return "text-alarm";
     default:
       return "text-ink-muted";
   }
@@ -94,7 +96,7 @@ export function FileBrowser({
     onFolderChanged,
   });
   const { files: list, selection, actions, preset, filters } = workspace;
-  const { files: loadedFiles, loading, error, hasMore, loadMore, refetchIds } = list;
+  const { files: loadedFiles, loading, error, hasMore, loadMore, refetch } = list;
 
   // Finder results carry their complete record. If the target is beyond the
   // initial 60-row page, append it until normal paging reaches it so the grid
@@ -154,11 +156,14 @@ export function FileBrowser({
   }, [loadedSelected, allLoadedSelected]);
 
   const onFinished = useCallback(
-    async (ids: number[]) => {
-      await refetchIds(ids);
+    async () => {
+      // Jobs can change filter membership (especially trash/untrash/delete),
+      // so reconcile the visible query rather than patching moved rows back
+      // into a view they no longer match.
+      await refetch();
       onFolderChanged();
     },
-    [refetchIds, onFolderChanged],
+    [refetch, onFolderChanged],
   );
 
   const openTagPrompt = useCallback((mode: TagPromptMode, ids: number[]) => {
@@ -306,6 +311,9 @@ export function FileBrowser({
                 onPin={(pinned) => void actions.setPinned(file, pinned)}
                 onRestore={() => void actions.restore(file)}
                 onArchive={() => void actions.archive(file)}
+                onTrash={() => bulk.perform("trash", [file.id])}
+                onUntrash={() => bulk.perform("untrash", [file.id])}
+                onDelete={() => bulk.perform("delete", [file.id])}
                 onResolve={(keep) => void actions.resolve(file, keep)}
                 onDownload={() => actions.download(file)}
                 onPreview={() => setPreviewIndex(index)}
@@ -414,7 +422,7 @@ export function FileBrowser({
         />
       )}
 
-      <SelectionBar selection={selection} files={files} bulk={bulk} />
+      <SelectionBar selection={selection} files={files} bulk={bulk} trashMode={preset.key === "trash"} />
     </div>
   );
 }
@@ -430,6 +438,9 @@ interface RowProps {
   onPin(pinned: boolean): void;
   onRestore(): void;
   onArchive(): void;
+  onTrash(): void;
+  onUntrash(): void;
+  onDelete(): void;
   onResolve(keep: "device" | "archive"): void;
   onDownload(): void;
   onPreview(): void;
@@ -447,6 +458,9 @@ function Row({
   onPin,
   onRestore,
   onArchive,
+  onTrash,
+  onUntrash,
+  onDelete,
   onResolve,
   onDownload,
   onPreview,
@@ -454,9 +468,9 @@ function Row({
 }: RowProps) {
   return (
     <tr
-      // tabIndex -1, not 0: five hundred rows in the tab order is its own
-      // accessibility failure. The row is entered with j/k or with a click, and
-      // Tab still walks the controls inside it.
+      // tabIndex -1, not 0: five hundred rows in the focus order is its own
+      // accessibility failure. The row is entered with j/k or with a click;
+      // application-level Tab cycles the three views.
       tabIndex={-1}
       data-file-id={file.id}
       data-pair-group={file.pair_key || undefined}
@@ -509,7 +523,7 @@ function Row({
         </label>
       </td>
       <td className="py-2.5 pr-2">
-        <PinToggle file={file} onPin={onPin} />
+        {file.status !== "trashed" && <PinToggle file={file} onPin={onPin} />}
       </td>
       <td className="py-2.5 pr-4">
         {/* A button rather than a row click, so the checkbox and shift-range
@@ -564,6 +578,21 @@ function Row({
             <button onClick={onArchive} className={ROW_ACTION.neutral}>
               Archive
             </button>
+          )}
+          {(file.status === "synced" || file.status === "archived") && (
+            <button onClick={onTrash} className={ROW_ACTION.neutral}>
+              Delete
+            </button>
+          )}
+          {file.status === "trashed" && (
+            <>
+              <button onClick={onUntrash} className={ROW_ACTION.neutral}>
+                Restore
+              </button>
+              <button onClick={onDelete} className={`${ROW_ACTION.neutral} text-alarm`}>
+                Delete permanently
+              </button>
+            </>
           )}
           {conflictMode && (
             <>

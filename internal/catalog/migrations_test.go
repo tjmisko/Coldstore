@@ -281,7 +281,7 @@ func TestMigration7ShouldUpgradeEveryOlderSchemaWithoutLosingRows(t *testing.T) 
 	}
 }
 
-func TestMigration8ShouldPreserveJobsAndWidenOnlyTheActionConstraint(t *testing.T) {
+func TestMigration8ShouldPreserveJobsAcrossLaterActionWidening(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "schema7.db")
 	raw := createDatabaseAtVersion(t, dbPath, 7)
 	res, err := raw.Exec(`INSERT INTO jobs
@@ -330,8 +330,13 @@ func TestMigration8ShouldPreserveJobsAndWidenOnlyTheActionConstraint(t *testing.
 	if newID <= oldID {
 		t.Fatalf("post-migration job id = %d, want greater than preserved %d", newID, oldID)
 	}
-	if _, err := cat.db.Exec(`INSERT INTO jobs (action, created_at) VALUES ('delete', 1)`); err == nil {
-		t.Fatal("migration widened the jobs action CHECK beyond rename")
+	for _, action := range []string{JobActionTrash, JobActionUntrash, JobActionDelete} {
+		if _, err := cat.CreateJob(action, "", []int64{42}); err != nil {
+			t.Fatalf("%s action was not admitted after migration 9: %v", action, err)
+		}
+	}
+	if _, err := cat.db.Exec(`INSERT INTO jobs (action, created_at) VALUES ('bogus', 1)`); err == nil {
+		t.Fatal("jobs action CHECK admitted an unknown action")
 	}
 	var indexes int
 	if err := cat.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master

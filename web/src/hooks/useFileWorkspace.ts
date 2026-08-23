@@ -33,7 +33,8 @@ export type FilterKey =
   | "pinned-auto"
   | "untagged"
   | "undated"
-  | "conflicts";
+  | "conflicts"
+  | "trash";
 
 export interface FilterPreset {
   key: FilterKey;
@@ -77,6 +78,12 @@ export const FILTER_PRESETS: FilterPreset[] = [
     label: "Conflicts",
     hint: "A file came back at the path of a record coldstore had archived. Choose which copy to keep.",
     filters: { status: "archived", conflict: true },
+  },
+  {
+    key: "trash",
+    label: "Trash",
+    hint: "Recover deleted files or remove them permanently.",
+    filters: { status: "trashed" },
   },
 ];
 

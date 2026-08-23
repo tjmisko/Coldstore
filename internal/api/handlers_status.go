@@ -12,6 +12,7 @@ type statusResponse struct {
 	SyncedFiles          int64          `json:"synced_files"`
 	ArchivedFiles        int64          `json:"archived_files"`
 	MissingFiles         int64          `json:"missing_files"`
+	TrashedFiles         int64          `json:"trashed_files"`
 	ColdStorageFreeBytes uint64         `json:"cold_storage_free_bytes"`
 	Folders              []folderStatus `json:"folders"`
 }
@@ -70,6 +71,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		s.statusError(w, "counting missing files", err)
 		return
 	}
+	trashed, err := s.cat.FileCount(catalog.StatusTrashed)
+	if err != nil {
+		s.statusError(w, "counting trashed files", err)
+		return
+	}
 
 	// Every folder the catalog knows about, including the ones the user has
 	// disabled and the ones that have disappeared from coldstore.toml. Both
@@ -102,6 +108,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		SyncedFiles:          synced,
 		ArchivedFiles:        archived,
 		MissingFiles:         missing,
+		TrashedFiles:         trashed,
 		ColdStorageFreeBytes: coldFree,
 		Folders:              folders,
 	})

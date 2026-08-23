@@ -182,6 +182,47 @@ func TestListFilesFiltering(t *testing.T) {
 	}
 }
 
+func TestTrashedFilesShouldOnlyAppearInTheTrashFilter(t *testing.T) {
+	cat := setupTestCatalog(t)
+	record := &FileRecord{
+		FolderLabel:  "Photos",
+		RelativePath: "deleted.jpg",
+		Filename:     "deleted.jpg",
+		Extension:    ".jpg",
+		SizeBytes:    100,
+		FileMtime:    time.Now().UTC(),
+		Status:       StatusSynced,
+	}
+	if _, err := cat.UpsertFile(record, time.Now().UnixNano()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := cat.GetFile("Photos", "deleted.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := cat.BeginTrash(stored.ID, StatusSynced); err != nil || !claimed {
+		t.Fatalf("BeginTrash = %v, %v", claimed, err)
+	}
+	if marked, err := cat.MarkTrashed(stored.ID, time.Now()); err != nil || !marked {
+		t.Fatalf("MarkTrashed = %v, %v", marked, err)
+	}
+
+	active, err := cat.ListFiles(FileQuery{Folder: "Photos"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 {
+		t.Fatalf("unfiltered listing returned %d trashed files", len(active))
+	}
+	trashed, err := cat.ListFiles(FileQuery{Folder: "Photos", Status: StatusTrashed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trashed) != 1 || trashed[0].ID != stored.ID || trashed[0].TrashedFrom != StatusSynced || trashed[0].TrashedAt == nil {
+		t.Fatalf("trash listing = %#v", trashed)
+	}
+}
+
 func TestFolderSizesShouldExcludeArchivedBytesWhenSummingTheFolder(t *testing.T) {
 	cat := setupTestCatalog(t)
 

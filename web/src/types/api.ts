@@ -3,7 +3,10 @@ export type FileStatus =
   | "archiving"
   | "archived"
   | "restoring"
-  | "missing";
+  | "missing"
+  | "trashing"
+  | "trashed"
+  | "untrashing";
 
 /** The two pins D2 keeps apart: "restore" is applied automatically by every
  *  restore, "user" is an explicit press and is never downgraded to "restore". */
@@ -14,7 +17,7 @@ export type PinSource = "user" | "restore";
  *  wedge banner sends them to triage. */
 export type FileSort = "mtime" | "size" | "name" | "pinned_at" | "captured";
 
-export type JobAction = "restore" | "archive" | "scan" | "rename";
+export type JobAction = "restore" | "archive" | "scan" | "rename" | "trash" | "untrash" | "delete";
 export type JobState = "pending" | "running" | "done" | "failed";
 
 export interface ApiError {
@@ -33,6 +36,9 @@ export interface FileRecord {
   file_atime: string;
   first_seen: string;
   archived_at?: string;
+  trashed_at?: string;
+  /** The tree a recoverable trash restore returns to. */
+  trashed_from?: "synced" | "archived";
   status: FileStatus;
   thumbnail_path?: string;
   content_hash?: string;
@@ -139,6 +145,7 @@ export interface FolderCounts {
   synced: number;
   archived: number;
   missing: number;
+  trashed: number;
   pinned: number;
 }
 
@@ -333,6 +340,7 @@ export interface StatusResponse {
   synced_files: number;
   archived_files: number;
   missing_files: number;
+  trashed_files: number;
   folders: FolderStatus[];
   cold_storage_free_bytes: number;
 }

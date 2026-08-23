@@ -5,6 +5,10 @@ import { useToast } from "../lib/toast";
 import { useJobRunner, type JobRunner } from "./useJob";
 import type { Selection } from "./useSelection";
 import type { OperatorId } from "../keymap/types";
+import type { JobAction } from "../types/api";
+
+export type BulkOperator = OperatorId | "trash" | "untrash" | "delete";
+type FileJobAction = Extract<JobAction, "restore" | "archive" | "trash" | "untrash" | "delete">;
 
 /** Above this many files, an operator asks first.
  *
@@ -18,7 +22,7 @@ export const CONFIRM_ABOVE = 10;
 export const MAX_DOWNLOADS = 5;
 
 export interface PendingBulkConfirm {
-  operator: OperatorId;
+  operator: BulkOperator;
   ids: number[];
 }
 
@@ -30,11 +34,11 @@ export interface BulkActions {
   confirm: PendingBulkConfirm | null;
   /** The mouse path: run the job now, no questions, because the bar already
    *  shows the count next to the button. */
-  runJob(action: "restore" | "archive", ids: number[], force?: boolean): void;
+  runJob(action: FileJobAction, ids: number[], force?: boolean): void;
   setPinned(ids: number[], pinned: boolean): Promise<void>;
   download(ids: number[]): void;
   /** The keyboard path: confirms first when the range is wide. */
-  perform(operator: OperatorId, ids: number[]): void;
+  perform(operator: BulkOperator, ids: number[]): void;
   confirmProceed(): void;
   confirmCancel(): void;
   selectAllInFolder(): Promise<void>;
@@ -69,6 +73,7 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
   const [selectAllNote, setSelectAllNote] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<PendingBulkConfirm | null>(null);
   const startedIDs = useRef<number[]>([]);
+  const startedAction = useRef<FileJobAction>("restore");
   const settled = useRef<number | null>(null);
 
   const { job } = runner;
@@ -84,9 +89,10 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
   }, [job, onFinished]);
 
   const runJob = useCallback(
-    (action: "restore" | "archive", ids: number[], force = false) => {
+    (action: FileJobAction, ids: number[], force = false) => {
       if (ids.length === 0) return;
       startedIDs.current = ids;
+      startedAction.current = action;
       settled.current = null;
       void runner.start({ action, ids, force });
     },
@@ -94,7 +100,7 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
   );
 
   const forceLastRestore = useCallback(() => {
-    runJob("restore", startedIDs.current, true);
+    runJob(startedAction.current, startedIDs.current, true);
   }, [runJob]);
 
   const setPinned = useCallback(
@@ -136,10 +142,19 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
   );
 
   const execute = useCallback(
-    (operator: OperatorId, ids: number[]) => {
+    (operator: BulkOperator, ids: number[]) => {
       switch (operator) {
         case "archive":
           runJob("archive", ids);
+          return;
+        case "trash":
+          runJob("trash", ids);
+          return;
+        case "untrash":
+          runJob("untrash", ids);
+          return;
+        case "delete":
+          runJob("delete", ids);
           return;
         case "restore":
           runJob("restore", ids);
@@ -165,10 +180,11 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
   );
 
   const perform = useCallback(
-    (operator: OperatorId, ids: number[]) => {
+    (operator: BulkOperator, ids: number[]) => {
       if (ids.length === 0) return;
       // Download is capped rather than confirmed: it changes nothing.
-      if (ids.length > CONFIRM_ABOVE && !["download", "tag", "untag"].includes(operator)) {
+      if (operator === "delete" ||
+        (ids.length > CONFIRM_ABOVE && !["download", "tag", "untag"].includes(operator))) {
         setConfirm({ operator, ids });
         return;
       }
@@ -226,8 +242,8 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
 
 /** The sentence the confirmation asks. Named per operator because "are you
  *  sure?" is the question that gets clicked through. */
-export function describeBulk(operator: OperatorId, count: number): { title: string; body: string } {
-  const files = `${formatCount(count)} files`;
+export function describeBulk(operator: BulkOperator, count: number): { title: string; body: string } {
+  const files = `${formatCount(count)} file${count === 1 ? "" : "s"}`;
   switch (operator) {
     case "archive":
       return {
@@ -238,6 +254,21 @@ export function describeBulk(operator: OperatorId, count: number): { title: stri
       return {
         title: `Restore ${files}?`,
         body: `Coldstore will bring ${files} back onto the device and pin each one, which counts against the folder's budget.`,
+      };
+    case "trash":
+      return {
+        title: `Delete ${files}?`,
+        body: `Coldstore will move ${files} into its recoverable trash. They will disappear from synced devices but can still be restored.`,
+      };
+    case "untrash":
+      return {
+        title: `Restore ${files} from trash?`,
+        body: `Coldstore will return ${files} to the synced folder or archive each file came from.`,
+      };
+    case "delete":
+      return {
+        title: `Permanently delete ${files}?`,
+        body: `This removes the file contents, thumbnails, tags, and catalog records. It cannot be undone.`,
       };
     case "pin":
       return { title: `Pin ${files}?`, body: `Coldstore will never archive these ${files}, whatever the budget says.` };

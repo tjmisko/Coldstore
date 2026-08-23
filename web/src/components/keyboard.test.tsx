@@ -427,6 +427,23 @@ describe("preview opening", () => {
     expect(await screen.findByRole("dialog", { name: "file_02.jpg" })).toBeInTheDocument();
     expect(document.querySelector("[data-preview-kind='image']")).not.toBeNull();
   });
+
+  it("should move between lightbox items with Left and Right, not Up and Down", async () => {
+    renderBrowser();
+    await browserReady();
+
+    type("<CR>");
+    expect(await screen.findByRole("dialog", { name: "file_01.jpg" })).toBeInTheDocument();
+
+    type("<Right>");
+    expect(await screen.findByRole("dialog", { name: "file_02.jpg" })).toBeInTheDocument();
+
+    type("<Down>");
+    expect(screen.getByRole("dialog", { name: "file_02.jpg" })).toBeInTheDocument();
+
+    type("<Left>");
+    expect(await screen.findByRole("dialog", { name: "file_01.jpg" })).toBeInTheDocument();
+  });
 });
 
 describe("the context menu", () => {
@@ -588,6 +605,22 @@ describe("overlays", () => {
     await userEvent.type(input, "files{Enter}");
 
     await waitFor(() => expect(document.querySelector("table")).not.toBeNull());
+  });
+
+  it("should cycle views with Tab and Shift-Tab", async () => {
+    renderApp();
+    await screen.findByRole("heading", { name: "CameraRoll", level: 2 });
+    expect(document.querySelector('[data-view-nav="gallery"]')).toHaveAttribute("aria-current", "page");
+
+    type("<Tab>");
+    await waitFor(() =>
+      expect(document.querySelector('[data-view-nav="files"]')).toHaveAttribute("aria-current", "page"),
+    );
+
+    type("<S-Tab>");
+    await waitFor(() =>
+      expect(document.querySelector('[data-view-nav="gallery"]')).toHaveAttribute("aria-current", "page"),
+    );
   });
 
   it("should not let a key typed into the palette reach the grid behind it", async () => {

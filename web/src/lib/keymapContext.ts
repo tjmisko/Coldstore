@@ -53,6 +53,7 @@ export const SCOPE_PRIORITY: Record<Scope, number> = {
   tagging: 30,
   overlay: 40,
   "pdf-reader": 45,
+  "epub-reader": 45,
   description: 50,
   "tag-prompt": 60,
 };

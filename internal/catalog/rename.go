@@ -143,7 +143,8 @@ func (c *Catalog) RenameFileRows(folder string, renames []FileRename) error {
 			}
 			return fmt.Errorf("%w: file %d moved from %q", ErrRenameConflict, rename.ID, rename.From)
 		}
-		if status == StatusArchiving || status == StatusRestoring {
+		if status == StatusArchiving || status == StatusRestoring ||
+			status == StatusTrashing || status == StatusUntrashing {
 			return fmt.Errorf("%w: file %d is %s", ErrRenameConflict, rename.ID, status)
 		}
 		var occupant int64
@@ -215,7 +216,7 @@ func rejectTransientRenameRows(tx *sql.Tx, folder, rel string) error {
 	var status string
 	err := tx.QueryRow(`SELECT id, status FROM files WHERE folder_label = ?
 		AND (relative_path = ? OR substr(relative_path, 1, length(?) + 1) = ? || '/')
-		AND status IN ('archiving','restoring') ORDER BY relative_path LIMIT 1`,
+		AND status IN ('archiving','restoring','trashing','untrashing') ORDER BY relative_path LIMIT 1`,
 		folder, rel, rel, rel).Scan(&id, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil

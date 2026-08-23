@@ -34,9 +34,10 @@ export function StatusBar({ status, error, onRefresh }: StatusBarProps) {
       )}
 
       {status && (
-        <div className="flex justify-between text-ink-muted tabular">
+        <div className="flex flex-wrap justify-between gap-x-2 text-ink-muted tabular">
           <span>{formatCount(status.synced_files)} synced</span>
           <span>{formatCount(status.archived_files)} archived</span>
+          {status.trashed_files > 0 && <span>{formatCount(status.trashed_files)} trash</span>}
         </div>
       )}
 

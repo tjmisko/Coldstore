@@ -45,8 +45,9 @@ func WriteHuman(w io.Writer, r Report) error {
 	} else {
 		line("storage state     unavailable")
 	}
-	line("files             %d total: %d synced, %d archiving, %d archived, %d restoring, %d missing",
-		r.Files.Total, r.Files.Synced, r.Files.Archiving, r.Files.Archived, r.Files.Restoring, r.Files.Missing)
+	line("files             %d total: %d synced, %d archiving, %d archived, %d restoring, %d missing, %d trashing, %d trashed, %d untrashing",
+		r.Files.Total, r.Files.Synced, r.Files.Archiving, r.Files.Archived, r.Files.Restoring, r.Files.Missing,
+		r.Files.Trashing, r.Files.Trashed, r.Files.Untrashing)
 
 	line("folders           %d", len(r.Folders))
 	for _, folder := range r.Folders {

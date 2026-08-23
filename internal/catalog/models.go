@@ -9,11 +9,14 @@ import (
 type FileStatus string
 
 const (
-	StatusSynced    FileStatus = "synced"
-	StatusArchiving FileStatus = "archiving"
-	StatusArchived  FileStatus = "archived"
-	StatusRestoring FileStatus = "restoring"
-	StatusMissing   FileStatus = "missing"
+	StatusSynced     FileStatus = "synced"
+	StatusArchiving  FileStatus = "archiving"
+	StatusArchived   FileStatus = "archived"
+	StatusRestoring  FileStatus = "restoring"
+	StatusMissing    FileStatus = "missing"
+	StatusTrashing   FileStatus = "trashing"
+	StatusTrashed    FileStatus = "trashed"
+	StatusUntrashing FileStatus = "untrashing"
 )
 
 // Pin sources. A pin is either explicit (the user pressed the pin toggle) or
@@ -32,6 +35,9 @@ const (
 	JobActionArchive = "archive"
 	JobActionScan    = "scan"
 	JobActionRename  = "rename"
+	JobActionTrash   = "trash"
+	JobActionUntrash = "untrash"
+	JobActionDelete  = "delete"
 
 	JobStatePending = "pending"
 	JobStateRunning = "running"
@@ -51,6 +57,8 @@ type FileRecord struct {
 	FileAtime        time.Time  `json:"file_atime"`
 	FirstSeen        time.Time  `json:"first_seen"`
 	ArchivedAt       *time.Time `json:"archived_at,omitempty"`
+	TrashedAt        *time.Time `json:"trashed_at,omitempty"`
+	TrashedFrom      FileStatus `json:"trashed_from,omitempty"`
 	Status           FileStatus `json:"status"`
 	ThumbnailPath    string     `json:"thumbnail_path,omitempty"`
 	ContentHash      string     `json:"content_hash,omitempty"`
@@ -153,6 +161,7 @@ type FolderCounts struct {
 	Synced   int64 `json:"synced"`
 	Archived int64 `json:"archived"`
 	Missing  int64 `json:"missing"`
+	Trashed  int64 `json:"trashed"`
 	Pinned   int64 `json:"pinned"`
 }
 

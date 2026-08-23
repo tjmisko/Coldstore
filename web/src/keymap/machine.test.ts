@@ -85,6 +85,42 @@ describe("counts", () => {
   });
 });
 
+describe("physical navigation keys", () => {
+  it("should cycle application views with Tab in either direction", () => {
+    expect(run("<Tab>", { chain: ["gallery", "global"] }).commands).toEqual([
+      { kind: "action", action: "next-view", count: 0 },
+    ]);
+    expect(run("<S-Tab>", { chain: ["gallery", "global"] }).commands).toEqual([
+      { kind: "action", action: "prev-view", count: 0 },
+    ]);
+  });
+
+  it("should move between lightbox items with Left and Right", () => {
+    expect(run("<Left>", { chain: ["lightbox", "gallery", "global"] }).commands).toEqual([
+      { kind: "action", action: "previous-item", count: 0 },
+    ]);
+    expect(run("<Right>", { chain: ["lightbox", "gallery", "global"] }).commands).toEqual([
+      { kind: "action", action: "next-item", count: 0 },
+    ]);
+  });
+
+  it("should reserve arrows for PDF scrolling and Page keys for document pages", () => {
+    const pdf = ["pdf-reader", "lightbox", "global"] as Scope[];
+    expect(run("<Up>", { chain: pdf }).commands).toEqual([
+      { kind: "action", action: "scroll-document-up", count: 0 },
+    ]);
+    expect(run("<Down>", { chain: pdf }).commands).toEqual([
+      { kind: "action", action: "scroll-document-down", count: 0 },
+    ]);
+    expect(run("<PageUp>", { chain: pdf }).commands).toEqual([
+      { kind: "action", action: "previous-document-page", count: 0 },
+    ]);
+    expect(run("<PageDown>", { chain: ["epub-reader", "lightbox", "global"] }).commands).toEqual([
+      { kind: "action", action: "next-document-page", count: 0 },
+    ]);
+  });
+});
+
 describe("operators", () => {
   it("should archive only the cursor file when the operator is doubled", () => {
     const { commands } = run("dd");

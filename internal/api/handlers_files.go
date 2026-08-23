@@ -291,6 +291,11 @@ func (s *Server) resolveFileBytes(w http.ResponseWriter, r *http.Request) (*cata
 	case catalog.StatusArchived:
 		return file, filepath.Join(s.cfg.Storage.ColdStoragePath, "archive",
 			file.FolderLabel, file.RelativePath), true
+	case catalog.StatusTrashed:
+		// Trash remains previewable and downloadable until permanent deletion.
+		// Reading it is not a restore and does not change its retention state.
+		return file, filepath.Join(s.cfg.Storage.ColdStoragePath, "trash",
+			file.FolderLabel, file.RelativePath), true
 	default:
 		writeError(w, http.StatusConflict, fmt.Sprintf("file status is %s", file.Status))
 		return nil, "", false

@@ -304,6 +304,12 @@ func (w *Worker) runItem(action string, fileID int64) error {
 		_, err = w.mover.RestoreByID(fileID)
 	case catalog.JobActionArchive:
 		_, err = w.mover.ArchiveByID(fileID)
+	case catalog.JobActionTrash:
+		_, err = w.mover.TrashByID(fileID)
+	case catalog.JobActionUntrash:
+		_, err = w.mover.RestoreTrashByID(fileID)
+	case catalog.JobActionDelete:
+		err = w.mover.DeleteByID(fileID)
 	default:
 		return fmt.Errorf("unknown job action %q", action)
 	}

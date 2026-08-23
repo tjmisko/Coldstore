@@ -7,6 +7,7 @@ export const EXCLUSIVE_SCOPES: Scope[] = ["overlay", "description", "tag-prompt"
 
 const GRID: Scope[] = ["gallery", "browser"];
 const NAVIGABLE: Scope[] = ["gallery", "browser", "lightbox"];
+const DOCUMENT_READERS: Scope[] = ["pdf-reader", "epub-reader"];
 
 const GROUP_MOTION = "Motion";
 const GROUP_SELECT = "Selection";
@@ -33,12 +34,12 @@ const SPECS: BindingSpec[] = [
 
   // Arrow keys and the navigation cluster, so the app is usable by someone who
   // has never touched vim. Aliases, so they do not double the cheatsheet.
-  { id: "motion.left.arrow", keys: "<Left>", command: { kind: "motion", motion: "left" }, scopes: NAVIGABLE, title: "Left", group: GROUP_MOTION, alias: true },
-  { id: "motion.down.arrow", keys: "<Down>", command: { kind: "motion", motion: "down" }, scopes: NAVIGABLE, title: "Down", group: GROUP_MOTION, alias: true },
-  { id: "motion.up.arrow", keys: "<Up>", command: { kind: "motion", motion: "up" }, scopes: NAVIGABLE, title: "Up", group: GROUP_MOTION, alias: true },
-  { id: "motion.right.arrow", keys: "<Right>", command: { kind: "motion", motion: "right" }, scopes: NAVIGABLE, title: "Right", group: GROUP_MOTION, alias: true },
-  { id: "motion.pageDown.key", keys: "<PageDown>", command: { kind: "motion", motion: "page-down" }, scopes: NAVIGABLE, title: "A screen down", group: GROUP_MOTION, alias: true },
-  { id: "motion.pageUp.key", keys: "<PageUp>", command: { kind: "motion", motion: "page-up" }, scopes: NAVIGABLE, title: "A screen up", group: GROUP_MOTION, alias: true },
+  { id: "motion.left.arrow", keys: "<Left>", command: { kind: "motion", motion: "left" }, scopes: GRID, title: "Left", group: GROUP_MOTION, alias: true },
+  { id: "motion.down.arrow", keys: "<Down>", command: { kind: "motion", motion: "down" }, scopes: GRID, title: "Down", group: GROUP_MOTION, alias: true },
+  { id: "motion.up.arrow", keys: "<Up>", command: { kind: "motion", motion: "up" }, scopes: GRID, title: "Up", group: GROUP_MOTION, alias: true },
+  { id: "motion.right.arrow", keys: "<Right>", command: { kind: "motion", motion: "right" }, scopes: GRID, title: "Right", group: GROUP_MOTION, alias: true },
+  { id: "motion.pageDown.key", keys: "<PageDown>", command: { kind: "motion", motion: "page-down" }, scopes: GRID, title: "A screen down", group: GROUP_MOTION, alias: true },
+  { id: "motion.pageUp.key", keys: "<PageUp>", command: { kind: "motion", motion: "page-up" }, scopes: GRID, title: "A screen up", group: GROUP_MOTION, alias: true },
   { id: "motion.first.home", keys: "<Home>", command: { kind: "motion", motion: "first" }, scopes: NAVIGABLE, title: "First file", group: GROUP_MOTION, alias: true },
   { id: "motion.last.end", keys: "<End>", command: { kind: "motion", motion: "last" }, scopes: NAVIGABLE, title: "Last file", group: GROUP_MOTION, alias: true },
   { id: "motion.captureDayPrevious", keys: "{", command: { kind: "motion", motion: "capture-day-previous" }, scopes: NAVIGABLE, title: "Previous capture day", group: GROUP_MOTION },
@@ -90,6 +91,15 @@ const SPECS: BindingSpec[] = [
 
   // -- lightbox -----------------------------------------------------------
   { id: "lightbox.close", keys: "q", command: { kind: "action", action: "close" }, scopes: ["lightbox"], title: "Close the lightbox", group: GROUP_OVERLAY },
+  // Physical arrows describe the preview surface, not the one-column motion
+  // geometry used by j/k. They shadow the generic aliases while a lightbox or
+  // reader is active; h/j/k/l retain the vim grammar.
+  { id: "lightbox.previous.arrow", keys: "<Left>", command: { kind: "action", action: "previous-item" }, scopes: ["lightbox"], title: "Previous file", group: GROUP_MOTION, alias: true },
+  { id: "lightbox.next.arrow", keys: "<Right>", command: { kind: "action", action: "next-item" }, scopes: ["lightbox"], title: "Next file", group: GROUP_MOTION, alias: true },
+  { id: "pdf.scrollUp.arrow", keys: "<Up>", command: { kind: "action", action: "scroll-document-up" }, scopes: ["pdf-reader"], title: "Scroll up", group: GROUP_MOTION, alias: true },
+  { id: "pdf.scrollDown.arrow", keys: "<Down>", command: { kind: "action", action: "scroll-document-down" }, scopes: ["pdf-reader"], title: "Scroll down", group: GROUP_MOTION, alias: true },
+  { id: "document.previousPage.key", keys: "<PageUp>", command: { kind: "action", action: "previous-document-page" }, scopes: DOCUMENT_READERS, title: "Previous document page", group: GROUP_MOTION, alias: true },
+  { id: "document.nextPage.key", keys: "<PageDown>", command: { kind: "action", action: "next-document-page" }, scopes: DOCUMENT_READERS, title: "Next document page", group: GROUP_MOTION, alias: true },
   { id: "pdf.invert", keys: "I", command: { kind: "action", action: "invert-pdf" }, scopes: ["pdf-reader"], title: "Invert PDF colours", group: GROUP_OVERLAY },
 
   // -- conflicts ----------------------------------------------------------
@@ -99,6 +109,8 @@ const SPECS: BindingSpec[] = [
   // -- navigation ---------------------------------------------------------
   { id: "nav.nextView", keys: "gt", command: { kind: "action", action: "next-view" }, scopes: ["global"], title: "Next view", group: GROUP_NAV },
   { id: "nav.prevView", keys: "gT", command: { kind: "action", action: "prev-view" }, scopes: ["global"], title: "Previous view", group: GROUP_NAV },
+  { id: "nav.nextView.tab", keys: "<Tab>", command: { kind: "action", action: "next-view" }, scopes: ["global"], title: "Next view", group: GROUP_NAV, alias: true },
+  { id: "nav.prevView.tab", keys: "<S-Tab>", command: { kind: "action", action: "prev-view" }, scopes: ["global"], title: "Previous view", group: GROUP_NAV, alias: true },
   { id: "nav.nextFolder", keys: "]f", command: { kind: "action", action: "next-folder" }, scopes: ["global"], title: "Next folder", group: GROUP_NAV },
   { id: "nav.prevFolder", keys: "[f", command: { kind: "action", action: "prev-folder" }, scopes: ["global"], title: "Previous folder", group: GROUP_NAV },
 

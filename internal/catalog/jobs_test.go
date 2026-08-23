@@ -108,10 +108,10 @@ func TestCompleteVirtualItemShouldBeIdempotentAcrossCrashReplay(t *testing.T) {
 	}
 }
 
-func TestCreateJobShouldRejectTheRequestWhenTheActionIsNotOneOfTheThree(t *testing.T) {
+func TestCreateJobShouldRejectAnUnknownAction(t *testing.T) {
 	cat := setupTestCatalog(t)
 
-	if _, err := cat.CreateJob("delete", "", []int64{1}); err == nil {
+	if _, err := cat.CreateJob("bogus", "", []int64{1}); err == nil {
 		t.Fatal("an unknown job action must be rejected")
 	}
 	jobs, err := cat.ListJobs(10)

@@ -203,6 +203,15 @@ func (m *Mover) planRename(folder, fromRaw, toRaw string, allowResume bool) (*re
 	if err != nil {
 		return nil, err
 	}
+	trashRoot := filepath.Join(m.cfg.Storage.ColdStoragePath, "trash", folder)
+	trashFrom, err := safeTreePath(trashRoot, from)
+	if err != nil {
+		return nil, err
+	}
+	trashInfo, trashExists, err := lstatOptional(trashFrom)
+	if err != nil {
+		return nil, err
+	}
 	thumbRoot := filepath.Join(m.cfg.Storage.ColdStoragePath, "thumbnails", folder)
 	thumbFrom, err := safeTreePath(thumbRoot, from)
 	if err != nil {
@@ -220,18 +229,19 @@ func (m *Mover) planRename(folder, fromRaw, toRaw string, allowResume bool) (*re
 		hasDescendant = hasDescendant || strings.HasPrefix(file.RelativePath, from+"/")
 	}
 	plan.directory = hasDescendant || (deviceExists && deviceInfo.IsDir()) ||
-		(archiveExists && archiveInfo.IsDir()) || (thumbExists && thumbInfo.IsDir())
+		(archiveExists && archiveInfo.IsDir()) || (trashExists && trashInfo.IsDir()) ||
+		(thumbExists && thumbInfo.IsDir())
 	if err := validateRenameDestination(to, plan.directory); err != nil {
 		return nil, err
 	}
 
-	if len(files) == 0 && !deviceExists && !archiveExists && !thumbExists {
+	if len(files) == 0 && !deviceExists && !archiveExists && !trashExists && !thumbExists {
 		if allowResume && len(destinationRows) > 0 {
 			plan.complete = true
 			return plan, nil
 		}
 		if allowResume {
-			for _, root := range []string{fc.SyncthingPath, archiveRoot, thumbRoot} {
+			for _, root := range []string{fc.SyncthingPath, archiveRoot, trashRoot, thumbRoot} {
 				destination, pathErr := safeTreePath(root, to)
 				if pathErr != nil {
 					return nil, pathErr
@@ -260,18 +270,20 @@ func (m *Mover) planRename(folder, fromRaw, toRaw string, allowResume bool) (*re
 		if hasExact {
 			return nil, fmt.Errorf("%w: %q is both a file row and a directory prefix", ErrRenameConflict, from)
 		}
-		return m.planDirectoryRename(plan, fc.SyncthingPath, archiveRoot, deviceExists, archiveExists,
-			deviceInfo, archiveInfo, allowResume)
+		return m.planDirectoryRename(plan, fc.SyncthingPath, archiveRoot, trashRoot,
+			deviceExists, archiveExists, trashExists, deviceInfo, archiveInfo, trashInfo, allowResume)
 	}
 	if len(files) != 1 || files[0].RelativePath != from {
 		return nil, fmt.Errorf("%w: no catalogued file at %q", ErrRenameSource, from)
 	}
-	return m.planFileRename(plan, fc.SyncthingPath, archiveRoot, allowResume)
+	return m.planFileRename(plan, fc.SyncthingPath, archiveRoot, trashRoot, allowResume)
 }
 
-func (m *Mover) planDirectoryRename(plan *renamePlan, deviceRoot, archiveRoot string,
-	deviceExists, archiveExists bool, deviceInfo, archiveInfo os.FileInfo, allowResume bool) (*renamePlan, error) {
-	if deviceExists && !deviceInfo.IsDir() || archiveExists && !archiveInfo.IsDir() {
+func (m *Mover) planDirectoryRename(plan *renamePlan, deviceRoot, archiveRoot, trashRoot string,
+	deviceExists, archiveExists, trashExists bool, deviceInfo, archiveInfo, trashInfo os.FileInfo,
+	allowResume bool) (*renamePlan, error) {
+	if deviceExists && !deviceInfo.IsDir() || archiveExists && !archiveInfo.IsDir() ||
+		trashExists && !trashInfo.IsDir() {
 		return nil, fmt.Errorf("%w: directory source is a file in one tree", ErrRenameConflict)
 	}
 	thumbRoot := filepath.Join(m.cfg.Storage.ColdStoragePath, "thumbnails", plan.folder)
@@ -286,7 +298,7 @@ func (m *Mover) planDirectoryRename(plan *renamePlan, deviceRoot, archiveRoot st
 	if thumbExists && !thumbInfo.IsDir() {
 		return nil, fmt.Errorf("%w: thumbnail directory source is a file", ErrRenameConflict)
 	}
-	if !allowResume && !deviceExists && !archiveExists && !thumbExists {
+	if !allowResume && !deviceExists && !archiveExists && !trashExists && !thumbExists {
 		return nil, fmt.Errorf("%w: directory %q is absent from every tree", ErrRenameSource, plan.from)
 	}
 	if err := rejectTransientFiles(plan.files); err != nil {
@@ -310,7 +322,7 @@ func (m *Mover) planDirectoryRename(plan *renamePlan, deviceRoot, archiveRoot st
 			return nil, fmt.Errorf("%w: %s is outside %s", ErrRenamePair, file.RelativePath, plan.from)
 		}
 	}
-	for _, root := range []string{deviceRoot, archiveRoot, thumbRoot} {
+	for _, root := range []string{deviceRoot, archiveRoot, trashRoot, thumbRoot} {
 		source, err := safeTreePath(root, plan.from)
 		if err != nil {
 			return nil, err
@@ -329,7 +341,7 @@ func (m *Mover) planDirectoryRename(plan *renamePlan, deviceRoot, archiveRoot st
 	return plan, nil
 }
 
-func (m *Mover) planFileRename(plan *renamePlan, deviceRoot, archiveRoot string,
+func (m *Mover) planFileRename(plan *renamePlan, deviceRoot, archiveRoot, trashRoot string,
 	allowResume bool) (*renamePlan, error) {
 	source := plan.files[0]
 	expanded, err := m.cat.ExpandPairGroups([]int64{source.ID})
@@ -374,7 +386,7 @@ func (m *Mover) planFileRename(plan *renamePlan, deviceRoot, archiveRoot string,
 	for i, rename := range renames {
 		file := files[i]
 		expectedPhysical := false
-		for rootIndex, root := range []string{deviceRoot, archiveRoot} {
+		for rootIndex, root := range []string{deviceRoot, archiveRoot, trashRoot} {
 			src, err := safeTreePath(root, rename.From)
 			if err != nil {
 				return nil, err
@@ -396,7 +408,8 @@ func (m *Mover) planFileRename(plan *renamePlan, deviceRoot, archiveRoot string,
 				return nil, statErr
 			}
 			resume := rootIndex == 0 && file.Status == catalog.StatusSynced ||
-				rootIndex == 1 && file.Status == catalog.StatusArchived
+				rootIndex == 1 && file.Status == catalog.StatusArchived ||
+				rootIndex == 2 && file.Status == catalog.StatusTrashed
 			if resume && (exists || allowResume && destinationExists) {
 				expectedPhysical = true
 			}
@@ -506,7 +519,8 @@ func pairFilenameSuffix(filename, canonical string) (string, bool) {
 
 func rejectTransientFiles(files []catalog.FileRecord) error {
 	for _, file := range files {
-		if file.Status == catalog.StatusArchiving || file.Status == catalog.StatusRestoring {
+		if file.Status == catalog.StatusArchiving || file.Status == catalog.StatusRestoring ||
+			file.Status == catalog.StatusTrashing || file.Status == catalog.StatusUntrashing {
 			return fmt.Errorf("%w: %s is %s", ErrRenameTransient, file.RelativePath, file.Status)
 		}
 	}

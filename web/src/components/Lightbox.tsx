@@ -53,6 +53,8 @@ function statusColor(status: FileRecord["status"]): string {
       return "text-cold";
     case "missing":
       return "text-alarm";
+    case "trashed":
+      return "text-alarm";
     case "synced":
       return "text-ink-muted";
     default:
@@ -90,7 +92,17 @@ export function Lightbox({
   const containerRef = useFocusTrap(true);
   useScrollLock(true);
 
-  const file = files[index];
+  // A trash/delete job refetches the filtered list. If the owner navigated
+  // away from the index the parent originally opened, removing the last item
+  // can make our private index stale for one render before React can clamp it.
+  // Resolve a safe file synchronously so that render never dereferences an
+  // item that the completed job just removed.
+  const safeIndex = Math.max(0, Math.min(index, files.length - 1));
+  const file = files[safeIndex];
+
+  useEffect(() => {
+    if (index !== safeIndex) setIndex(safeIndex);
+  }, [index, safeIndex]);
 
   const goTo = useCallback(
     (next: number) => {
@@ -187,6 +199,18 @@ export function Lightbox({
               return true;
             case "info":
               setShowMeta((shown) => !shown);
+              return true;
+            case "previous-item":
+              goTo(index - Math.max(1, command.count));
+              return true;
+            case "next-item":
+              goTo(index + Math.max(1, command.count));
+              return true;
+            // Tab changes the main application view. While a modal preview is
+            // open it is intentionally swallowed instead of changing the
+            // hidden workspace behind the focus trap.
+            case "next-view":
+            case "prev-view":
               return true;
             case "toggle-select":
               selection.toggle(file.id);
@@ -333,10 +357,12 @@ export function Lightbox({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:justify-end" data-lightbox-actions>
-              <PinToggle
-                file={file}
-                onPin={(pinned) => void run(() => actions.setPinned(file, pinned))}
-              />
+              {file.status !== "trashed" && (
+                <PinToggle
+                  file={file}
+                  onPin={(pinned) => void run(() => actions.setPinned(file, pinned))}
+                />
+              )}
               <button
                 onClick={() => setShowMeta(!showMeta)}
                 className={ACTION_BUTTON}
@@ -392,6 +418,33 @@ export function Lightbox({
                 >
                   {busy ? "Working..." : "Archive"}
                 </button>
+              )}
+              {(file.status === "synced" || file.status === "archived") && (
+                <button
+                  onClick={() => bulk.perform("trash", [file.id])}
+                  disabled={busy}
+                  className={`${ACTION_BUTTON} text-alarm`}
+                >
+                  Delete
+                </button>
+              )}
+              {file.status === "trashed" && (
+                <>
+                  <button
+                    onClick={() => bulk.perform("untrash", [file.id])}
+                    disabled={busy}
+                    className={ACTION_BUTTON}
+                  >
+                    Restore from Trash
+                  </button>
+                  <button
+                    onClick={() => bulk.perform("delete", [file.id])}
+                    disabled={busy}
+                    className={`${ACTION_BUTTON} text-alarm`}
+                  >
+                    Delete permanently
+                  </button>
+                </>
               )}
             </div>
           </div>

@@ -25,13 +25,14 @@ function renderBrowser(
   options: {
     reveal?: { file: (typeof ROWS)[number]; token: number };
     onShowInFiles?: (file: (typeof ROWS)[number]) => void;
+    filterKey?: "all" | "trash";
   } = {},
 ) {
   stub = stubFetch([{ url: "/api/v1/files", body: rows }]);
   return renderWithToasts(
     <FileBrowser
       folder="Documents"
-      filterKey="all"
+      filterKey={options.filterKey ?? "all"}
       onFilterChange={vi.fn()}
       onFolderChanged={() => {}}
       reveal={options.reveal}
@@ -45,14 +46,39 @@ function row(id: number): HTMLElement {
 }
 
 describe("FileBrowser", () => {
-  it("should offer Restore only for archived rows and Archive only for synced ones", async () => {
+  it("should offer state-specific actions and recoverable Delete on active rows", async () => {
     renderBrowser();
     await screen.findByText("a.txt");
 
     expect(within(row(1)).getByRole("button", { name: "Archive" })).toBeInTheDocument();
+    expect(within(row(1)).getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(within(row(1)).queryByRole("button", { name: "Restore" })).toBeNull();
     expect(within(row(2)).getByRole("button", { name: "Restore" })).toBeInTheDocument();
+    expect(within(row(2)).getByRole("button", { name: "Delete" })).toBeInTheDocument();
     expect(within(row(2)).queryByRole("button", { name: "Archive" })).toBeNull();
+  });
+
+  it("should offer restore and confirmed permanent deletion in the trash view", async () => {
+    const trashed = aFile({
+      id: 9,
+      filename: "deleted.txt",
+      relative_path: "notes/deleted.txt",
+      extension: ".txt",
+      status: "trashed",
+      trashed_from: "synced",
+    });
+    renderBrowser([trashed], { filterKey: "trash" });
+    await screen.findByText("deleted.txt");
+
+    expect(within(row(9)).getByRole("button", { name: "Restore" })).toBeInTheDocument();
+    expect(within(row(9)).getByRole("button", { name: "Delete permanently" })).toBeInTheDocument();
+    expect(within(row(9)).queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(within(row(9)).queryByRole("button", { name: /Pin deleted\.txt/ })).toBeNull();
+
+    await userEvent.click(within(row(9)).getByRole("button", { name: "Delete permanently" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Permanently delete 1 file?");
+    expect(dialog).toHaveTextContent("It cannot be undone");
   });
 
   it("should repaint the row after a restore instead of leaving it reading archived", async () => {

@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useKeymapLayer } from "../../hooks/useKeymapLayer";
+import type { Command } from "../../keymap/types";
 import { api } from "../../lib/api";
 import type { EpubSpine } from "../../types/api";
 
@@ -25,6 +27,21 @@ export default function EpubReader({ fileId, filename }: EpubReaderProps) {
   const [spine, setSpine] = useState<EpubSpine | null>(null);
   const [section, setSection] = useState(0);
   const [error, setError] = useState("");
+
+  const handleKeymap = useCallback((command: Command): boolean => {
+    if (command.kind !== "action") return false;
+    const count = Math.max(1, command.count);
+    if (command.action === "previous-document-page") {
+      setSection((current) => Math.max(0, current - count));
+      return true;
+    }
+    if (command.action === "next-document-page") {
+      setSection((current) => Math.min((spine?.sections.length ?? 1) - 1, current + count));
+      return true;
+    }
+    return false;
+  }, [spine?.sections.length]);
+  useKeymapLayer("epub-reader", handleKeymap);
 
   // No reset of spine/section here: DocumentReader keys this component by
   // file id, so a different book is a different instance with fresh state.

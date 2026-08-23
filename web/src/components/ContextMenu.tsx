@@ -58,6 +58,7 @@ export function ContextMenu({
   const [highlight, setHighlight] = useState(0);
   const { file, ids } = target;
   const many = ids.length > 1;
+  const inTrash = file.status === "trashed";
   const suffix = many ? ` (${formatCount(ids.length)} files)` : "";
 
   const close = useCallback(() => onClose(), [onClose]);
@@ -82,13 +83,23 @@ export function ContextMenu({
     items.push({ id: "location", label: "Location and nearby files", run: onEditLocation });
     items.push({ id: "show-in-files", label: "Show in Files view", run: onShowInFiles });
   }
-  items.push({ id: "add-tags", label: `Add tags${suffix}`, run: () => onEditTags("add") });
-  items.push({ id: "remove-tags", label: `Remove tags${suffix}`, run: () => onEditTags("remove") });
+  if (!inTrash) {
+    items.push({ id: "add-tags", label: `Add tags${suffix}`, run: () => onEditTags("add") });
+    items.push({ id: "remove-tags", label: `Remove tags${suffix}`, run: () => onEditTags("remove") });
+  }
   items.push({ id: "download", label: `Download${suffix}`, run: () => bulk.download(ids) });
-  if (file.status === "archived" || many) {
+  if (inTrash) {
+    items.push({ id: "untrash", label: `Restore from Trash${suffix}`, run: () => bulk.perform("untrash", ids) });
+    items.push({
+      id: "delete-permanently",
+      label: `Delete permanently${suffix}`,
+      run: () => bulk.perform("delete", ids),
+      danger: true,
+    });
+  } else if (file.status === "archived" || many) {
     items.push({ id: "restore", label: `Restore${suffix}`, run: () => bulk.perform("restore", ids) });
   }
-  if (file.status === "synced" || many) {
+  if (!inTrash && (file.status === "synced" || many)) {
     items.push({
       id: "archive",
       label: `Archive${suffix}`,
@@ -96,9 +107,12 @@ export function ContextMenu({
       danger: true,
     });
   }
-  items.push({ id: "pin", label: `Pin${suffix}`, run: () => bulk.perform("pin", ids) });
-  items.push({ id: "unpin", label: `Unpin${suffix}`, run: () => bulk.perform("unpin", ids) });
-  if (conflictMode && !many) {
+  if (!inTrash) {
+    items.push({ id: "trash", label: `Delete${suffix}`, run: () => bulk.perform("trash", ids), danger: true });
+    items.push({ id: "pin", label: `Pin${suffix}`, run: () => bulk.perform("pin", ids) });
+    items.push({ id: "unpin", label: `Unpin${suffix}`, run: () => bulk.perform("unpin", ids) });
+  }
+  if (!inTrash && conflictMode && !many) {
     items.push({
       id: "resolve-device",
       label: "Keep the copy on your device",

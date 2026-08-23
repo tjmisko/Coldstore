@@ -335,12 +335,10 @@ func (d *Daemon) enforceFolder(ctx context.Context, folder catalog.FolderConfigR
 		return nil
 	}
 
-	// FolderSizes: enforcement budgets the folder's ON-DEVICE FOOTPRINT, which
-	// is status IN ('synced','archiving','restoring'). A file being moved out
-	// still occupies the device until the move commits, and a file being moved
-	// in already claims its bytes. Counting only 'synced' understates the
-	// footprint exactly when moves are in flight and makes the daemon offload
-	// past the budget.
+	// FolderSizes budgets the ON-DEVICE FOOTPRINT. Moves out still occupy the
+	// device until commit, moves in already claim their bytes, and trash
+	// transitions count when their recorded origin is synced. Counting only
+	// settled synced rows understates the footprint exactly while moves run.
 	onDevice, _, err := d.cat.FolderSizes(folder.FolderLabel)
 	if err != nil {
 		return fmt.Errorf("getting folder size: %w", err)

@@ -71,7 +71,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch req.Action {
-	case catalog.JobActionRestore, catalog.JobActionArchive:
+	case catalog.JobActionRestore, catalog.JobActionArchive, catalog.JobActionTrash,
+		catalog.JobActionUntrash, catalog.JobActionDelete:
 		if !s.validateSelection(w, req.IDs) {
 			return
 		}
@@ -81,7 +82,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 			req.IDs = expanded
-			if req.Action == catalog.JobActionRestore && !req.Force {
+			if (req.Action == catalog.JobActionRestore || req.Action == catalog.JobActionUntrash) && !req.Force {
 				if !s.restorePreflight(w, req.IDs) {
 					return nil // restorePreflight already answered the request
 				}
@@ -230,7 +231,7 @@ func (s *Server) persistentPatterns(label string) ([]string, error) {
 func (s *Server) enqueue(w http.ResponseWriter, action, folder string, ids []int64) {
 	var jobID int64
 	var err error
-	if action == catalog.JobActionRestore {
+	if action == catalog.JobActionRestore || action == catalog.JobActionUntrash {
 		jobID, err = s.cat.CreatePreflightedMoveJob(action, folder, ids)
 	} else {
 		jobID, err = s.cat.CreateJob(action, folder, ids)

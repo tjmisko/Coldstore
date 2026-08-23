@@ -59,16 +59,17 @@ func DecodeRenamePayload(raw string) (RenamePayload, error) {
 	return payload, nil
 }
 
-// CreatePreflightedMoveJob is CreateJob with a closure check for restore
-// selections whose bytes were already approved by the API. It never silently
-// inserts a companion which was absent from that budget preflight.
+// CreatePreflightedMoveJob is CreateJob with a closure check for restore and
+// untrash selections whose bytes were already approved by the API. It never
+// silently inserts a companion which was absent from that budget preflight.
 func (c *Catalog) CreatePreflightedMoveJob(action, folderLabel string, fileIDs []int64) (int64, error) {
 	return c.createJob(action, folderLabel, fileIDs, true)
 }
 
 func (c *Catalog) createJob(action, folderLabel string, fileIDs []int64, requireClosed bool) (int64, error) {
 	switch action {
-	case JobActionRestore, JobActionArchive, JobActionScan:
+	case JobActionRestore, JobActionArchive, JobActionScan,
+		JobActionTrash, JobActionUntrash, JobActionDelete:
 	default:
 		return 0, fmt.Errorf("invalid job action %q", action)
 	}

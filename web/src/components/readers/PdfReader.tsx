@@ -53,12 +53,30 @@ export default function PdfReader({ src, filename }: PdfReaderProps) {
   const frameRef = useRef<HTMLDivElement | null>(null);
 
   const handleKeymap = useCallback((command: Command): boolean => {
-    if (command.kind === "action" && command.action === "invert-pdf") {
-      setInverted((current) => !current);
-      return true;
+    if (command.kind !== "action") return false;
+    switch (command.action) {
+      case "invert-pdf":
+        setInverted((current) => !current);
+        return true;
+      case "scroll-document-up":
+      case "scroll-document-down": {
+        const frame = frameRef.current;
+        if (frame) {
+          const direction = command.action === "scroll-document-up" ? -1 : 1;
+          frame.scrollBy({ top: direction * Math.max(120, frame.clientHeight * 0.8), behavior: "smooth" });
+        }
+        return true;
+      }
+      case "previous-document-page":
+        setPage((current) => Math.max(1, current - Math.max(1, command.count)));
+        return true;
+      case "next-document-page":
+        setPage((current) => Math.min(pageCount || current, current + Math.max(1, command.count)));
+        return true;
+      default:
+        return false;
     }
-    return false;
-  }, []);
+  }, [pageCount]);
   useKeymapLayer("pdf-reader", handleKeymap);
 
   // react-pdf renders at a fixed pixel width, so it needs a measured one. A
