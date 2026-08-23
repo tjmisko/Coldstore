@@ -62,6 +62,12 @@ func TestSimpleRedeployCompletesWithVerifiedBackups(t *testing.T) {
 			t.Errorf("command log missing %q:\n%s", wanted, log)
 		}
 	}
+	statusAt := strings.Index(log, " --status")
+	stopAt := strings.Index(log, "systemctl stop coldstore")
+	checkAt := strings.Index(log, " --check")
+	if statusAt < 0 || stopAt < 0 || checkAt < 0 || !(statusAt < stopAt && stopAt < checkAt) {
+		t.Errorf("expected immutable status before stop and full preflight after stop:\n%s", log)
+	}
 }
 
 func TestSimpleRedeployRefusesSchemaChangesBeforeDowntime(t *testing.T) {
@@ -150,6 +156,13 @@ func newRedeployFixture(t *testing.T, onDiskSchema string) *redeployFixture {
 	writeFile(t, commandLog, "", 0o644)
 
 	newBinary := `#!/bin/sh
+printf 'coldstore %s\n' "$*" >>"$FAKE_COMMAND_LOG"
+if [ "$1" = "--config" ] && [ "$3" = "--status" ]; then
+  printf 'coldstore status: FAILED\n'
+  printf 'cold storage      %s\n' "$FAKE_COLD_STORAGE"
+  printf '  FAILURE catalog_unreadable catalog has an uncheckpointed WAL\n'
+  exit 2
+fi
 if [ "$1" = "--config" ] && [ "$3" = "--check" ]; then
   printf 'config           %s\n' "$2"
   printf 'cold storage     %s (exists, writable; mounted, btrfs)\n' "$FAKE_COLD_STORAGE"

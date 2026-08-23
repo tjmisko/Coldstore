@@ -196,6 +196,28 @@ preflight_binary() {
     "$binary" --config "$config_path" --check 2>&1 | tee "$output"
 }
 
+discover_cold_storage() {
+  local binary=$1
+  local output=$2
+  local status=0
+
+  # --status is deliberately immutable and may exit 2 while the daemon has an
+  # uncheckpointed WAL. Its storage section is rendered before catalog access,
+  # so it remains a safe way to resolve the effective configured path without
+  # pretending that an offline catalog check can pass against a live writer.
+  if sudo -u "$service_user" "$binary" --config "$config_path" --status 2>&1 |
+    tee "$output" >/dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+  cold_storage=$(sed -n 's/^cold storage[[:space:]]*//p' "$output" | tail -n 1)
+  if [[ -z "$cold_storage" ]]; then
+    cat "$output" >&2
+    fail "could not resolve cold storage from the new binary's read-only status output (exit $status)"
+  fi
+}
+
 query_catalog_scalar() {
   local sql=$1
   sudo -u "$service_user" sqlite3 "$catalog_path" "$sql"
@@ -252,11 +274,9 @@ built_modified=$(go version -m "$build_binary" | sed -n 's/^[[:space:]]*build[[:
 [[ "$built_revision" == "$revision" ]] || fail "built binary revision '$built_revision' does not match Git HEAD '$revision'"
 [[ "$built_modified" == "false" ]] || fail "built binary reports vcs.modified=$built_modified; refusing an unrepeatable release"
 
-stage="preflighting built binary"
-preflight_log="$temporary_dir/preflight-built.log"
-preflight_binary "$build_binary" "$preflight_log" || fail "the new binary failed preflight; review the output above"
-cold_storage=$(sed -n 's/^cold storage[[:space:]]*//; s/ (.*$//p' "$preflight_log" | tail -n 1)
-[[ -n "$cold_storage" ]] || fail "could not read the cold-storage path from preflight output"
+stage="discovering production storage"
+status_log="$temporary_dir/status-built.log"
+discover_cold_storage "$build_binary" "$status_log"
 catalog_path=${COLDSTORE_CATALOG_PATH:-$cold_storage/catalog.db}
 [[ -f "$catalog_path" ]] || fail "production catalog not found: $catalog_path"
 note "cold storage $cold_storage"
@@ -309,6 +329,14 @@ service_stopped=1
 if [[ $(systemctl is-active "$service" || true) != "inactive" ]]; then
   fail "$service did not reach the inactive state after stop"
 fi
+
+stage="preflighting built binary offline"
+preflight_log="$temporary_dir/preflight-built.log"
+preflight_binary "$build_binary" "$preflight_log" || fail "the new binary failed offline preflight; review the output above"
+preflight_cold_storage=$(sed -n 's/^cold storage[[:space:]]*//; s/ (.*$//p' "$preflight_log" | tail -n 1)
+[[ -n "$preflight_cold_storage" ]] || fail "could not read the cold-storage path from offline preflight output"
+[[ $(canonical_path "$preflight_cold_storage") == $(canonical_path "$cold_storage") ]] ||
+  fail "offline preflight resolved cold storage to '$preflight_cold_storage', previously '$cold_storage'"
 
 stage="creating backup directory"
 backup_stamp=$(date -u +%Y%m%dT%H%M%SZ)

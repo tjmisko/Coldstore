@@ -902,11 +902,14 @@ make redeploy-simple
 Run it as the checkout owner, not through `sudo`. The command pulls
 `origin/main` with `--ff-only`, builds the embedded frontend and daemon while
 the existing service stays online, and checks that the built binary came from
-the exact commit being deployed. It then runs the production preflight inside
-the service account, verifies the archive filesystem, and waits for jobs and
-file moves to settle before stopping the service.
+the exact commit being deployed. It uses the new binary's immutable status mode
+to resolve the effective cold-storage path without opening the live catalog,
+verifies the archive filesystem and unchanged schema, and waits for jobs and
+file moves to settle before stopping the service. A complete production
+preflight, including the offline catalog identity check, runs immediately after
+the clean stop and before any backup or installation.
 
-The short downtime begins only after every read-only gate passes. The script
+The short downtime begins only after the online-safe gates pass. The script
 uses SQLite's online backup API to save a verified catalog backup and copies the
 currently installed binary to a unique timestamped directory under
 `/var/backups/coldstore`. Backups are never pruned automatically. It installs
