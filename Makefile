@@ -1,4 +1,4 @@
-.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend icons
+.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend icons redeploy-simple
 
 BINARY := coldstore
 BUILD_DIR := ./cmd/coldstore
@@ -138,3 +138,9 @@ install-binary:
 	install -m 755 $(BINARY) /usr/local/bin/$(BINARY)
 
 install: build install-binary
+
+# The routine, schema-preserving production path. The script pulls main, builds
+# before downtime, verifies the release and archive mount, creates rollback
+# backups, and restores the previous binary automatically if startup fails.
+redeploy-simple:
+	./scripts/redeploy-simple

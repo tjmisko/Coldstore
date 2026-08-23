@@ -1,0 +1,369 @@
+#!/usr/bin/env bash
+# Build and safely redeploy an ordinary, schema-preserving Coldstore release.
+#
+# This intentionally refuses database migrations, dirty/non-main checkouts,
+# active jobs, an unexpected archive filesystem, and an inactive production
+# service. Those conditions need diagnosis or the full deployment runbook, not
+# a more permissive flag on the convenient path.
+
+set -Eeuo pipefail
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=${COLDSTORE_REPO_ROOT:-$(cd -- "$script_dir/.." && pwd)}
+service=${COLDSTORE_SERVICE:-coldstore}
+config_path=${COLDSTORE_CONFIG:-/etc/coldstore/coldstore.toml}
+environment_file=${COLDSTORE_ENV_FILE:-/etc/coldstore/coldstore.env}
+installed_binary=${COLDSTORE_INSTALLED_BINARY:-/usr/local/bin/coldstore}
+backup_root=${COLDSTORE_BACKUP_DIR:-/var/backups/coldstore}
+expected_fstype=${COLDSTORE_EXPECTED_FSTYPE:-btrfs}
+wait_seconds=${COLDSTORE_DEPLOY_WAIT_SECONDS:-300}
+health_seconds=${COLDSTORE_DEPLOY_HEALTH_SECONDS:-10}
+log_lines=${COLDSTORE_DEPLOY_LOG_LINES:-100}
+
+stage="initial checks"
+temporary_dir=""
+service_stopped=0
+install_attempted=0
+deployment_complete=0
+failure_handled=0
+old_binary_backup=""
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/redeploy-simple [options]
+
+Pull, build, back up, install, and restart a schema-preserving Coldstore
+release. Run this as the normal checkout owner, never through sudo.
+
+Options:
+  --backup-dir PATH       Backup root (default: /var/backups/coldstore)
+  --config PATH           Production TOML (default: /etc/coldstore/coldstore.toml)
+  --service NAME          systemd service (default: coldstore)
+  --binary PATH           Installed binary (default: /usr/local/bin/coldstore)
+  --expected-fstype TYPE  Required filesystem below cold storage (default: btrfs)
+  --wait-seconds N        Wait for active work to settle (default: 300)
+  --health-seconds N      Require the new service to stay active (default: 10)
+  -h, --help              Show this help
+
+The same settings can be supplied with COLDSTORE_BACKUP_DIR,
+COLDSTORE_CONFIG, COLDSTORE_SERVICE, COLDSTORE_INSTALLED_BINARY,
+COLDSTORE_EXPECTED_FSTYPE, COLDSTORE_DEPLOY_WAIT_SECONDS, and
+COLDSTORE_DEPLOY_HEALTH_SECONDS.
+
+Additional host-specific overrides are COLDSTORE_ENV_FILE,
+COLDSTORE_CATALOG_PATH, and COLDSTORE_DEPLOY_LOG_LINES.
+
+There is deliberately no schema-migration override. If source and production
+schemas differ, use docs/deployment.md and make a migration-aware backup and
+rollback plan.
+EOF
+}
+
+while (($# > 0)); do
+  case "$1" in
+    --backup-dir|--config|--service|--binary|--expected-fstype|--wait-seconds|--health-seconds)
+      (($# >= 2)) || { printf 'redeploy: %s requires a value\n' "$1" >&2; exit 2; }
+      case "$1" in
+        --backup-dir) backup_root=$2 ;;
+        --config) config_path=$2 ;;
+        --service) service=$2 ;;
+        --binary) installed_binary=$2 ;;
+        --expected-fstype) expected_fstype=$2 ;;
+        --wait-seconds) wait_seconds=$2 ;;
+        --health-seconds) health_seconds=$2 ;;
+      esac
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'redeploy: unknown option: %s\n\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+headline() {
+  printf '\n==> %s\n' "$*"
+}
+
+note() {
+  printf '    %s\n' "$*"
+}
+
+cleanup() {
+  if [[ -n "$temporary_dir" && -d "$temporary_dir" ]]; then
+    rm -r -- "$temporary_dir"
+  fi
+}
+
+show_service_diagnostics() {
+  printf '\nRecent %s service status:\n' "$service" >&2
+  sudo systemctl status "$service" --no-pager --full >&2 || true
+  printf '\nRecent %s journal entries:\n' "$service" >&2
+  sudo journalctl -u "$service" -n "$log_lines" --no-pager >&2 || true
+}
+
+rollback_binary() {
+  if ((deployment_complete == 1)); then
+    return
+  fi
+  if ((install_attempted == 1)) && [[ -n "$old_binary_backup" ]]; then
+    printf '\nAttempting automatic binary rollback...\n' >&2
+    sudo systemctl stop "$service" >/dev/null 2>&1 || true
+    if sudo install -m 755 "$old_binary_backup" "$installed_binary"; then
+      note "restored previous binary from $old_binary_backup" >&2
+    else
+      printf 'CRITICAL: could not restore %s from %s\n' "$installed_binary" "$old_binary_backup" >&2
+      return
+    fi
+  elif ((service_stopped == 0)); then
+    return
+  fi
+
+  if sudo systemctl start "$service"; then
+    service_stopped=0
+    if systemctl is-active --quiet "$service"; then
+      note "previous service restarted successfully" >&2
+    else
+      printf 'CRITICAL: systemd accepted the rollback start, but %s is not active\n' "$service" >&2
+      show_service_diagnostics
+    fi
+  else
+    printf 'CRITICAL: could not restart %s after the failed deployment\n' "$service" >&2
+    show_service_diagnostics
+  fi
+}
+
+fail() {
+  local message=$1
+  failure_handled=1
+  trap - ERR
+  printf '\nERROR: %s\n' "$message" >&2
+  printf 'Stage: %s\n' "$stage" >&2
+  if ((install_attempted == 1)); then
+    show_service_diagnostics
+  fi
+  rollback_binary
+  exit 1
+}
+
+unexpected_error() {
+  local status=$1
+  local line=$2
+  local command=$3
+  if ((failure_handled == 1)); then
+    exit "$status"
+  fi
+  failure_handled=1
+  trap - ERR
+  printf '\nERROR: command failed with exit %d\n' "$status" >&2
+  printf 'Stage: %s\nLine: %s\nCommand: %s\n' "$stage" "$line" "$command" >&2
+  if ((install_attempted == 1)); then
+    show_service_diagnostics
+  fi
+  rollback_binary
+  exit "$status"
+}
+
+trap cleanup EXIT
+trap 'unexpected_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "required command is not installed: $1"
+}
+
+canonical_path() {
+  realpath -m -- "$1"
+}
+
+path_is_within() {
+  local child parent
+  child=$(canonical_path "$1")
+  parent=$(canonical_path "$2")
+  [[ "$child" == "$parent" || "$child" == "$parent/"* ]]
+}
+
+preflight_binary() {
+  local binary=$1
+  local output=$2
+  sudo systemd-run --pipe --wait --collect --quiet \
+    --uid="$service_user" \
+    --property="EnvironmentFile=-$environment_file" \
+    "$binary" --config "$config_path" --check 2>&1 | tee "$output"
+}
+
+query_catalog_scalar() {
+  local sql=$1
+  sudo -u "$service_user" sqlite3 "$catalog_path" "$sql"
+}
+
+for command_name in awk date findmnt git go install journalctl make mktemp realpath sed sleep sqlite3 sudo systemctl systemd-run tail tee; do
+  require_command "$command_name"
+done
+
+[[ $EUID -ne 0 ]] || fail "run this script as the checkout owner, not through sudo"
+[[ $wait_seconds =~ ^[0-9]+$ ]] || fail "--wait-seconds must be a non-negative integer"
+[[ $health_seconds =~ ^[0-9]+$ ]] || fail "--health-seconds must be a non-negative integer"
+[[ -d "$repo_root/.git" ]] || fail "repository metadata not found at $repo_root"
+[[ -f "$config_path" ]] || fail "production config not found: $config_path"
+[[ -x "$installed_binary" ]] || fail "installed Coldstore binary not found or not executable: $installed_binary"
+
+cd -- "$repo_root"
+temporary_dir=$(mktemp -d)
+
+stage="checking systemd service"
+service_user=$(systemctl show "$service" -p User --value)
+service_group=$(systemctl show "$service" -p Group --value)
+[[ -n "$service_user" ]] || service_user=root
+[[ -n "$service_group" ]] || service_group=$service_user
+systemctl is-active --quiet "$service" || fail "$service.service is not active; diagnose it before using the redeploy shortcut"
+sudo -v || fail "sudo authentication failed"
+
+headline "Checking the production checkout"
+stage="checking Git state"
+branch=$(git branch --show-current)
+[[ "$branch" == "main" ]] || fail "production checkout is on '$branch', not main"
+dirty=$(git status --porcelain --untracked-files=normal)
+[[ -z "$dirty" ]] || {
+  printf '%s\n' "$dirty" >&2
+  fail "production checkout has local changes; commit, stash, or remove them before redeploying"
+}
+
+stage="updating main"
+git pull --ff-only origin main || fail "git pull --ff-only failed; resolve the network, credentials, or branch divergence"
+revision=$(git rev-parse HEAD)
+remote_revision=$(git rev-parse origin/main)
+[[ "$revision" == "$remote_revision" ]] || fail "local main does not match origin/main after pulling"
+note "revision ${revision:0:12}"
+
+headline "Building the embedded frontend and daemon"
+stage="building release"
+make build || fail "make build failed; the currently installed service was left untouched"
+build_binary="$repo_root/coldstore"
+[[ -x "$build_binary" ]] || fail "make build completed without producing $build_binary"
+
+stage="verifying build metadata"
+built_revision=$(go version -m "$build_binary" | sed -n 's/^[[:space:]]*build[[:space:]]*vcs.revision=//p')
+built_modified=$(go version -m "$build_binary" | sed -n 's/^[[:space:]]*build[[:space:]]*vcs.modified=//p')
+[[ "$built_revision" == "$revision" ]] || fail "built binary revision '$built_revision' does not match Git HEAD '$revision'"
+[[ "$built_modified" == "false" ]] || fail "built binary reports vcs.modified=$built_modified; refusing an unrepeatable release"
+
+stage="preflighting built binary"
+preflight_log="$temporary_dir/preflight-built.log"
+preflight_binary "$build_binary" "$preflight_log" || fail "the new binary failed preflight; review the output above"
+cold_storage=$(sed -n 's/^cold storage[[:space:]]*//; s/ (.*$//p' "$preflight_log" | tail -n 1)
+[[ -n "$cold_storage" ]] || fail "could not read the cold-storage path from preflight output"
+catalog_path=${COLDSTORE_CATALOG_PATH:-$cold_storage/catalog.db}
+[[ -f "$catalog_path" ]] || fail "production catalog not found: $catalog_path"
+note "cold storage $cold_storage"
+note "catalog $catalog_path"
+
+stage="checking archive mount"
+mount_description=$(findmnt -n -T "$cold_storage" -o SOURCE,FSTYPE,TARGET) || fail "findmnt could not resolve the filesystem containing $cold_storage"
+actual_fstype=$(findmnt -n -T "$cold_storage" -o FSTYPE) || fail "findmnt could not identify the archive filesystem"
+note "archive filesystem $mount_description"
+if [[ "$expected_fstype" != "any" && "$actual_fstype" != "$expected_fstype" ]]; then
+  fail "cold storage is on '$actual_fstype', expected '$expected_fstype'; this may mean the archive failed to mount"
+fi
+
+stage="checking backup destination"
+path_is_within "$backup_root" "$cold_storage" && fail "backup directory must be outside cold storage: $backup_root"
+
+stage="checking database schema"
+supported_schema=$(awk '/^const schemaVersion = [0-9]+$/ { print $4 }' internal/catalog/migrations.go)
+[[ "$supported_schema" =~ ^[0-9]+$ ]] || fail "could not determine the source schema version"
+on_disk_schema=$(query_catalog_scalar 'PRAGMA user_version;') || fail "could not read the production schema version"
+[[ "$on_disk_schema" =~ ^[0-9]+$ ]] || fail "production returned an invalid schema version: $on_disk_schema"
+if [[ "$supported_schema" != "$on_disk_schema" ]]; then
+  fail "schema change detected (production $on_disk_schema, release $supported_schema); use the full deployment runbook"
+fi
+note "schema $on_disk_schema (unchanged)"
+
+headline "Waiting for active work to finish"
+stage="waiting for active jobs and file moves"
+redeploy_wait_started=$(date +%s)
+while true; do
+  active_jobs=$(query_catalog_scalar "SELECT COUNT(*) FROM jobs WHERE state IN ('pending','running');")
+  moving_files=$(query_catalog_scalar "SELECT COUNT(*) FROM files WHERE status IN ('archiving','restoring','trashing','untrashing');")
+  if [[ "$active_jobs" == "0" && "$moving_files" == "0" ]]; then
+    note "no active jobs or transient file moves"
+    break
+  fi
+  redeploy_wait_now=$(date +%s)
+  redeploy_wait_elapsed=$((redeploy_wait_now - redeploy_wait_started))
+  if ((redeploy_wait_elapsed >= wait_seconds)); then
+    fail "timed out after ${wait_seconds}s with $active_jobs active job(s) and $moving_files transient file(s)"
+  fi
+  note "waiting: $active_jobs active job(s), $moving_files transient file(s) (${redeploy_wait_elapsed}s elapsed)"
+  sleep 5
+done
+
+headline "Stopping $service and creating rollback backups"
+stage="stopping service"
+sudo systemctl stop "$service" || fail "systemctl could not stop $service"
+service_stopped=1
+if [[ $(systemctl is-active "$service" || true) != "inactive" ]]; then
+  fail "$service did not reach the inactive state after stop"
+fi
+
+stage="creating backup directory"
+backup_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+backup_dir="$backup_root/$backup_stamp-${revision:0:12}"
+if sudo test -e "$backup_dir"; then
+  fail "backup destination already exists: $backup_dir"
+fi
+sudo install -d -m 750 -o "$service_user" -g "$service_group" "$backup_dir"
+database_backup="$backup_dir/catalog.db"
+old_binary_backup="$backup_dir/coldstore.previous"
+
+stage="backing up catalog"
+sudo -u "$service_user" sqlite3 "$catalog_path" ".backup '$database_backup'" || fail "SQLite online backup command failed"
+backup_check=$(sudo -u "$service_user" sqlite3 "$database_backup" 'PRAGMA quick_check;')
+[[ "$backup_check" == "ok" ]] || fail "catalog backup failed PRAGMA quick_check: $backup_check"
+backup_schema=$(sudo -u "$service_user" sqlite3 "$database_backup" 'PRAGMA user_version;')
+[[ "$backup_schema" == "$on_disk_schema" ]] || fail "catalog backup schema is $backup_schema, expected $on_disk_schema"
+
+stage="backing up installed binary"
+sudo install -m 755 "$installed_binary" "$old_binary_backup" || fail "could not back up the installed binary"
+note "catalog and previous binary saved under $backup_dir"
+
+headline "Installing revision ${revision:0:12}"
+stage="installing new binary"
+install_attempted=1
+sudo install -m 755 "$build_binary" "$installed_binary" || fail "could not install the new binary"
+
+stage="verifying installed binary"
+installed_revision=$(go version -m "$installed_binary" | sed -n 's/^[[:space:]]*build[[:space:]]*vcs.revision=//p')
+[[ "$installed_revision" == "$revision" ]] || fail "installed binary revision '$installed_revision' does not match '$revision'"
+
+stage="preflighting installed binary"
+preflight_binary "$installed_binary" "$temporary_dir/preflight-installed.log" || fail "installed binary failed preflight"
+
+headline "Starting $service"
+stage="starting new service"
+deploy_started_at=$(date --iso-8601=seconds)
+sudo systemctl start "$service" || fail "systemctl could not start the new service"
+service_stopped=0
+
+stage="checking service stability"
+for ((second = 1; second <= health_seconds; second += 1)); do
+  sleep 1
+  if ! systemctl is-active --quiet "$service"; then
+    show_service_diagnostics
+    fail "$service stopped during the ${health_seconds}s stability window"
+  fi
+done
+deployment_complete=1
+
+headline "Redeploy complete"
+note "revision  $revision"
+note "schema    $on_disk_schema"
+note "backup    $backup_dir"
+note "service   $(systemctl is-active "$service")"
+printf '\nJournal entries since the new service started:\n'
+sudo journalctl -u "$service" --since "$deploy_started_at" --no-pager || true
+printf '\nOpen the private Tailscale URL and hard-refresh to verify the UI.\n'

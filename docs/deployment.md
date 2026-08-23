@@ -890,6 +890,54 @@ Manual checks `--check` cannot make:
 
 ---
 
+## Simple schema-preserving redeploys
+
+Once the host is configured using this runbook, routine application and UI
+changes can be deployed from the production checkout with one command:
+
+```bash
+make redeploy-simple
+```
+
+Run it as the checkout owner, not through `sudo`. The command pulls
+`origin/main` with `--ff-only`, builds the embedded frontend and daemon while
+the existing service stays online, and checks that the built binary came from
+the exact commit being deployed. It then runs the production preflight inside
+the service account, verifies the archive filesystem, and waits for jobs and
+file moves to settle before stopping the service.
+
+The short downtime begins only after every read-only gate passes. The script
+uses SQLite's online backup API to save a verified catalog backup and copies the
+currently installed binary to a unique timestamped directory under
+`/var/backups/coldstore`. Backups are never pruned automatically. It installs
+the new binary, repeats preflight, starts the service, watches it for ten
+seconds, and prints the new journal entries. If installation or startup fails,
+it prints the failing stage and service diagnostics, restores the previous
+binary, and attempts to restart the old service.
+
+The shortcut deliberately refuses to continue when the checkout is dirty or
+not on `main`, the archive is not mounted on the expected filesystem, active
+work does not settle, or the source and production catalog schema versions
+differ. Use the complete deployment and rollback procedure for database
+migrations, configuration or unit changes, storage moves, and other changes
+that need operator judgement. The script never restores a database
+automatically.
+
+Defaults match the installation documented here. Override them with command
+options shown by `./scripts/redeploy-simple --help`, or environment variables;
+for example:
+
+```bash
+COLDSTORE_BACKUP_DIR=/srv/backup/coldstore make redeploy-simple
+```
+
+The backup directory must be outside `cold_storage_path`. If this installation
+intentionally uses a filesystem other than Btrfs, set
+`COLDSTORE_EXPECTED_FSTYPE` to that filesystem's `findmnt` name. Do not set it
+to `any` unless another reliable mount guard is already in place.
+
+---
+
 ## Rolling back
 
 **Back up `/srv/coldstore/catalog.db` before every upgrade.**
