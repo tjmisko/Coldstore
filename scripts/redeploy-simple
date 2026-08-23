@@ -333,7 +333,13 @@ fi
 stage="preflighting built binary offline"
 preflight_log="$temporary_dir/preflight-built.log"
 preflight_binary "$build_binary" "$preflight_log" || fail "the new binary failed offline preflight; review the output above"
-preflight_cold_storage=$(sed -n 's/^cold storage[[:space:]]*//; s/ (.*$//p' "$preflight_log" | tail -n 1)
+preflight_cold_storage=$(awk '
+  /^cold storage[[:space:]]/ {
+    sub(/^cold storage[[:space:]]*/, "")
+    sub(/ \(.*/, "")
+    print
+  }
+' "$preflight_log" | tail -n 1)
 [[ -n "$preflight_cold_storage" ]] || fail "could not read the cold-storage path from offline preflight output"
 [[ $(canonical_path "$preflight_cold_storage") == $(canonical_path "$cold_storage") ]] ||
   fail "offline preflight resolved cold storage to '$preflight_cold_storage', previously '$cold_storage'"

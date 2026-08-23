@@ -166,6 +166,7 @@ fi
 if [ "$1" = "--config" ] && [ "$3" = "--check" ]; then
   printf 'config           %s\n' "$2"
   printf 'cold storage     %s (exists, writable; mounted, btrfs)\n' "$FAKE_COLD_STORAGE"
+  printf 'systemd          ReadWritePaths=%s /home/test/Camera Roll (Tristan)\n' "$FAKE_COLD_STORAGE"
   printf 'preflight OK, no warnings\n'
   exit 0
 fi
