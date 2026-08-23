@@ -195,4 +195,87 @@ describe("FileBrowser", () => {
 
     expect(onShowInFiles).toHaveBeenCalledWith(ROWS[0]);
   });
+
+  it("should inset the row cursor and leave space before the first checkbox", async () => {
+    renderBrowser();
+    await screen.findByText("a.txt");
+
+    expect(screen.getByRole("table")).toHaveClass("mx-1", "w-[calc(100%-0.5rem)]");
+    expect(within(row(1)).getByRole("checkbox").closest("td")).toHaveClass("pl-2");
+  });
+
+  it("should show only Pin for one unpinned file and give every menu action an icon", async () => {
+    renderBrowser();
+    await screen.findByText("a.txt");
+
+    fireEvent.contextMenu(row(1), { clientX: 24, clientY: 48 });
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Pin" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Unpin" })).toBeNull();
+    expect(menu.querySelectorAll("[data-menu-icon]")).toHaveLength(within(menu).getAllByRole("menuitem").length);
+  });
+
+  it("should show only Unpin for one pinned file", async () => {
+    const pinned = aFile({
+      id: 10,
+      folder_label: "Documents",
+      filename: "kept.txt",
+      relative_path: "notes/kept.txt",
+      extension: ".txt",
+      pinned: true,
+      pin_source: "user",
+    });
+    renderBrowser([pinned]);
+    await screen.findByText("kept.txt");
+
+    fireEvent.contextMenu(row(10), { clientX: 24, clientY: 48 });
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Unpin" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "Pin" })).toBeNull();
+  });
+
+  it("should rename a file in place from its context menu", async () => {
+    const original = { ...ROWS[0], folder_label: "Documents" };
+    const { toasts } = renderBrowser([original]);
+    await screen.findByText("a.txt");
+    const renamed = { ...original, filename: "renamed.txt", relative_path: "notes/renamed.txt" };
+    stub!.route({
+      method: "POST",
+      url: "/api/v1/folders/Documents/rename",
+      body: { job_id: 91, action: "rename", state: "pending", total: 1, warnings: [] },
+    });
+    stub!.route({
+      url: "/api/v1/jobs/91",
+      body: {
+        id: 91,
+        action: "rename",
+        folder_label: "Documents",
+        state: "done",
+        total: 1,
+        done: 1,
+        failed_count: 0,
+        error: "",
+        created_at: 1,
+        started_at: 1,
+        finished_at: 2,
+        failed: [],
+      },
+    });
+    stub!.route({ url: "/api/v1/files", body: [renamed] });
+
+    fireEvent.contextMenu(row(1), { clientX: 24, clientY: 48 });
+    await userEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const input = screen.getByRole("textbox", { name: "New name for a.txt" });
+    await userEvent.clear(input);
+    await userEvent.type(input, "renamed.txt");
+    await userEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    await waitFor(() => expect(stub!.calls).toContainEqual({
+      url: "/api/v1/folders/Documents/rename",
+      method: "POST",
+      body: { from: "notes/a.txt", to: "notes/renamed.txt" },
+    }));
+    expect(await screen.findByText("renamed.txt")).toBeInTheDocument();
+    expect(toasts.messages()).toContain("Renamed a.txt to renamed.txt");
+  });
 });

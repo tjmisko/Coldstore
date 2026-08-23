@@ -171,8 +171,11 @@ function Shell() {
   const stepFolder = useCallback(
     (delta: number) => {
       if (folders.length === 0) return;
-      const at = allFolders ? -1 : folders.findIndex((folder) => folder.label === selectedFolder);
-      const next = folders[(Math.max(0, at) + delta + folders.length) % folders.length];
+      const at = folders.findIndex((folder) => folder.label === selectedFolder);
+      const nextIndex = allFolders
+        ? delta > 0 ? 0 : folders.length - 1
+        : (Math.max(0, at) + delta + folders.length) % folders.length;
+      const next = folders[nextIndex];
       selectFolder(next.label);
     },
     [allFolders, folders, selectedFolder, selectFolder],
@@ -217,6 +220,9 @@ function Shell() {
           return true;
         case "prev-folder":
           stepFolder(-1);
+          return true;
+        case "toggle-sidebar":
+          setSidebarOpen((open) => !open);
           return true;
         case "palette":
           setOverlay({ kind: "palette", initial: ":" });
@@ -353,9 +359,14 @@ function Shell() {
     <div className="flex h-screen overflow-hidden">
       <button
         style={{ zIndex: Z.sidebarToggle }}
-        className="fixed top-3 left-3 md:hidden bg-raised ring-1 ring-line-strong text-ink p-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
-        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className={`fixed top-3 left-3 bg-raised ring-1 ring-line-strong text-ink p-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
+          sidebarOpen ? "md:hidden" : ""
+        }`}
+        onClick={() => setSidebarOpen((open) => !open)}
         aria-label="Toggle sidebar"
+        aria-controls="folder-sidebar"
+        aria-expanded={sidebarOpen}
+        title="Toggle folders (F1)"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
@@ -363,10 +374,12 @@ function Shell() {
       </button>
 
       <aside
+        id="folder-sidebar"
+        data-folder-sidebar
         style={{ zIndex: Z.sidebar }}
         className={`${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        } fixed md:static md:translate-x-0 w-72 h-full bg-surface border-r border-line flex flex-col transition-transform`}
+          sidebarOpen ? "translate-x-0 md:flex" : "-translate-x-full md:hidden"
+        } fixed md:static w-72 h-full bg-surface border-r border-line flex flex-col transition-transform`}
       >
         <div className="p-4 border-b border-line">
           <h1 className="text-lg font-semibold tracking-tight">Coldstore</h1>
@@ -423,7 +436,7 @@ function Shell() {
         />
       )}
 
-      <main className="flex-1 overflow-y-auto flex flex-col">
+      <main className={`flex-1 overflow-y-auto flex flex-col ${sidebarOpen ? "" : "md:pl-12"}`}>
         <ViewToggle view={view} onChange={setView} />
         {error && <ErrorBanner message={error} status={errorStatus} />}
 

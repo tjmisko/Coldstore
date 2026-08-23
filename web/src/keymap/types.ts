@@ -60,6 +60,7 @@ export type ActionId =
   | "prev-view"
   | "next-folder"
   | "prev-folder"
+  | "toggle-sidebar"
   | "close"
   | "info"
   | "invert-pdf"

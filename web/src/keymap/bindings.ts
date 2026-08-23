@@ -113,6 +113,9 @@ const SPECS: BindingSpec[] = [
   { id: "nav.prevView.tab", keys: "<S-Tab>", command: { kind: "action", action: "prev-view" }, scopes: ["global"], title: "Previous view", group: GROUP_NAV, alias: true },
   { id: "nav.nextFolder", keys: "]f", command: { kind: "action", action: "next-folder" }, scopes: ["global"], title: "Next folder", group: GROUP_NAV },
   { id: "nav.prevFolder", keys: "[f", command: { kind: "action", action: "prev-folder" }, scopes: ["global"], title: "Previous folder", group: GROUP_NAV },
+  { id: "nav.nextFolder.ctrlDown", keys: "<C-Down>", command: { kind: "action", action: "next-folder" }, scopes: ["global"], title: "Next folder", group: GROUP_NAV, alias: true },
+  { id: "nav.prevFolder.ctrlUp", keys: "<C-Up>", command: { kind: "action", action: "prev-folder" }, scopes: ["global"], title: "Previous folder", group: GROUP_NAV, alias: true },
+  { id: "nav.toggleSidebar", keys: "<F1>", command: { kind: "action", action: "toggle-sidebar" }, scopes: ["global"], title: "Show or hide the folder sidebar", group: GROUP_NAV },
 
   // -- overlays -----------------------------------------------------------
   { id: "overlay.palette", keys: ":", command: { kind: "action", action: "palette" }, scopes: ["global"], title: "Command palette", group: GROUP_OVERLAY },

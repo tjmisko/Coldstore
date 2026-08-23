@@ -10,6 +10,7 @@ import { Z } from "../lib/zLayers";
 import type { FileRecord } from "../types/api";
 import { Portal } from "./Portal";
 import type { TagPromptMode } from "./TagPrompt";
+import { ContextMenuIcon, type ContextMenuIconName } from "./ContextMenuIcon";
 
 export interface ContextMenuTarget {
   file: FileRecord;
@@ -27,6 +28,7 @@ interface ContextMenuProps {
   actions: FileActions;
   bulk: BulkActions;
   onOpen(): void;
+  onRename(): void;
   onEditDescription(): void;
   onEditLocation(): void;
   onEditTags(mode: TagPromptMode): void;
@@ -36,6 +38,7 @@ interface ContextMenuProps {
 
 interface Item {
   id: string;
+  icon: ContextMenuIconName;
   label: string;
   run(): void;
   danger?: boolean;
@@ -47,6 +50,7 @@ export function ContextMenu({
   actions,
   bulk,
   onOpen,
+  onRename,
   onEditDescription,
   onEditLocation,
   onEditTags,
@@ -78,53 +82,62 @@ export function ContextMenu({
 
   const items: Item[] = [];
   if (!many) {
-    items.push({ id: "open", label: "Open", run: onOpen });
-    items.push({ id: "description", label: "Edit description", run: onEditDescription });
-    items.push({ id: "location", label: "Location and nearby files", run: onEditLocation });
-    items.push({ id: "show-in-files", label: "Show in Files view", run: onShowInFiles });
+    items.push({ id: "open", icon: "open", label: "Open", run: onOpen });
+    items.push({ id: "rename", icon: "rename", label: "Rename", run: onRename });
+    items.push({ id: "description", icon: "description", label: "Edit description", run: onEditDescription });
+    items.push({ id: "location", icon: "location", label: "Location and nearby files", run: onEditLocation });
+    items.push({ id: "show-in-files", icon: "show-in-files", label: "Show in Files view", run: onShowInFiles });
   }
   if (!inTrash) {
-    items.push({ id: "add-tags", label: `Add tags${suffix}`, run: () => onEditTags("add") });
-    items.push({ id: "remove-tags", label: `Remove tags${suffix}`, run: () => onEditTags("remove") });
+    items.push({ id: "add-tags", icon: "add-tags", label: `Add tags${suffix}`, run: () => onEditTags("add") });
+    items.push({ id: "remove-tags", icon: "remove-tags", label: `Remove tags${suffix}`, run: () => onEditTags("remove") });
   }
-  items.push({ id: "download", label: `Download${suffix}`, run: () => bulk.download(ids) });
+  items.push({ id: "download", icon: "download", label: `Download${suffix}`, run: () => bulk.download(ids) });
   if (inTrash) {
-    items.push({ id: "untrash", label: `Restore from Trash${suffix}`, run: () => bulk.perform("untrash", ids) });
+    items.push({ id: "untrash", icon: "restore", label: `Restore from Trash${suffix}`, run: () => bulk.perform("untrash", ids) });
     items.push({
       id: "delete-permanently",
+      icon: "delete-permanently",
       label: `Delete permanently${suffix}`,
       run: () => bulk.perform("delete", ids),
       danger: true,
     });
   } else if (file.status === "archived" || many) {
-    items.push({ id: "restore", label: `Restore${suffix}`, run: () => bulk.perform("restore", ids) });
+    items.push({ id: "restore", icon: "restore", label: `Restore${suffix}`, run: () => bulk.perform("restore", ids) });
   }
   if (!inTrash && (file.status === "synced" || many)) {
     items.push({
       id: "archive",
+      icon: "archive",
       label: `Archive${suffix}`,
       run: () => bulk.perform("archive", ids),
       danger: true,
     });
   }
   if (!inTrash) {
-    items.push({ id: "trash", label: `Delete${suffix}`, run: () => bulk.perform("trash", ids), danger: true });
-    items.push({ id: "pin", label: `Pin${suffix}`, run: () => bulk.perform("pin", ids) });
-    items.push({ id: "unpin", label: `Unpin${suffix}`, run: () => bulk.perform("unpin", ids) });
+    items.push({ id: "trash", icon: "trash", label: `Delete${suffix}`, run: () => bulk.perform("trash", ids), danger: true });
+    if (many || !file.pinned) {
+      items.push({ id: "pin", icon: "pin", label: `Pin${suffix}`, run: () => bulk.perform("pin", ids) });
+    }
+    if (many || file.pinned) {
+      items.push({ id: "unpin", icon: "unpin", label: `Unpin${suffix}`, run: () => bulk.perform("unpin", ids) });
+    }
   }
   if (!inTrash && conflictMode && !many) {
     items.push({
       id: "resolve-device",
+      icon: "resolve-device",
       label: "Keep the copy on your device",
       run: () => void actions.resolve(file, "device"),
     });
     items.push({
       id: "resolve-archive",
+      icon: "resolve-archive",
       label: "Keep the archived copy",
       run: () => void actions.resolve(file, "archive"),
     });
   }
-  items.push({ id: "copy-path", label: "Copy path", run: copyPath });
+  items.push({ id: "copy-path", icon: "copy-path", label: "Copy path", run: copyPath });
 
   const handle = useCallback(
     (command: Command): boolean => {
@@ -161,7 +174,7 @@ export function ContextMenu({
   // of the viewport when the menu was opened from the keyboard, where it cannot
   // land off-screen.
   const style = target.at
-    ? { left: Math.min(target.at.x, window.innerWidth - 240), top: Math.min(target.at.y, window.innerHeight - 260) }
+    ? { left: Math.min(target.at.x, window.innerWidth - 272), top: Math.min(target.at.y, window.innerHeight - 260) }
     : { left: 24, top: 96 };
 
   return (
@@ -187,7 +200,7 @@ export function ContextMenu({
           tabIndex={-1}
           onKeyDown={onKeyDown}
           style={{ position: "absolute", ...style }}
-          className="w-56 rounded-lg border border-line-strong bg-surface py-1 shadow-2xl outline-none"
+          className="w-64 rounded-lg border border-line-strong bg-surface py-1 shadow-2xl outline-none"
         >
           <p className="truncate px-3 py-1 text-meta text-ink-faint">
             {many ? `${formatCount(ids.length)} files selected` : file.filename}
@@ -200,11 +213,12 @@ export function ContextMenu({
               data-menu-item={item.id}
               onMouseEnter={() => setHighlight(index)}
               onClick={() => run(item)}
-              className={`block w-full px-3 py-1.5 text-left text-sm ${
+              className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm ${
                 index === highlight ? "bg-raised-hover" : ""
               } ${item.danger ? "text-alarm" : "text-ink"}`}
             >
-              {item.label}
+              <ContextMenuIcon name={item.icon} />
+              <span className="min-w-0 truncate">{item.label}</span>
             </button>
           ))}
         </div>
