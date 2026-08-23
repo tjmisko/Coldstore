@@ -15,6 +15,28 @@ test("serves the embedded React control plane from the daemon itself", async ({ 
   }
 });
 
+test("keeps the file-list scroll range out of the document root", async ({ page }) => {
+  await openFolder(page, "CameraRoll");
+  await openView(page, "files");
+
+  const rows = page.locator("tr[data-file-id]");
+  await expect(rows.first()).toBeVisible();
+  const documentScroll = await page.evaluate(() => {
+    window.scrollTo({ top: document.documentElement.scrollHeight });
+    return {
+      scrollY: window.scrollY,
+      clientHeight: document.documentElement.clientHeight,
+      scrollHeight: document.documentElement.scrollHeight,
+    };
+  });
+
+  // The list has its own scroll container. If its overflow leaks into the
+  // document, the browser gains a second scrollbar that can move the entire
+  // app above a viewport full of empty space.
+  expect(documentScroll.scrollY).toBe(0);
+  expect(documentScroll.scrollHeight).toBe(documentScroll.clientHeight);
+});
+
 test("marks the disabled folder and the one no longer declared in coldstore.toml", async ({ page }) => {
   // Both are flagged rather than hidden: a folder that has stopped moving must
   // say why, not disappear.

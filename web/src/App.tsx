@@ -395,7 +395,7 @@ function Shell() {
   );
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="fixed inset-0 flex overflow-hidden">
       <button
         style={{ zIndex: Z.sidebarToggle }}
         className={`fixed top-3 left-3 bg-raised ring-1 ring-line-strong text-ink p-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor ${
