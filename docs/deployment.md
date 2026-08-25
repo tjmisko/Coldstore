@@ -27,6 +27,9 @@ Everything after that is reference material.
 - **ffmpeg** -- required for HEIF/HEIC decoding and video thumbnail extraction.
   Nothing else uses it; see [What actually gets a
   thumbnail](#what-actually-gets-a-thumbnail) before assuming your library needs it.
+  Debian 12's FFmpeg 5.1 does not parse the representative tiled HEIC on the
+  production N40L. Keep that package as a fallback and follow the
+  [private FFmpeg build runbook](ffmpeg-source-build.md) for that host.
 - **poppler-utils** -- required for PDF thumbnails. The generator shells out to
   `pdftocairo`. Without it, PDFs get no thumbnail: the attempt is recorded as a
   failure per file, which the UI shows as a warning glyph rather than failing
@@ -312,13 +315,17 @@ verification that it is not reachable from anywhere else.
 
 ```bash
 sudo apt update
-sudo apt install -y ffmpeg poppler-utils sqlite3 btrfs-progs   # or zfsutils-linux, if that is your pool
+sudo apt install -y ffmpeg poppler-utils sqlite3 btrfs-progs   # ffmpeg remains the packaged fallback
 
 # Only if you are building the Go binary on this box (the usual case):
 sudo apt install -y build-essential
 ```
 
 `build-essential` is not optional: the catalog uses `go-sqlite3`, which is CGo.
+On the production Debian 12 microserver, complete the
+[private FFmpeg build runbook](ffmpeg-source-build.md) after installing this
+fallback package. Its source build also needs `pkg-config`, `nasm`, and
+`zlib1g-dev`.
 
 **Do not install `golang-go`, `nodejs` or `npm` from Debian.** Both are too old
 on every current stable release -- Go 1.19 (bookworm) or 1.24 (trixie) against a
@@ -1662,6 +1669,13 @@ Previewing is wider than thumbnailing. PDFs, EPUBs and plaintext all open in the
 browser through the reader the daemon ships, and **previewing an archived file
 streams it out of cold storage without restoring it**: the row stays archived.
 None of that needs poppler; poppler is only for the thumbnail.
+
+Each ffmpeg process has a 30-second deadline. On the production N40L, the
+packaged FFmpeg neither parses the representative HEIC nor completes the MOV
+`thumbnail` filter inside that budget. The
+[private FFmpeg build runbook](ffmpeg-source-build.md) treats real-media
+performance as a required acceptance test instead of assuming a newer version
+alone fixes both cases.
 
 Two knobs matter on a small box. `thumbnail_workers` is that many concurrent
 decoders, and the Go path decodes a whole image into memory: a 48-megapixel JPEG
