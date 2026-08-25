@@ -50,4 +50,5 @@ make dev-web                                # start React dev server (terminal 2
 | [React Guide](docs/react-guide.md) | Frontend component tree, custom hooks, infinite scroll, embedding |
 | [Build & Test](docs/build-and-test.md) | Makefile targets, build pipeline, test tiers, CI, Docker setup |
 | [Deployment](docs/deployment.md) | Ops runbook: config reference, systemd, monitoring, troubleshooting |
+| [Repository rename](docs/rebrand-migration.md) | Rename the GitHub repository and local checkout safely |
 | [CLAUDE.md](CLAUDE.md) | AI assistant instructions and project conventions |
