@@ -42,3 +42,7 @@ docs/syncthing-coldstore-migration.md
 # Local secret material must never be tracked or make release builds appear
 # dirty. Service credentials belong outside the repository in production.
 /.secrets
+
+# Verified repository, test, blocker and production state for this specific
+# installation. It records production facts that do not belong in a public repo.
+/STATUS.md

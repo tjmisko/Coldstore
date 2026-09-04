@@ -2,7 +2,7 @@
 
 Read these before changing anything:
 
-1. `STATUS.md` — verified repository, test, blocker and production state.
+1. `STATUS.md` — verified repository, test, blocker and production state. Local-only and gitignored; it is not in the public repository.
 2. `TASKLIST.md` — authoritative ordered work and completion state.
 3. `docs/interface-refresh.md` — interface, preview, access and status-CLI decisions.
 4. `docs/keymap-design.md` — keyboard grammar and interaction contract.
@@ -119,7 +119,7 @@ Syncthing E2E on PR #16 at `16a7bf6`.
 
 ## Where detail lives
 
-- Current evidence and production facts: `STATUS.md`
+- Current evidence and production facts: `STATUS.md` (local-only, gitignored)
 - Ordered work and definitions of done: `TASKLIST.md`
 - Global data-safety contract: `docs/control-plane-design.md` section 0
 - Build and tier boundaries: `docs/build-and-test.md`
