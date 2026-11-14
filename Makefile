@@ -1,4 +1,4 @@
-.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend icons redeploy-simple
+.PHONY: build binary demo deps node-modules-boundary dev dev-web lint test test-web test-archive test-e2e test-e2e-live test-e2e-live-down test-playwright clean install install-binary frontend icons redeploy-simple
 
 BINARY := coldstore
 BUILD_DIR := ./cmd/coldstore
@@ -78,6 +78,13 @@ lint:
 test:
 	go test ./...
 
+# The archive integration tier: the crash matrix (every registered crash point, in a
+# re-executed child that dies by SIGKILL), index loss and rebuild, corruption and
+# scrub end to end, and legacy isolation. No build tag, so `make test` and the
+# `unit` CI job run it too; this target gives it the generous timeout and `-count=1`.
+test-archive:
+	go test -count=1 -timeout 600s ./tests/archive/...
+
 test-e2e:
 	go test -tags e2e -count=1 -timeout 120s ./tests/e2e/...
 
@@ -118,8 +125,9 @@ test-web: deps
 test-playwright: deps
 	cd web && npx playwright test
 
-# Seed and run a demo installation: four folders covering every state the
-# control plane can render, on http://127.0.0.1:8090.
+# Seed and run a demo installation: four folders and one archive collection
+# (Scans) covering every state the control plane can render, on
+# http://127.0.0.1:8090.
 demo: binary
 	go run ./scripts/seed-demo
 	./$(BINARY) --config /tmp/coldstore-demo/coldstore.toml

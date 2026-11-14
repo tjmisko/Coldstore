@@ -4,7 +4,8 @@
 // it.
 //
 //	<root>/coldstore.toml   the config the daemon is started with
-//	<root>/store/           cold storage: archive/, thumbnails/, catalog.db
+//	<root>/store/           cold storage: archive/, thumbnails/, catalog.db, and the
+//	                        archive core (journal/, blobs/, index.db, views/)
 //	<root>/sync/<Label>/    the managed folders, each with a .stfolder marker
 //
 // "Every state" is the point. A demo that shows only synced and archived files
@@ -134,6 +135,9 @@ func run(root, addr string) error {
 	if err := seedEvents(cat); err != nil {
 		return err
 	}
+	if err := seedCollections(cfg, cat); err != nil {
+		return err
+	}
 
 	logger.Info("demo installation ready",
 		"config", configPath,
@@ -223,11 +227,16 @@ path = "%[1]s/sync/%[5]s"
 budget = "100kB"
 persistent = ["Important/"]
 
+# An archive-of-record collection: no path, no budget. seed-demo puts its files
+# through archive.Open and Ingest, the same code the daemon runs.
+[[collections]]
+name = %[7]q
+
 # NOTE: %[6]q is deliberately NOT declared here. seed-demo puts it in the
 # catalog and marks it absent from the TOML, which is the "folder you removed
 # from coldstore.toml" state: greyed in the sidebar, never scanned or enforced,
 # still browsable.
-`, root, addr, folderCameraRoll, folderBackups, folderDocuments, folderOldPhone)
+`, root, addr, folderCameraRoll, folderBackups, folderDocuments, folderOldPhone, folderScans)
 }
 
 // seedOrphanedFolder creates a folder row and then marks it absent, which is

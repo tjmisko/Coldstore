@@ -13,6 +13,7 @@
 | `lint` | `cd web && npm run lint` (ESLint) | Check the React code before pushing; CI runs the same command |
 | `test` | `go test ./...` | Run Go unit tests (no build tags) |
 | `test-web` | `cd web && npm run test` (vitest) | Run the React unit and component tests: jsdom, stubbed `fetch`, no daemon and no browser |
+| `test-archive` | `go test -count=1 -timeout 600s ./tests/archive/...` | The archive-of-record integration tier: crash matrix, index loss and rebuild, corruption and scrub, legacy isolation. Also part of `make test` |
 | `test-e2e` | `go test -tags e2e -count=1 -timeout 120s ./tests/e2e/...` | In-process e2e against real SQLite + temp dirs. No Docker, no Syncthing, no network |
 | `test-e2e-live` | `go test -tags e2e_live -count=1 -timeout 1800s -v ./tests/e2e/...`; the suite's own `TestMain` builds the binary, brings up two Syncthing devices plus the containerised daemon, pairs them, and tears down | Prove the things only real Syncthing can prove: that an offload propagates as a deletion, and a restore propagates back |
 | `test-e2e-live-down` | `docker compose -p coldstore-live -f docker/compose.test.yml down -v` | Clean up after `COLDSTORE_LIVE_KEEP=1` or an interrupted run |
@@ -72,6 +73,57 @@ make test
 ```
 
 Fast tests with no external dependencies. Run against all packages _except_ those guarded by build tags. Nothing needs to be created first: `internal/api/dist/.gitkeep` is committed, so the `go:embed` directive resolves on a bare checkout -- see [The `dist/` Directory Problem](#the-dist-directory-problem) below.
+
+### Archive Integration Tier (`make test-archive`)
+
+```bash
+make test-archive
+# go test -count=1 -timeout 600s ./tests/archive/...
+```
+
+`tests/archive` carries **no build tag**, so the `unit` CI job's `go test ./...` runs it and
+no workflow edit was needed. It uses a fake or absent `Render`, so it needs neither ffmpeg
+nor poppler, and its fixtures are kilobytes (the temp directory is RAM-backed). It finishes
+in well under a minute on a development machine; the budget is five minutes on a 2-core
+runner. It builds `cmd/coldstore` once (`go build`, default Go build cache) for the two
+tests that run the real binary.
+
+| Tier | File | What it proves |
+|---|---|---|
+| 1. Crash at every step | `crash_import_test.go`, `crash_upload_test.go` | For every registered crash point in the `store.put.`, `journal.append.`, `journal.rotate.`, `index.apply.`, `views.link.` and `ingest.` families, at hit 1 and hit 3, for the import and the upload scenario: the child dies by SIGKILL at the point, the invariants hold, and re-running finishes with zero failures and **no duplicate Items** |
+| 2. Injected faults | `crash_upload_test.go` | An upload meeting EIO, a short write, a failing fsync or ENOSPC (`507`) gets a non-2xx answer, links nothing under the hash, records `ingest_failed`, and succeeds when re-sent after the fault clears |
+| 3. Corruption and scrub | `corruption_test.go` | Flip a byte, truncate, delete: the scrub reports exactly those three hashes, their downloads fail (a short transfer before the scrub, `503` after, never `200` with wrong bytes), every other file downloads byte-identical, `HEAD /blobs/{hash}` is `404` for the three |
+| 4. Index loss and rebuild | `rebuild_test.go` | Deleting, garbaging or truncating `index.db`, `rebuild-index`, and deleting `views/` all give an index `Dump` and a `views.Manifest` equal to the original; a journal cut mid-line drops the torn final batch with a `journal_torn` event and a log line; a newer `journal/FORMAT` refuses to open and `coldstore format-version` exits 3 |
+| Legacy isolation | `legacy_isolation_test.go` | A full run of import, upload, tag, trash, scrub and rebuild leaves the sync folder and the bytes of `catalog.db` unchanged and creates no `archive/` or `trash/`; a daemon with no `[[collections]]` and no journal creates no archive directory |
+
+**How the crash matrix works.** The test binary re-executes itself
+(`os.Args[0] -test.run=^TestCrashChild$`) with `COLDSTORE_CRASHPOINT=<name>` and
+`COLDSTORE_CRASHPOINT_HIT=<n>`. The child calls `crashpoint.ArmFromEnv`, opens
+`archive.Service` on the root named by the environment and runs the scenario (`import`, or
+`upload`, which serves `api.Server.Handler()` on a loopback port it prints to stdout). The
+parent asserts the child died by SIGKILL and then runs `checkInvariants`: `archive.Open`
+succeeds; every `blob_added` in the journal passes `store.Verify`; the source tree's
+snapshot (path, size, mtime, sha256) is unchanged; `index.Dump` equals the dump of a fresh
+`index.Rebuild`; and `views.Manifest` equals the manifest after `views.Regenerate`.
+
+**A point that is never reached is a failure**, not a skip: a child that exits cleanly with
+a point armed fails the subtest, and the matrix fails if a name promised by the plan is no
+longer registered.
+
+Coverage limits:
+
+- `journal.rotate.*` is exercised at hit 1 only. A segment is 16 MiB, so the fixture
+  pre-fills one with about 17 MB of valid `item_described` records; a second rotation
+  would need another 16 MiB.
+- Uploads in the matrix are sequential. Concurrent-upload interleavings are covered by
+  `internal/archive` and `internal/journal` unit tests (group commit), not here.
+- SIGKILL of the process is not power loss: the page cache survives it, so a missing
+  `fsync` cannot be observed by this tier. `fsx.Faulty` fault injection (tier 2 and the
+  per-package fault tests) is what covers failing `fsync` and `SyncDir`.
+- A truncated `index.db` is only exercised by halving the file; every failure of an
+  existing index file falls back to a rebuild, so the shape of the damage does not matter.
+- The matrix drives the HTTP API and the service in-process or in a child. The control
+  socket and the CLI import path are covered by `internal/control` and `cmd/coldstore`.
 
 ### E2E Tests (`make test-e2e`)
 
@@ -256,7 +308,11 @@ The suite covers the flows a unit test cannot: shift-click ranges across the rea
 bulk restore that runs as a job and repaints its rows as synced and pinned, the budget
 pre-flight dialog, resolving a conflict and watching the row leave the Conflicts tab, a
 budget edited in Settings surviving a reload, and a persistent pattern reporting how many
-files it really protects.
+files it really protects. `web/e2e/collections.spec.ts` covers the archive-of-record
+collection `Scans`, which `scripts/seed-demo` fills through `archive.Open` and `Ingest` (the
+same code the daemon runs) and closes before the daemon starts: the sidebar entry,
+thumbnails and the lightbox, a hash-verified download, tagging and trash. Those tests leave
+the collection as they found it, because the suite shares one daemon.
 
 Browsers are not installed by `npm ci`. Once per machine:
 
@@ -269,6 +325,9 @@ cd web && npx playwright install --with-deps chromium
 Defined in `.github/workflows/ci.yml`. Triggers on push to `main` and on pull requests targeting `main`.
 
 ### Jobs
+
+`unit` runs `go test ./...`, which includes `tests/archive` (no build tag). It needs no
+ffmpeg or poppler.
 
 **`frontend`** (runs always):
 1. Checkout + setup Node 22 with npm cache keyed on `web/package-lock.json`
