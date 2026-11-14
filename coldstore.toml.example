@@ -205,3 +205,36 @@ syncthing_id = "yyyyy-yyyyy"
 path = "/home/tjmisko/Books"
 budget = "20GB"
 persistent = ["Favorites/"]
+
+# ---------------------------------------------------------------------------
+# Archive of record (collections). OPTIONAL.
+#
+# A [[collections]] block declares a content-addressed collection: files are
+# stored once by SHA-256 under cold_storage_path, verified on write, and have NO
+# hot copy and NO Syncthing folder. Nothing here reads, writes, renames or
+# deletes inside any [[folders]] path. Leave this out and the daemon neither
+# opens the archive nor creates a directory for it.
+#
+# A name is 1-64 characters from letters, digits, space, '.', '_' and '-',
+# starting with a letter or digit. It must be unique among collections and
+# must not equal any [[folders]] label. "sha256" is reserved for both.
+#
+# [[collections]]
+# name = "Photos"
+#
+# A config may declare only [[collections]] and no [[folders]].
+# ---------------------------------------------------------------------------
+
+[archive]
+# Concurrent upload bodies being written into the blob store, 1..8. 0 or absent
+# means 2. Each holds one 1 MiB buffer and one open staging file.
+upload_concurrency = 2
+
+# Hours between full integrity scrubs (re-hash every blob, oldest verification
+# first). 0 disables scheduled scrubs; `coldstore scrub` still works. Absent
+# means 720 (thirty days). Unlike the [daemon] keys, 0 here really means 0.
+scrub_interval_hours = 720
+
+# Scrub read rate in MiB/s, so a scrub does not starve ingest on a small box.
+# 0 means unthrottled. Absent means 20.
+scrub_rate_mib_per_sec = 20
