@@ -61,7 +61,7 @@ func (s *Server) handleUnpinFile(w http.ResponseWriter, r *http.Request) { s.set
 // and it is legal in every status, including archived and missing.
 func (s *Server) setPin(w http.ResponseWriter, r *http.Request, pinned bool) {
 	id, ok := s.fileIDParam(w, r)
-	if !ok {
+	if !ok || s.rejectCollectionID(w, id) {
 		return
 	}
 
@@ -127,6 +127,9 @@ func (s *Server) handleBulkPin(w http.ResponseWriter, r *http.Request) {
 	var req bulkPinRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if s.rejectCollectionIDs(w, req.IDs) {
 		return
 	}
 	if len(req.IDs) == 0 {

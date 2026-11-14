@@ -20,6 +20,34 @@ Key packages:
 - `internal/epub/` -- EPUB container reader, shared by the cover thumbnailer and
   the preview API
 
+The archive of record (`[[collections]]`, design in `docs/archive-of-record-design.md`) is
+a separate, content-addressed core beside the legacy daemon. The journal is the truth;
+everything else is derived from it and can be deleted and rebuilt:
+- `internal/fsx/` -- the filesystem seam; store, journal, views and scrub never import
+  `os` for I/O. `fsx/fsxtest` is the fault-injecting wrapper
+- `internal/crashpoint/` -- named crash points, armed only by test helper processes
+- `internal/store/` -- content-addressed blob store (`blobs/sha256/ab/cd/<hash>`)
+- `internal/journal/` -- append-only, CRC-checked log, single-writer `journal/LOCK`,
+  `journal/FORMAT` version
+- `internal/index/`, `internal/views/`, `internal/scrub/` -- derived state: `index.db`,
+  the `views/` hardlink tree, and the store/index cross-check
+- `internal/ingest/`, `internal/archive/` -- the arrival pipeline and the service that
+  owns the lock and opens everything in order
+- `internal/control/` -- the unix control socket (`<cold_storage_path>/control.sock`)
+
+**The single-writer rule.** Exactly one process writes the journal: whoever holds
+`journal/LOCK`. That is the daemon. `coldstore import` therefore asks the daemon over the
+control socket, and `coldstore scrub --offline` and `coldstore rebuild-index` take the lock
+themselves and fail with `journal.ErrLocked` while the daemon runs. Never append to the
+journal from anywhere else, and never open the legacy catalog from archive code.
+Nothing in the archive core writes inside a `[[folders]].path`, `catalog.db`, `archive/` or
+`trash/`, and with no `[[collections]]` and no `journal/` directory the core is not opened
+at all.
+
+Archive commands: `coldstore import <dir> --collection <name>`, `coldstore scrub
+[--offline] [--rate-mib N]`, `coldstore rebuild-index`, `coldstore format-version` (exit 3
+when the disk is newer than the binary).
+
 External binaries: **ffmpeg** (HEIF/HEIC and video) and **poppler-utils**
 (`pdftocairo`, for PDF thumbnails). Both are runtime-only: the build needs
 neither, and `fresh-clone-build` deliberately installs neither. `pdftoppm` cannot
@@ -36,6 +64,7 @@ make build        # build frontend + Go binary
 make lint         # eslint the React app (CI runs the same command)
 make test         # go test ./...
 make test-web     # vitest: React unit and component tests (jsdom, stubbed fetch)
+make test-archive # archive integration tier: crash matrix, rebuild, corruption, isolation
 make test-playwright  # chromium against the real daemon over a seeded demo install
 make demo         # seed a demo installation and run the daemon on it, :8090
 make install      # install binary to /usr/local/bin
@@ -73,6 +102,7 @@ as migrations 7 and 8.
 go test ./...                                          # unit
 go test -tags e2e -count=1 ./tests/e2e/...             # in-process e2e
 make test-e2e-live                                     # docker: the daemon + TWO real syncthing devices
+make test-archive                                      # tests/archive: no build tag, also in `go test ./...`
 make test-web                                          # vitest + Testing Library, jsdom
 make test-playwright                                   # chromium against the real daemon
 cd web && npm run lint                                 # eslint

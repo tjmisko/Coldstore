@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { NOT_AVAILABLE_FOR_COLLECTION, isCollectionFileId } from "../lib/collections";
 import { formatCount, formatDate, formatSize } from "../lib/format";
+import { useToast } from "../lib/toast";
 import type { NearFilter } from "../lib/api";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
@@ -30,6 +32,8 @@ interface FileBrowserProps {
   onFolderChanged(): void;
   reveal?: FileReveal | null;
   onShowInFiles?(file: FileRecord): void;
+  /** The selected folder is an archive collection. */
+  collection?: boolean;
 }
 
 const NO_TAG_FILTERS: string[] = [];
@@ -85,7 +89,9 @@ export function FileBrowser({
   onFolderChanged,
   reveal = null,
   onShowInFiles = () => {},
+  collection = false,
 }: FileBrowserProps) {
+  const toast = useToast();
   const [near, setNear] = useState<NearFilter | null>(null);
   const queryFolder = allFolders ? "" : folder;
   const workspace = useFileWorkspace({
@@ -203,7 +209,13 @@ export function FileBrowser({
     conflictMode: preset.key === "conflicts",
     onOpen: setPreviewIndex,
     onContextMenu: (index) => openMenu(index, null),
-    onEditDescription: setDescriptionIndex,
+    onEditDescription: (index) => {
+      if (files[index] && isCollectionFileId(files[index].id)) {
+        toast.show("info", `Description is ${NOT_AVAILABLE_FOR_COLLECTION}`);
+        return;
+      }
+      setDescriptionIndex(index);
+    },
     hasMore,
     loading,
     loadMore,
@@ -229,6 +241,7 @@ export function FileBrowser({
         near={near}
         onClearNear={() => setNear(null)}
         folder={allFolders ? undefined : folder}
+        collection={collection}
         tags={tagFilters}
         onTagsChange={onTagFiltersChange}
       />
@@ -477,6 +490,7 @@ function Row({
   onPreview,
   onMenu,
 }: RowProps) {
+  const collection = isCollectionFileId(file.id);
   return (
     <tr
       // tabIndex -1, not 0: five hundred rows in the focus order is its own
@@ -534,7 +548,7 @@ function Row({
         </label>
       </td>
       <td className="py-2.5 pr-2">
-        {file.status !== "trashed" && <PinToggle file={file} onPin={onPin} />}
+        {file.status !== "trashed" && !collection && <PinToggle file={file} onPin={onPin} />}
       </td>
       <td className="py-2.5 pr-4">
         {/* A button rather than a row click, so the checkbox and shift-range
@@ -580,7 +594,7 @@ function Row({
           <button onClick={onDownload} className={ROW_ACTION.neutral}>
             Download
           </button>
-          {file.status === "archived" && !conflictMode && (
+          {file.status === "archived" && !conflictMode && !collection && (
             <button onClick={onRestore} className={ROW_ACTION.neutral}>
               Restore
             </button>
@@ -600,9 +614,11 @@ function Row({
               <button onClick={onUntrash} className={ROW_ACTION.neutral}>
                 Restore
               </button>
-              <button onClick={onDelete} className={`${ROW_ACTION.neutral} text-alarm`}>
-                Delete permanently
-              </button>
+              {!collection && (
+                <button onClick={onDelete} className={`${ROW_ACTION.neutral} text-alarm`}>
+                  Delete permanently
+                </button>
+              )}
             </>
           )}
           {conflictMode && (

@@ -42,6 +42,15 @@ func (s *Server) registerRoutes() {
 
 	s.mux.HandleFunc("GET /api/v1/events", s.handleListEvents)
 
+	// Collections (archive core). PUT is registered so the mux answers 405 for
+	// the other methods on that path; bypassMuxPathCleaning delivers the real
+	// requests, because the mux would answer a ".." or "//" path with a
+	// redirect instead of letting the handler refuse it.
+	s.mux.HandleFunc("HEAD /api/v1/blobs/{sha256}", s.handleHeadBlob)
+	s.mux.HandleFunc("PUT /api/v1/collections/{name}/files/{path...}", s.handlePutCollectionFile)
+	s.mux.HandleFunc("POST /api/v1/collections/{name}/receipt", s.handleCollectionReceipt)
+	s.mux.HandleFunc("POST /api/v1/collections/{name}/trash", s.handleCollectionTrash)
+
 	s.mux.HandleFunc("GET /api/v1/status", s.handleStatus)
 	s.mux.HandleFunc("POST /api/v1/scan", s.handleScan)
 

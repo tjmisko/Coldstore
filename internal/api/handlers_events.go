@@ -44,6 +44,10 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if folder := v.Get("folder"); s.collectionFolder(folder) {
+		s.listCollectionEvents(w, folder, v.Get("type"), limit)
+		return
+	}
 	events, err := s.cat.ListEvents(v.Get("folder"), v.Get("type"), class, limit)
 	if err != nil {
 		s.logger.Error("listing events", "error", err)

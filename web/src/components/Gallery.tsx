@@ -1,7 +1,9 @@
 import { useCallback, useRef, useState } from "react";
 import { api, type NearFilter } from "../lib/api";
 import { captureDayGroups, captureGridRowStarts, formatCaptureDay, resolveCaptureDayJump } from "../lib/capture";
+import { NOT_AVAILABLE_FOR_COLLECTION, isCollectionFileId } from "../lib/collections";
 import { formatCount, formatSize } from "../lib/format";
+import { useToast } from "../lib/toast";
 import { useBulkActions } from "../hooks/useBulkActions";
 import { useFileWorkspace, type FilterKey } from "../hooks/useFileWorkspace";
 import { useGridKeymap } from "../hooks/useGridKeymap";
@@ -30,6 +32,8 @@ interface GalleryProps {
   onTagFiltersChange?(tags: string[]): void;
   onFolderChanged(): void;
   onShowInFiles?(file: FileRecord): void;
+  /** The selected folder is an archive collection. */
+  collection?: boolean;
 }
 
 const NO_TAG_FILTERS: string[] = [];
@@ -44,7 +48,9 @@ export function Gallery({
   onTagFiltersChange = () => {},
   onFolderChanged,
   onShowInFiles = () => {},
+  collection = false,
 }: GalleryProps) {
+  const toast = useToast();
   const [sort, setSort] = useState<FileSort>("mtime");
   const [near, setNear] = useState<NearFilter | null>(null);
   const queryFolder = allFolders ? "" : folder;
@@ -138,7 +144,13 @@ export function Gallery({
     conflictMode: preset.key === "conflicts",
     onOpen: setLightboxIndex,
     onContextMenu: (index) => openMenu(index, null),
-    onEditDescription: setDescriptionIndex,
+    onEditDescription: (index) => {
+      if (files[index] && isCollectionFileId(files[index].id)) {
+        toast.show("info", `Description is ${NOT_AVAILABLE_FOR_COLLECTION}`);
+        return;
+      }
+      setDescriptionIndex(index);
+    },
     resolveCaptureDay: effectiveSort === "captured"
       ? (index, direction, count) => resolveCaptureDayJump(files, index, direction, count)
       : undefined,
@@ -166,6 +178,7 @@ export function Gallery({
         near={near}
         onClearNear={() => setNear(null)}
         folder={allFolders ? undefined : folder}
+        collection={collection}
         tags={tagFilters}
         onTagsChange={onTagFiltersChange}
       />
@@ -180,7 +193,7 @@ export function Gallery({
           className="rounded-md border border-line-strong bg-raised px-2 py-1 text-ink outline-none focus:border-cursor focus:ring-2 focus:ring-cursor/40"
         >
           <option value="mtime">Modified time</option>
-          <option value="captured">Capture time</option>
+          {!collection && <option value="captured">Capture time</option>}
           <option value="name">Name</option>
           <option value="size">Size</option>
         </select>
@@ -470,7 +483,7 @@ function Tile({
         </span>
       </label>
 
-      {file.status !== "trashed" && (
+      {file.status !== "trashed" && !isCollectionFileId(file.id) && (
         <div className="absolute top-1 right-1" onClick={(e) => e.stopPropagation()}>
           <PinToggle file={file} onPin={onPin} compact />
         </div>
@@ -486,7 +499,7 @@ function Tile({
             pinned
           </span>
         )}
-        {file.status === "archived" && (
+        {file.status === "archived" && !isCollectionFileId(file.id) && (
           <span className="text-micro uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-cold-dim/90 text-cold ring-1 ring-cold/40 backdrop-blur-[2px]" data-badge="archived">
             archived
           </span>

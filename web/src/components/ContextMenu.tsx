@@ -4,6 +4,7 @@ import { useKeymapLayer } from "../hooks/useKeymapLayer";
 import type { BulkActions } from "../hooks/useBulkActions";
 import type { FileActions } from "../hooks/useFileWorkspace";
 import type { Command } from "../keymap/types";
+import { isCollectionFileId } from "../lib/collections";
 import { formatCount } from "../lib/format";
 import { useToast } from "../lib/toast";
 import { Z } from "../lib/zLayers";
@@ -63,6 +64,8 @@ export function ContextMenu({
   const { file, ids } = target;
   const many = ids.length > 1;
   const inTrash = file.status === "trashed";
+  // A collection entry has no device copy, pin, rename or permanent delete.
+  const collection = ids.some(isCollectionFileId);
   const suffix = many ? ` (${formatCount(ids.length)} files)` : "";
 
   const close = useCallback(() => onClose(), [onClose]);
@@ -83,9 +86,11 @@ export function ContextMenu({
   const items: Item[] = [];
   if (!many) {
     items.push({ id: "open", icon: "open", label: "Open", run: onOpen });
-    items.push({ id: "rename", icon: "rename", label: "Rename", run: onRename });
-    items.push({ id: "description", icon: "description", label: "Edit description", run: onEditDescription });
-    items.push({ id: "location", icon: "location", label: "Location and nearby files", run: onEditLocation });
+    if (!collection) {
+      items.push({ id: "rename", icon: "rename", label: "Rename", run: onRename });
+      items.push({ id: "description", icon: "description", label: "Edit description", run: onEditDescription });
+      items.push({ id: "location", icon: "location", label: "Location and nearby files", run: onEditLocation });
+    }
     items.push({ id: "show-in-files", icon: "show-in-files", label: "Show in Files view", run: onShowInFiles });
   }
   if (!inTrash) {
@@ -95,17 +100,19 @@ export function ContextMenu({
   items.push({ id: "download", icon: "download", label: `Download${suffix}`, run: () => bulk.download(ids) });
   if (inTrash) {
     items.push({ id: "untrash", icon: "restore", label: `Restore from Trash${suffix}`, run: () => bulk.perform("untrash", ids) });
-    items.push({
-      id: "delete-permanently",
-      icon: "delete-permanently",
-      label: `Delete permanently${suffix}`,
-      run: () => bulk.perform("delete", ids),
-      danger: true,
-    });
-  } else if (file.status === "archived" || many) {
+    if (!collection) {
+      items.push({
+        id: "delete-permanently",
+        icon: "delete-permanently",
+        label: `Delete permanently${suffix}`,
+        run: () => bulk.perform("delete", ids),
+        danger: true,
+      });
+    }
+  } else if (!collection && (file.status === "archived" || many)) {
     items.push({ id: "restore", icon: "restore", label: `Restore${suffix}`, run: () => bulk.perform("restore", ids) });
   }
-  if (!inTrash && (file.status === "synced" || many)) {
+  if (!inTrash && !collection && (file.status === "synced" || many)) {
     items.push({
       id: "archive",
       icon: "archive",
@@ -116,14 +123,14 @@ export function ContextMenu({
   }
   if (!inTrash) {
     items.push({ id: "trash", icon: "trash", label: `Delete${suffix}`, run: () => bulk.perform("trash", ids), danger: true });
-    if (many || !file.pinned) {
+    if (!collection && (many || !file.pinned)) {
       items.push({ id: "pin", icon: "pin", label: `Pin${suffix}`, run: () => bulk.perform("pin", ids) });
     }
-    if (many || file.pinned) {
+    if (!collection && (many || file.pinned)) {
       items.push({ id: "unpin", icon: "unpin", label: `Unpin${suffix}`, run: () => bulk.perform("unpin", ids) });
     }
   }
-  if (!inTrash && conflictMode && !many) {
+  if (!inTrash && !collection && conflictMode && !many) {
     items.push({
       id: "resolve-device",
       icon: "resolve-device",

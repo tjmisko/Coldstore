@@ -156,6 +156,12 @@ func parseIDList(raw string) ([]int64, error) {
 }
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	if collection, ok := s.requestTargetsCollection(w, r); !ok {
+		return
+	} else if collection {
+		s.listCollectionFiles(w, r)
+		return
+	}
 	q, ok := parseFileFilters(w, r, maxInlineIDs)
 	if !ok {
 		return
@@ -206,6 +212,12 @@ type fileIDsResponse struct {
 }
 
 func (s *Server) handleListFileIDs(w http.ResponseWriter, r *http.Request) {
+	if collection, ok := s.requestTargetsCollection(w, r); !ok {
+		return
+	} else if collection {
+		s.listCollectionFileIDs(w, r)
+		return
+	}
 	// maxJobIDs, not a second constant: an id list this endpoint returns must
 	// be one POST /jobs will accept.
 	q, ok := parseFileFilters(w, r, maxJobIDs)
@@ -242,6 +254,9 @@ func (s *Server) resolveFileBytes(w http.ResponseWriter, r *http.Request) (*cata
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid file id")
 		return nil, "", false
+	}
+	if s.archive != nil && isCollectionID(id) {
+		return s.resolveCollectionBytes(w, id)
 	}
 
 	// 404 means "no such file id" and nothing else. Collapsing every error
@@ -303,6 +318,10 @@ func (s *Server) resolveFileBytes(w http.ResponseWriter, r *http.Request) (*cata
 }
 
 func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
+	if id, err := strconv.ParseInt(r.PathValue("id"), 10, 64); err == nil && s.archive != nil && isCollectionID(id) {
+		s.downloadCollectionFile(w, id)
+		return
+	}
 	file, filePath, ok := s.resolveFileBytes(w, r)
 	if !ok {
 		return

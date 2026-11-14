@@ -211,9 +211,25 @@ func (g *Generator) GenerateContext(ctx context.Context, file *catalog.FileRecor
 		return err
 	}
 
-	ext := strings.ToLower(file.Extension)
-	detected := file.DetectedType
 	outPath := g.ThumbPath(file.FolderLabel, file.RelativePath)
+	if err := g.RenderTo(ctx, sourcePath, file.Extension, file.DetectedType, outPath); err != nil {
+		return err
+	}
+
+	// Update catalog with thumbnail path
+	thumbRel := ThumbRelPath(file.FolderLabel, file.RelativePath)
+	return g.cat.UpdateThumbnailPath(file.ID, thumbRel)
+}
+
+// RenderTo renders a thumbnail of sourcePath at outPath without touching the
+// catalog. ext is the file's extension with its dot (case-folded here) and
+// detected its sniffed type; either one may be empty.
+func (g *Generator) RenderTo(ctx context.Context, sourcePath, ext, detected, outPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	ext = strings.ToLower(ext)
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 		return fmt.Errorf("creating thumb dir: %w", err)
@@ -245,10 +261,7 @@ func (g *Generator) GenerateContext(ctx context.Context, file *catalog.FileRecor
 		os.Remove(outPath)
 		return err
 	}
-
-	// Update catalog with thumbnail path
-	thumbRel := ThumbRelPath(file.FolderLabel, file.RelativePath)
-	return g.cat.UpdateThumbnailPath(file.ID, thumbRel)
+	return nil
 }
 
 func (g *Generator) generateImage(src, dst string) error {

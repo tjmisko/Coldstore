@@ -8,9 +8,11 @@ interface StatusBarProps {
   status: StatusResponse | null;
   error: string | null;
   onRefresh(): Promise<void> | void;
+  /** A collection has nothing on disk to scan. */
+  collectionSelected?: boolean;
 }
 
-export function StatusBar({ status, error, onRefresh }: StatusBarProps) {
+export function StatusBar({ status, error, onRefresh, collectionSelected = false }: StatusBarProps) {
   const scan = useJobRunner();
   const scanning = scan.running;
 
@@ -41,21 +43,31 @@ export function StatusBar({ status, error, onRefresh }: StatusBarProps) {
         </div>
       )}
 
+      {status?.archive && status.archive.bad_blob_count > 0 && (
+        <p className="rounded-md border border-alarm/40 bg-alarm-dim/70 p-2.5 text-ink leading-snug" role="alert" data-archive-health>
+          {formatCount(status.archive.bad_blob_count)} archived file
+          {status.archive.bad_blob_count === 1 ? "" : "s"} failed verification and cannot be
+          downloaded.
+        </p>
+      )}
+
       <BulkEvictionStrip />
 
       <div className="flex justify-between items-center pt-1 border-t border-line/70">
         <span className="text-ink-faint">
           {status ? `Cold: ${formatSize(status.cold_storage_free_bytes)} free` : "Cold: -"}
         </span>
-        <button
-          onClick={() => void scan.start({ action: "scan" })}
-          disabled={scanning}
-          className="text-ink-muted hover:text-ink disabled:text-ink-faint underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
-        >
-          {scanning
-            ? `scanning ${scan.job ? `${scan.job.done}/${scan.job.total}` : ""}`
-            : "rescan"}
-        </button>
+        {!collectionSelected && (
+          <button
+            onClick={() => void scan.start({ action: "scan" })}
+            disabled={scanning}
+            className="text-ink-muted hover:text-ink disabled:text-ink-faint underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
+          >
+            {scanning
+              ? `scanning ${scan.job ? `${scan.job.done}/${scan.job.total}` : ""}`
+              : "rescan"}
+          </button>
+        )}
       </div>
       {scan.error && <p className="text-alarm">scan failed: {scan.error}</p>}
     </div>
@@ -73,6 +85,10 @@ export function FolderNavItem({
   onSelect(): void;
   onReview(): void;
 }) {
+  if (folder.kind === "collection") {
+    return <CollectionNavItem folder={folder} selected={selected} onSelect={onSelect} />;
+  }
+
   // Two NESTED segments, never two additive ones: pinned_bytes is a subset of
   // synced_size_bytes, so stacking them would draw a fully pinned folder at
   // 200% of its budget.
@@ -168,6 +184,44 @@ export function FolderNavItem({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+/** A collection is archive-held bytes, not a device footprint: a file count and
+ *  a stored size, and no budget bar, wedge text or enable switch. */
+function CollectionNavItem({
+  folder,
+  selected,
+  onSelect,
+}: {
+  folder: FolderStatus;
+  selected: boolean;
+  onSelect(): void;
+}) {
+  const live = folder.counts.archived;
+  return (
+    <div className={`rounded-lg ${selected ? "bg-raised-hover" : "hover:bg-raised"}`}>
+      <button
+        type="button"
+        data-folder-nav={folder.label}
+        data-folder-kind="collection"
+        aria-current={selected ? "page" : undefined}
+        onClick={onSelect}
+        className="w-full rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+      >
+        <div className="flex items-start justify-between gap-2 text-meta text-ink">
+          <span className="min-w-0 truncate font-medium">{folder.display_name || folder.label}</span>
+          <span className="shrink-0 whitespace-nowrap font-mono text-ink-muted tabular">
+            {formatCount(live)} file{live === 1 ? "" : "s"} &middot; {formatSize(folder.stored_bytes ?? 0)}
+          </span>
+        </div>
+        <span className="mt-1.5 flex flex-wrap gap-x-2 text-micro text-ink-faint">
+          <span data-collection-label>collection</span>
+          {folder.counts.trashed > 0 && <span>{formatCount(folder.counts.trashed)} in trash</span>}
+          {!folder.present_in_toml && <span>not in coldstore.toml</span>}
+        </span>
+      </button>
     </div>
   );
 }

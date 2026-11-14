@@ -1,6 +1,8 @@
+import { COLLECTION_ID_BASE } from "../lib/collections";
 import type { FileRecord, FolderConfig, FolderStatus, JobDetail, StatusResponse } from "../types/api";
 
 let nextID = 1;
+let nextCollectionID = COLLECTION_ID_BASE + 1;
 
 export function aFile(overrides: Partial<FileRecord> = {}): FileRecord {
   const id = overrides.id ?? nextID++;
@@ -35,6 +37,37 @@ export function aFile(overrides: Partial<FileRecord> = {}): FileRecord {
     tags: [],
     ...overrides,
   };
+}
+
+/** A collection entry as contract C8 renders it. */
+export function aCollectionFile(overrides: Partial<FileRecord> = {}): FileRecord {
+  const id = overrides.id ?? nextCollectionID++;
+  const name = overrides.filename ?? `scan_${id - COLLECTION_ID_BASE}.pdf`;
+  return aFile({
+    id,
+    folder_label: "Papers",
+    relative_path: name,
+    filename: name,
+    extension: ".pdf",
+    mime_type: "application/pdf",
+    status: "archived",
+    content_hash: "ab".repeat(32),
+    ...overrides,
+  });
+}
+
+/** The status entry of a collection: no budget, never disabled. */
+export function aCollectionStatus(overrides: Partial<FolderStatus> = {}): FolderStatus {
+  return aFolderStatus({
+    label: "Papers",
+    kind: "collection",
+    stored_bytes: 4_200_000,
+    synced_size_bytes: 0,
+    budget_bytes: 0,
+    pinned_bytes: 0,
+    counts: { total: 12, synced: 0, archived: 12, missing: 0, trashed: 0, pinned: 0 },
+    ...overrides,
+  });
 }
 
 export function aFolderStatus(overrides: Partial<FolderStatus> = {}): FolderStatus {

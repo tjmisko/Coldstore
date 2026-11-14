@@ -15,7 +15,7 @@ import (
 // through the job queue.
 func (s *Server) handleRestoreFile(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.fileIDParam(w, r)
-	if !ok {
+	if !ok || s.rejectCollectionID(w, id) {
 		return
 	}
 
@@ -32,7 +32,7 @@ func (s *Server) handleRestoreFile(w http.ResponseWriter, r *http.Request) {
 // clears the pin.
 func (s *Server) handleArchiveFile(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.fileIDParam(w, r)
-	if !ok {
+	if !ok || s.rejectCollectionID(w, id) {
 		return
 	}
 
@@ -53,7 +53,7 @@ type resolveRequest struct {
 // candidate copies of the same photo and coldstore will not guess.
 func (s *Server) handleResolveConflict(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.fileIDParam(w, r)
-	if !ok {
+	if !ok || s.rejectCollectionID(w, id) {
 		return
 	}
 

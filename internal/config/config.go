@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -36,6 +38,46 @@ type Config struct {
 	Server    ServerConfig    `toml:"server"`
 	Syncthing SyncthingConfig `toml:"syncthing"`
 	Folders   []FolderConfig  `toml:"folders"`
+
+	Archive     ArchiveConfig      `toml:"archive"`
+	Collections []CollectionConfig `toml:"collections"`
+}
+
+// CollectionConfig declares one archive-of-record collection. A collection is
+// content-addressed storage with no hot copy, so unlike a folder it has no path
+// and no budget.
+type CollectionConfig struct {
+	Name string `toml:"name"`
+}
+
+// ArchiveConfig tunes the archive core. Defaults are applied in load (before
+// decoding, so an explicit 0 for the two keys where 0 is meaningful survives)
+// and in setDefaults.
+type ArchiveConfig struct {
+	UploadConcurrency  int `toml:"upload_concurrency"`     // default 2; 1..8
+	ScrubIntervalHours int `toml:"scrub_interval_hours"`   // default 720; 0 disables; negative is an error
+	ScrubRateMiBPerSec int `toml:"scrub_rate_mib_per_sec"` // default 20; 0 = unthrottled; negative is an error
+}
+
+const (
+	DefaultUploadConcurrency  = 2
+	MaxUploadConcurrency      = 8
+	DefaultScrubIntervalHours = 720
+	DefaultScrubRateMiBPerSec = 20
+
+	// ReservedBlobNamespace is the thumbnail namespace of the blob store
+	// (thumbnails/sha256/...); no folder or collection may take it.
+	ReservedBlobNamespace = "sha256"
+)
+
+var collectionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$`)
+
+// UnknownKeysError lists every key the file contains that no struct field decodes.
+type UnknownKeysError struct{ Keys []string }
+
+func (e *UnknownKeysError) Error() string {
+	return fmt.Sprintf("parsing config: unknown key(s) %s: check for typos "+
+		"(see coldstore.toml.example)", strings.Join(e.Keys, ", "))
 }
 
 type StorageConfig struct {
@@ -131,9 +173,29 @@ func load(path string, inspection bool) (*Config, error) {
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
 
-	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	cfg := Config{Archive: ArchiveConfig{
+		UploadConcurrency:  DefaultUploadConcurrency,
+		ScrubIntervalHours: DefaultScrubIntervalHours,
+		ScrubRateMiBPerSec: DefaultScrubRateMiBPerSec,
+	}}
+	md, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	// Load is strict: a misspelt key (require_mountpont) silently turning a
+	// safety setting off is worse than refusing to start. LoadForInspection
+	// stays lenient on purpose: an offline --status must still work on a box
+	// whose file has a typo, so the owner can read the health report that
+	// helps them find it.
+	if !inspection {
+		if undecoded := md.Undecoded(); len(undecoded) > 0 {
+			keys := make([]string, len(undecoded))
+			for i, key := range undecoded {
+				keys[i] = key.String()
+			}
+			sort.Strings(keys)
+			return nil, &UnknownKeysError{Keys: keys}
+		}
 	}
 
 	if err := cfg.setDefaults(); err != nil {
@@ -197,6 +259,21 @@ func (c *Config) setDefaults() error {
 	if c.Server.ListenAddr == "" {
 		c.Server.ListenAddr = DefaultListenAddr
 	}
+	if c.Archive.UploadConcurrency == 0 {
+		c.Archive.UploadConcurrency = DefaultUploadConcurrency
+	}
+	if c.Archive.UploadConcurrency < 1 || c.Archive.UploadConcurrency > MaxUploadConcurrency {
+		return fmt.Errorf("[archive] upload_concurrency %d is out of range 1..%d",
+			c.Archive.UploadConcurrency, MaxUploadConcurrency)
+	}
+	if c.Archive.ScrubIntervalHours < 0 {
+		return fmt.Errorf("[archive] scrub_interval_hours %d is negative; use 0 to disable scheduled scrubs",
+			c.Archive.ScrubIntervalHours)
+	}
+	if c.Archive.ScrubRateMiBPerSec < 0 {
+		return fmt.Errorf("[archive] scrub_rate_mib_per_sec %d is negative; use 0 for unthrottled",
+			c.Archive.ScrubRateMiBPerSec)
+	}
 
 	for i := range c.Folders {
 		budget, err := ParseBudget(c.Folders[i].Budget)
@@ -233,9 +310,10 @@ func (c *Config) validate(checkServerBinding bool) error {
 	// A daemon with nothing to manage is always a mistake -- a truncated file,
 	// an edit that deleted the wrong block, a config written to the wrong path.
 	// It would otherwise start, log nothing interesting and enforce nothing.
-	if len(c.Folders) == 0 {
-		return errors.New("no [[folders]] are declared: coldstore would start and manage nothing. " +
-			"Add at least one [[folders]] block with label, path and budget (see coldstore.toml.example)")
+	if len(c.Folders) == 0 && len(c.Collections) == 0 {
+		return errors.New("no [[folders]] and no [[collections]] are declared: coldstore would start and manage nothing. " +
+			"Add at least one [[folders]] block with label, path and budget, or a [[collections]] block " +
+			"(see coldstore.toml.example)")
 	}
 
 	coldRoot := filepath.Clean(c.Storage.ColdStoragePath)
@@ -257,6 +335,9 @@ func (c *Config) validate(checkServerBinding bool) error {
 		}
 		if seenLabel[label] {
 			return fmt.Errorf("folder %q is declared more than once", label)
+		}
+		if label == ReservedBlobNamespace {
+			return fmt.Errorf("folder label %q is reserved: it is the blob thumbnail namespace", label)
 		}
 		seenLabel[label] = true
 
@@ -300,6 +381,34 @@ func (c *Config) validate(checkServerBinding bool) error {
 		}
 	}
 
+	return c.validateCollections(seenLabel)
+}
+
+// validateCollections checks the [[collections]] names. folderLabels holds every
+// declared folder label: collections and folders share one namespace in the UI
+// and the API, so a collision would make a name ambiguous.
+func (c *Config) validateCollections(folderLabels map[string]bool) error {
+	seenName := make(map[string]bool, len(c.Collections))
+	for i := range c.Collections {
+		name := c.Collections[i].Name
+		if name == "" {
+			return fmt.Errorf("[[collections]] entry %d has no name", i+1)
+		}
+		if name == ReservedBlobNamespace {
+			return fmt.Errorf("collection name %q is reserved: it is the blob thumbnail namespace", name)
+		}
+		if !collectionNamePattern.MatchString(name) {
+			return fmt.Errorf("collection name %q is invalid: use 1-64 characters from "+
+				"letters, digits, space, '.', '_' and '-', starting with a letter or digit", name)
+		}
+		if seenName[name] {
+			return fmt.Errorf("collection %q is declared more than once", name)
+		}
+		seenName[name] = true
+		if folderLabels[name] {
+			return fmt.Errorf("collection %q has the same name as a folder label", name)
+		}
+	}
 	return nil
 }
 

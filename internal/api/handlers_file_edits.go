@@ -30,6 +30,9 @@ func (s *Server) handleUpdateFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid file id")
 		return
 	}
+	if s.rejectCollectionID(w, id) {
+		return
+	}
 
 	var req updateFileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

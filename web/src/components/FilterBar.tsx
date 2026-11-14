@@ -2,6 +2,7 @@ import { useState } from "react";
 import { FILTER_PRESETS, type FilterKey } from "../hooks/useFileWorkspace";
 import { useTagCompletions } from "../hooks/useTags";
 import type { NearFilter } from "../lib/api";
+import { isCollectionFilterKey } from "../lib/collections";
 
 interface FilterBarProps {
   active: FilterKey;
@@ -11,6 +12,9 @@ interface FilterBarProps {
   folder?: string;
   tags?: string[];
   onTagsChange?(tags: string[]): void;
+  /** A collection has no device state, pins, conflicts or capture metadata,
+   *  so the presets that filter on them are not offered. */
+  collection?: boolean;
 }
 
 export function FilterBar({
@@ -21,6 +25,7 @@ export function FilterBar({
   folder,
   tags = [],
   onTagsChange = () => {},
+  collection = false,
 }: FilterBarProps) {
   const preset = FILTER_PRESETS.find((p) => p.key === active) ?? FILTER_PRESETS[0];
   const [tagQuery, setTagQuery] = useState("");
@@ -42,7 +47,7 @@ export function FilterBar({
   return (
     <div className="mb-4">
       <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="File filters">
-        {FILTER_PRESETS.map((option) => (
+        {FILTER_PRESETS.filter((option) => !collection || isCollectionFilterKey(option.key)).map((option) => (
           <button
             key={option.key}
             role="tab"
@@ -58,7 +63,7 @@ export function FilterBar({
             {option.label}
           </button>
         ))}
-        {near && (
+        {near && !collection && (
           <button
             type="button"
             data-filter="near"

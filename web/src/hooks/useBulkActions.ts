@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, type FileFilters } from "../lib/api";
+import { NOT_AVAILABLE_FOR_COLLECTION, isCollectionFileId } from "../lib/collections";
 import { formatCount } from "../lib/format";
 import { useToast } from "../lib/toast";
 import { useJobRunner, type JobRunner } from "./useJob";
@@ -20,6 +21,14 @@ export const CONFIRM_ABOVE = 10;
 /** Browsers block a burst of window.open, and a hundred simultaneous downloads
  *  off a 1.5 GHz box is not a thing anyone wants either. */
 export const MAX_DOWNLOADS = 5;
+
+/** What a collection cannot do: it has no device copy to restore or archive,
+ *  nothing to pin against a budget, and no purge in this milestone. */
+const COLLECTION_UNSUPPORTED: readonly BulkOperator[] = ["archive", "restore", "pin", "unpin", "delete"];
+
+function hasCollectionIDs(ids: number[]): boolean {
+  return ids.some(isCollectionFileId);
+}
 
 export interface PendingBulkConfirm {
   operator: BulkOperator;
@@ -88,15 +97,50 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
     })();
   }, [job, onFinished]);
 
+  /** Collection entries never go through a job: trash is one synchronous
+   *  request, and every other file operation does not apply. */
+  const runCollectionOperator = useCallback(
+    async (operator: BulkOperator, ids: number[]) => {
+      if (operator !== "trash" && operator !== "untrash") {
+        toast.show("info", `${operator} is ${NOT_AVAILABLE_FOR_COLLECTION}`);
+        return;
+      }
+      const name = filters.folder;
+      if (!name) {
+        toast.show("error", "Select the collection before trashing its files.");
+        return;
+      }
+      const trashed = operator === "trash";
+      setBusy(true);
+      try {
+        const res = await api.collectionTrash(name, ids, trashed);
+        toast.show(
+          "success",
+          `${trashed ? "Moved" : "Restored"} ${formatCount(res.updated)} file${res.updated === 1 ? "" : "s"} ${trashed ? "to" : "from"} the archive's trash`,
+        );
+        await onFinished(ids);
+      } catch (err) {
+        toast.show("error", errorMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [filters.folder, onFinished, toast],
+  );
+
   const runJob = useCallback(
     (action: FileJobAction, ids: number[], force = false) => {
       if (ids.length === 0) return;
+      if (hasCollectionIDs(ids)) {
+        void runCollectionOperator(action, ids);
+        return;
+      }
       startedIDs.current = ids;
       startedAction.current = action;
       settled.current = null;
       void runner.start({ action, ids, force });
     },
-    [runner],
+    [runner, runCollectionOperator],
   );
 
   const forceLastRestore = useCallback(() => {
@@ -106,6 +150,10 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
   const setPinned = useCallback(
     async (ids: number[], pinned: boolean) => {
       if (ids.length === 0) return;
+      if (hasCollectionIDs(ids)) {
+        await runCollectionOperator(pinned ? "pin" : "unpin", ids);
+        return;
+      }
       setBusy(true);
       try {
         // ONE request. A loop of 400 pin calls would serialise 800 aggregate
@@ -123,7 +171,7 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
         setBusy(false);
       }
     },
-    [toast, onFinished],
+    [toast, onFinished, runCollectionOperator],
   );
 
   const download = useCallback(
@@ -182,6 +230,11 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
   const perform = useCallback(
     (operator: BulkOperator, ids: number[]) => {
       if (ids.length === 0) return;
+      // Nothing to confirm about an operation that will only say no.
+      if (hasCollectionIDs(ids) && COLLECTION_UNSUPPORTED.includes(operator)) {
+        execute(operator, ids);
+        return;
+      }
       // Download is capped rather than confirmed: it changes nothing.
       if (operator === "delete" ||
         (ids.length > CONFIRM_ABOVE && !["download", "tag", "untag"].includes(operator))) {
@@ -242,8 +295,24 @@ export function useBulkActions({ selection, filters, onFinished, onTag = () => {
 
 /** The sentence the confirmation asks. Named per operator because "are you
  *  sure?" is the question that gets clicked through. */
-export function describeBulk(operator: BulkOperator, count: number): { title: string; body: string } {
+export function describeBulk(
+  operator: BulkOperator,
+  count: number,
+  collection = false,
+): { title: string; body: string } {
   const files = `${formatCount(count)} file${count === 1 ? "" : "s"}`;
+  if (collection && operator === "trash") {
+    return {
+      title: `Delete ${files}?`,
+      body: `Coldstore will move ${files} into the archive's trash. Their bytes are kept.`,
+    };
+  }
+  if (collection && operator === "untrash") {
+    return {
+      title: `Restore ${files} from trash?`,
+      body: `Coldstore will return ${files} from the archive's trash to the collection.`,
+    };
+  }
   switch (operator) {
     case "archive":
       return {
