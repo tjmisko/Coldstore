@@ -3,6 +3,7 @@ import type {
   BulkTagRequest,
   BulkTagResponse,
   CatalogEvent,
+  CollectionTrashResponse,
   EpubSpine,
   FileIDsResponse,
   FileRecord,
@@ -284,6 +285,15 @@ export const api = {
       `/api/v1/folders/${encodeURIComponent(label)}/persistent/${id}`,
       { method: "DELETE" },
     ),
+
+  /** Move collection entries to the archive's trash and back. Not a job: the
+   *  journal write is synchronous and the reply says how many rows changed. */
+  collectionTrash: (name: string, ids: number[], trashed: boolean) =>
+    apiFetch<CollectionTrashResponse>(`/api/v1/collections/${encodeURIComponent(name)}/trash`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, trashed }),
+    }),
 
   createJob: (req: JobRequest) =>
     apiFetch<JobCreated>("/api/v1/jobs", {

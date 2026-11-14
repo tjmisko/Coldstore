@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Selection } from "../hooks/useSelection";
 import type { FileRecord } from "../types/api";
-import { aFile, aJob } from "../test/fixtures";
+import { aCollectionFile, aFile, aJob } from "../test/fixtures";
 import { renderWithToasts, stubFetch } from "../test/harness";
 import { useBulkActions } from "../hooks/useBulkActions";
 import type { FileFilters } from "../lib/api";
@@ -269,5 +269,62 @@ describe("SelectionBar", () => {
     expect(stub.urls()[0]).toContain("folder=CameraRoll");
     expect(stub.urls()[0]).toContain("status=archived");
     expect(await screen.findByText(/Selected the first 20,000 of 34,000/)).toBeInTheDocument();
+  });
+});
+
+describe("SelectionBar on collection files", () => {
+  const COLLECTION_FILES = [aCollectionFile(), aCollectionFile()];
+  const ids = COLLECTION_FILES.map((f) => f.id);
+
+  it("should not offer archive, restore, pin or rename when the selection is collection files", () => {
+    stub = stubFetch([]);
+    renderWithToasts(
+      <Bar selection={selectionOf(ids)} filters={{ folder: "Papers" }} files={COLLECTION_FILES} onFinished={() => {}} />,
+    );
+
+    for (const name of ["Archive", "Restore", "Pin", "Unpin", "Rename"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
+  it("should offer download, tag and delete-to-trash when the selection is collection files", () => {
+    stub = stubFetch([]);
+    renderWithToasts(
+      <Bar selection={selectionOf(ids)} filters={{ folder: "Papers" }} files={COLLECTION_FILES} onFinished={() => {}} />,
+    );
+
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tag" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("should post one collection trash request when Delete is pressed", async () => {
+    stub = stubFetch([
+      { method: "POST", url: "/api/v1/collections/Papers/trash", body: { updated: 2 } },
+    ]);
+    const onFinished = vi.fn();
+    renderWithToasts(
+      <Bar selection={selectionOf(ids)} filters={{ folder: "Papers" }} files={COLLECTION_FILES} onFinished={onFinished} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(onFinished).toHaveBeenCalledWith(ids));
+    expect(stub.calls).toHaveLength(1);
+    expect(stub.calls[0].body).toEqual({ ids, trashed: true });
+  });
+
+  it("should offer restore from trash and no permanent delete when the trash view holds collection files", () => {
+    stub = stubFetch([]);
+    const trashed = [aCollectionFile({ status: "trashed" })];
+    function TrashBar() {
+      const selection = selectionOf([trashed[0].id]);
+      const bulk = useBulkActions({ selection, filters: { folder: "Papers" }, onFinished: () => {} });
+      return <SelectionBar selection={selection} files={trashed} bulk={bulk} trashMode />;
+    }
+    renderWithToasts(<TrashBar />);
+
+    expect(screen.getByRole("button", { name: "Restore from Trash" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete permanently" })).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { errorMessage } from "../lib/api";
+import { isCollectionFolder } from "../lib/collections";
 import { formatAgo, formatCount, formatSize, parseSize } from "../lib/format";
 import { useEvents, useFolders, usePersistentPaths } from "../hooks/useConfig";
 import { useToast } from "../lib/toast";
@@ -70,7 +71,13 @@ export function ConfigPanel({
         )}
       </section>
 
-      {selectedFolder && (
+      {selectedFolder && isCollectionFolder(status, selectedFolder) && (
+        // No persistent patterns (nothing is ever offloaded) and no tag
+        // rename or delete (legacy-only in this milestone).
+        <ActivityList folder={selectedFolder} />
+      )}
+
+      {selectedFolder && !isCollectionFolder(status, selectedFolder) && (
         <>
           <PersistentPathsEditor folder={selectedFolder} />
           <TagManager folder={selectedFolder} />
@@ -129,6 +136,32 @@ function FolderCard({ folder, live, selected, onSelect, onSave }: FolderCardProp
     if (clean === folder.display_name) return;
     await onSave({ display_name: clean });
   };
+
+  if (live?.kind === "collection") {
+    return (
+      <div
+        className={`bg-surface rounded-lg p-4 border ${selected ? "border-line-strong" : "border-line"}`}
+        data-folder-card={folder.folder_label}
+      >
+        <p className="font-medium flex items-center gap-2 flex-wrap">
+          {folder.display_name || folder.folder_label}
+          <Chip tone="neutral">collection</Chip>
+          {!folder.present_in_toml && <Chip tone="neutral">not in coldstore.toml</Chip>}
+        </p>
+        <p className="text-meta text-ink-muted mt-1.5 tabular">
+          {formatCount(live.counts.archived)} files &middot; {formatSize(live.stored_bytes ?? 0)} held in the
+          archive. Collections have no budget, grace period or enable switch.
+        </p>
+        <button
+          onClick={onSelect}
+          className="mt-3 text-meta text-ink-muted hover:text-ink underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor rounded"
+          data-manage-folder={folder.folder_label}
+        >
+          {selected ? "Showing activity below" : "Show activity"}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div

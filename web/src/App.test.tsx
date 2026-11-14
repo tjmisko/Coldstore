@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import App from "./App";
-import { aFile, aStatus } from "./test/fixtures";
+import { aCollectionFile, aCollectionStatus, aFile, aStatus } from "./test/fixtures";
 import { stubFetch } from "./test/harness";
 
 let stub: ReturnType<typeof stubFetch> | null = null;
@@ -311,5 +311,51 @@ describe("App", () => {
     expect(await screen.findByRole("heading", { name: "Books", level: 2 })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "ArrowUp", ctrlKey: true });
     expect(await screen.findByRole("heading", { name: "Documents", level: 2 })).toBeInTheDocument();
+  });
+
+  it("should list a collection in the sidebar and request its files with folder=<name> when selected", async () => {
+    const entry = aCollectionFile({ filename: "ledger.pdf" });
+    stub = stubFetch([
+      {
+        url: "/api/v1/status",
+        body: aStatus({ folders: [aCollectionStatus(), ...aStatus().folders] }),
+      },
+      { url: "/api/v1/files?folder=CameraRoll", body: [] },
+      { url: "/api/v1/files?folder=Papers", body: [entry] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+
+    render(<App />);
+
+    const nav = await screen.findByRole("button", { name: /Papers/ });
+    // Sync folders come first even when the server lists a collection first.
+    const labels = [...document.querySelectorAll("[data-folder-nav]")].map((el) => (el as HTMLElement).dataset.folderNav);
+    expect(labels).toEqual(["all", "CameraRoll", "Papers"]);
+    expect(nav).toHaveTextContent("collection");
+
+    await userEvent.click(nav);
+
+    expect(await screen.findByRole("button", { name: "ledger.pdf" })).toBeInTheDocument();
+    expect(stub.urls().some((url) => url.startsWith("/api/v1/files?folder=Papers"))).toBe(true);
+    expect(stub.calls.every((c) => c.method === "GET")).toBe(true);
+  });
+
+  it("should not offer rescan when a collection is selected", async () => {
+    stub = stubFetch([
+      {
+        url: "/api/v1/status",
+        body: aStatus({ folders: [...aStatus().folders, aCollectionStatus()] }),
+      },
+      { url: "/api/v1/files", body: [] },
+      { url: "/api/v1/events", body: [] },
+    ]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "rescan" })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /Papers/ }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "rescan" })).toBeNull());
+    expect(screen.queryByRole("tab", { name: "Auto-pinned on restore" })).toBeNull();
   });
 });

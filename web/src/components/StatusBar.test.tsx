@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { aFolderStatus, aStatus } from "../test/fixtures";
+import { aCollectionStatus, aFolderStatus, aStatus } from "../test/fixtures";
 import { renderWithToasts, stubFetch } from "../test/harness";
 import { FolderNavItem, StatusBar } from "./StatusBar";
 
@@ -176,5 +176,78 @@ describe("StatusBar", () => {
     expect(strip).toHaveTextContent("CameraRoll");
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(screen.queryByText(/2483 files/)).toBeNull());
+  });
+
+  it("should show the file count and stored size and no budget bar when the folder is a collection", async () => {
+    stub = noEvents();
+    renderWithToasts(
+      <FolderNavItem
+        folder={aCollectionStatus({
+          stored_bytes: 4_200_000,
+          counts: { total: 14, synced: 0, archived: 12, missing: 0, trashed: 2, pinned: 0 },
+        })}
+        selected={false}
+        onSelect={() => {}}
+        onReview={() => {}}
+      />,
+    );
+
+    const nav = await screen.findByRole("button", { name: /Papers/ });
+    expect(nav).toHaveTextContent("12 files");
+    expect(nav).toHaveTextContent("4.2 MB");
+    expect(nav).toHaveTextContent("collection");
+    expect(nav).toHaveTextContent("2 in trash");
+    expect(screen.queryByRole("meter")).toBeNull();
+    expect(screen.queryByText("disabled")).toBeNull();
+    expect(screen.queryByText("budget blocked")).toBeNull();
+  });
+
+  it("should render a sync folder exactly as before when kind is absent", async () => {
+    stub = noEvents();
+    const folder = aFolderStatus();
+    expect(folder.kind).toBeUndefined();
+    renderWithToasts(<FolderNavItem folder={folder} selected onSelect={() => {}} onReview={() => {}} />);
+
+    expect(await screen.findByRole("meter", { name: /CameraRoll budget/ })).toBeInTheDocument();
+    expect(screen.queryByText("collection")).toBeNull();
+  });
+
+  it("should show an archive warning when bad_blob_count is above zero", async () => {
+    stub = noEvents();
+    const archive = {
+      blob_count: 10,
+      blob_bytes: 1000,
+      bad_blob_count: 2,
+      journal_seq: 40,
+      scrub_running: false,
+      scrub_last_finished_at: null,
+    };
+    renderWithToasts(<StatusBar status={aStatus({ archive })} error={null} onRefresh={() => {}} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("2 archived files failed verification");
+  });
+
+  it("should show no archive warning when bad_blob_count is zero or the archive is closed", async () => {
+    stub = noEvents();
+    const { rerender } = renderWithToasts(
+      <StatusBar
+        status={aStatus({ archive: { blob_count: 1, blob_bytes: 1, bad_blob_count: 0, journal_seq: 1, scrub_running: false, scrub_last_finished_at: null } })}
+        error={null}
+        onRefresh={() => {}}
+      />,
+    );
+    await screen.findByRole("button", { name: "rescan" });
+    expect(document.querySelector("[data-archive-health]")).toBeNull();
+
+    rerender(<StatusBar status={aStatus({ archive: null })} error={null} onRefresh={() => {}} />);
+    expect(document.querySelector("[data-archive-health]")).toBeNull();
+  });
+
+  it("should not offer rescan when a collection is selected", async () => {
+    stub = noEvents();
+    renderWithToasts(<StatusBar status={aStatus()} error={null} onRefresh={() => {}} collectionSelected />);
+
+    await screen.findByText(/Cold:/);
+    expect(screen.queryByRole("button", { name: "rescan" })).toBeNull();
   });
 });

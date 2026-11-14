@@ -6,6 +6,7 @@ import { useScrollLock } from "../hooks/useScrollLock";
 import { resolveMotion, resolveRange, spanIndices } from "../keymap/motions";
 import type { Command } from "../keymap/types";
 import { contextOperatorEndpoint, isContextMotion, resolveContextMotion } from "../lib/contextMotion";
+import { isCollectionFileId } from "../lib/collections";
 import { resolvePreview } from "../lib/preview";
 import { Z } from "../lib/zLayers";
 import type { BulkActions } from "../hooks/useBulkActions";
@@ -99,6 +100,8 @@ export function Lightbox({
   // item that the completed job just removed.
   const safeIndex = Math.max(0, Math.min(index, files.length - 1));
   const file = files[safeIndex];
+  // A collection entry has no pin, device copy, description or location.
+  const collection = isCollectionFileId(file.id);
 
   useEffect(() => {
     if (index !== safeIndex) setIndex(safeIndex);
@@ -216,7 +219,7 @@ export function Lightbox({
               selection.toggle(file.id);
               return true;
             case "edit-description":
-              setDescriptionOpen(true);
+              if (!collection) setDescriptionOpen(true);
               return true;
             case "repeat-tags":
               void actions.repeatTags(pairIDs(files, [file.id]));
@@ -236,7 +239,7 @@ export function Lightbox({
           return false;
       }
     },
-    [actions, bulk, file.id, files, goTo, hasMore, index, onClose, onLoadMore, selection],
+    [actions, bulk, collection, file.id, files, goTo, hasMore, index, onClose, onLoadMore, selection],
   );
   useKeymapLayer("lightbox", handle);
 
@@ -357,7 +360,7 @@ export function Lightbox({
             </div>
 
             <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:justify-end" data-lightbox-actions>
-              {file.status !== "trashed" && (
+              {file.status !== "trashed" && !collection && (
                 <PinToggle
                   file={file}
                   onPin={(pinned) => void run(() => actions.setPinned(file, pinned))}
@@ -369,18 +372,22 @@ export function Lightbox({
               >
                 Info
               </button>
-              <button
-                onClick={() => setDescriptionOpen(true)}
-                className={ACTION_BUTTON}
-              >
-                Description
-              </button>
-              <button
-                onClick={() => setLocationOpen(true)}
-                className={ACTION_BUTTON}
-              >
-                Location
-              </button>
+              {!collection && (
+                <>
+                  <button
+                    onClick={() => setDescriptionOpen(true)}
+                    className={ACTION_BUTTON}
+                  >
+                    Description
+                  </button>
+                  <button
+                    onClick={() => setLocationOpen(true)}
+                    className={ACTION_BUTTON}
+                  >
+                    Location
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => setTagPrompt("add")}
                 className={ACTION_BUTTON}
@@ -401,7 +408,7 @@ export function Lightbox({
               >
                 Download
               </button>
-              {file.status === "archived" && (
+              {file.status === "archived" && !collection && (
                 <button
                   onClick={() => void run(() => actions.restore(file))}
                   disabled={busy}
@@ -437,13 +444,15 @@ export function Lightbox({
                   >
                     Restore from Trash
                   </button>
-                  <button
-                    onClick={() => bulk.perform("delete", [file.id])}
-                    disabled={busy}
-                    className={`${ACTION_BUTTON} text-alarm`}
-                  >
-                    Delete permanently
-                  </button>
+                  {!collection && (
+                    <button
+                      onClick={() => bulk.perform("delete", [file.id])}
+                      disabled={busy}
+                      className={`${ACTION_BUTTON} text-alarm`}
+                    >
+                      Delete permanently
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -464,9 +473,11 @@ export function Lightbox({
               <div>
                 <span className="text-ink-faint">First seen:</span> {formatDateTime(file.first_seen)}
               </div>
-              <div className="col-span-2">
-                <span className="text-ink-faint">Captured:</span> <CaptureMeta file={file} />
-              </div>
+              {!collection && (
+                <div className="col-span-2">
+                  <span className="text-ink-faint">Captured:</span> <CaptureMeta file={file} />
+                </div>
+              )}
               {file.archived_at && (
                 <div>
                   <span className="text-ink-faint">Archived:</span>{" "}
@@ -476,9 +487,11 @@ export function Lightbox({
               <div>
                 <span className="text-ink-faint">Index:</span> {index + 1} / {files.length}
               </div>
-              <div className="col-span-2 md:col-span-4">
-                <span className="text-ink-faint">Location:</span> <LocationMeta file={file} />
-              </div>
+              {!collection && (
+                <div className="col-span-2 md:col-span-4">
+                  <span className="text-ink-faint">Location:</span> <LocationMeta file={file} />
+                </div>
+              )}
               <div className="col-span-2 md:col-span-4 flex items-center gap-2">
                 <span className="text-ink-faint">Tags:</span>
                 {file.tags.length > 0 ? <TagChips tags={file.tags} max={file.tags.length} /> : <span>None</span>}

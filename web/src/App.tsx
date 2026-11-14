@@ -18,6 +18,7 @@ import { FILTER_PRESETS, type FilterKey } from "./hooks/useFileWorkspace";
 import type { PaletteAction } from "./keymap/palette";
 import type { Command } from "./keymap/types";
 import { api, errorMessage } from "./lib/api";
+import { NOT_AVAILABLE_FOR_COLLECTION, isCollectionFilterKey, isCollectionFolder } from "./lib/collections";
 import { parseSize } from "./lib/format";
 import { useKeymap } from "./lib/keymapContext";
 import { useToast } from "./lib/toast";
@@ -117,13 +118,21 @@ function Shell() {
   const { status, error, errorStatus, refetch } = useStatus();
   // Memoised because it is a useCallback dependency: a fresh [] every render
   // recreates stepFolder, which re-registers the keymap layer forever.
-  const folders = useMemo(() => status?.folders ?? [], [status]);
+  // Sync folders first, then collections; the server already sends them in
+  // that order, and a stable partition keeps it if it ever does not.
+  const folders = useMemo(() => {
+    const all = status?.folders ?? [];
+    return [
+      ...all.filter((folder) => folder.kind !== "collection"),
+      ...all.filter((folder) => folder.kind === "collection"),
+    ];
+  }, [status]);
   const [initialWorkspace] = useState(readWorkspace);
   const [selectedFolder, setSelectedFolder] = useState<string>(initialWorkspace.folder);
   const [allFolders, setAllFolders] = useState(initialWorkspace.allFolders);
   const [view, setView] = useState<View>(initialWorkspace.view);
   const [folderViews, setFolderViews] = useState<Record<string, BrowsingView>>(initialWorkspace.folderViews);
-  const [filterKey, setFilterKey] = useState<FilterKey>(initialWorkspace.filterKey);
+  const [savedFilterKey, setFilterKey] = useState<FilterKey>(initialWorkspace.filterKey);
   const [tagFilters, setTagFilters] = useState<string[]>(initialWorkspace.tags);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [overlay, setOverlay] = useState<OverlayState | null>(null);
@@ -133,6 +142,12 @@ function Shell() {
     ? "All folders"
     : selectedFolderStatus?.display_name || selectedFolder;
   const viewLocationKey = allFolders ? ALL_FOLDERS_VIEW_KEY : selectedFolder;
+  const collectionSelected = !allFolders && isCollectionFolder(status, selectedFolder);
+  // A collection has no pins, conflicts or capture dates; a filter chosen for
+  // a sync folder shows everything there instead of asking for the impossible.
+  const filterKey: FilterKey = collectionSelected && !isCollectionFilterKey(savedFilterKey)
+    ? "all"
+    : savedFilterKey;
 
   const keymap = useKeymap();
   const toast = useToast();
@@ -172,12 +187,12 @@ function Shell() {
     try {
       localStorage.setItem(
         WORKSPACE_STORAGE_KEY,
-        JSON.stringify({ folder: selectedFolder, allFolders, view, folderViews, filterKey, tags: tagFilters }),
+        JSON.stringify({ folder: selectedFolder, allFolders, view, folderViews, filterKey: savedFilterKey, tags: tagFilters }),
       );
     } catch {
       // Browsing must keep working when private-mode storage is unavailable.
     }
-  }, [allFolders, filterKey, folderViews, selectedFolder, tagFilters, view]);
+  }, [allFolders, savedFilterKey, folderViews, selectedFolder, tagFilters, view]);
 
   const changeView = useCallback((next: View) => {
     setView(next);
@@ -222,13 +237,17 @@ function Shell() {
   }, [changeView, view]);
 
   const rescan = useCallback(async () => {
+    if (collectionSelected) {
+      toast.show("info", `Rescan is ${NOT_AVAILABLE_FOR_COLLECTION}`);
+      return;
+    }
     try {
       await api.createJob({ action: "scan", ...(allFolders ? {} : { folder: selectedFolder }) });
       toast.show("success", `Rescanning ${allFolders ? "every folder" : selectedFolder}`);
     } catch (err) {
       toast.show("error", errorMessage(err));
     }
-  }, [allFolders, selectedFolder, toast]);
+  }, [allFolders, collectionSelected, selectedFolder, toast]);
 
   /** The global layer: everything that is about the app rather than about a
    *  file. File commands fall through to whichever grid is mounted. */
@@ -300,6 +319,7 @@ function Shell() {
           selectFolder(action.label);
           return null;
         case "filter":
+          if (collectionSelected && !isCollectionFilterKey(action.key)) return NOT_AVAILABLE_FOR_COLLECTION;
           setFilterKey(action.key as FilterKey);
           return null;
         case "view":
@@ -326,6 +346,7 @@ function Shell() {
           return null;
         case "budget": {
           if (!selectedFolder) return "no folder selected";
+          if (collectionSelected) return NOT_AVAILABLE_FOR_COLLECTION;
           const bytes = parseSize(action.text);
           // The SAME parseSize the budget editor uses, so a value the palette
           // accepts is byte for byte one the settings panel would accept.
@@ -340,6 +361,7 @@ function Shell() {
         }
         case "grace": {
           if (!selectedFolder) return "no folder selected";
+          if (collectionSelected) return NOT_AVAILABLE_FOR_COLLECTION;
           void updateFolder(selectedFolder, { grace_minutes: action.minutes })
             .then(() => {
               toast.show("success", `${selectedFolder} grace period set to ${action.minutes} min`);
@@ -350,6 +372,7 @@ function Shell() {
         }
         case "enabled": {
           if (!selectedFolder) return "no folder selected";
+          if (collectionSelected) return NOT_AVAILABLE_FOR_COLLECTION;
           void updateFolder(selectedFolder, { enabled: action.enabled })
             .then(() => {
               toast.show(
@@ -362,6 +385,7 @@ function Shell() {
           return null;
         }
         case "rescan":
+          if (collectionSelected) return NOT_AVAILABLE_FOR_COLLECTION;
           void rescan();
           return null;
         case "finder":
@@ -375,7 +399,7 @@ function Shell() {
           return null;
       }
     },
-    [changeView, keymap, onFolderChanged, rescan, selectFolder, selectedFolder, toast, updateFolder],
+    [changeView, collectionSelected, keymap, onFolderChanged, rescan, selectFolder, selectedFolder, toast, updateFolder],
   );
 
   const showInFiles = useCallback(
@@ -471,6 +495,7 @@ function Shell() {
           status={status}
           error={error}
           onRefresh={refetch}
+          collectionSelected={collectionSelected}
         />
       </aside>
 
@@ -507,6 +532,7 @@ function Shell() {
                 onTagFiltersChange={setTagFilters}
                 onFolderChanged={onFolderChanged}
                 onShowInFiles={showInFiles}
+                collection={collectionSelected}
               />
             )}
             {view === "files" && (
@@ -522,6 +548,7 @@ function Shell() {
                 onFolderChanged={onFolderChanged}
                 reveal={reveal}
                 onShowInFiles={showInFiles}
+                collection={collectionSelected}
               />
             )}
             {view === "config" && (
@@ -546,7 +573,7 @@ function Shell() {
             label: folder.label,
             name: folder.display_name || folder.label,
           }))}
-          filters={FILTER_PRESETS.map((preset) => ({ key: preset.key, label: preset.label }))}
+          filters={FILTER_PRESETS.filter((preset) => !collectionSelected || isCollectionFilterKey(preset.key)).map((preset) => ({ key: preset.key, label: preset.label }))}
           onClose={() => closeIf("palette")}
           onAction={onPaletteAction}
         />

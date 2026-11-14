@@ -166,6 +166,25 @@ export interface FolderStatus {
   /** "" when the Syncthing folder type has not been verified. */
   syncthing_type: string;
   counts: FolderCounts;
+  /** Absent on a daemon that predates archive collections, which is "sync". */
+  kind?: "sync" | "collection";
+  /** Bytes held for a collection; absent for a sync folder. */
+  stored_bytes?: number;
+}
+
+/** POST /api/v1/collections/{name}/trash */
+export interface CollectionTrashResponse {
+  updated: number;
+}
+
+/** StatusResponse.archive; null when the archive core is not open. */
+export interface ArchiveStatus {
+  blob_count: number;
+  blob_bytes: number;
+  bad_blob_count: number;
+  journal_seq: number;
+  scrub_running: boolean;
+  scrub_last_finished_at: string | null;
 }
 
 /** POST/DELETE /api/v1/files/{id}/pin. `warning` is non-null iff the folder's
@@ -343,4 +362,5 @@ export interface StatusResponse {
   trashed_files: number;
   folders: FolderStatus[];
   cold_storage_free_bytes: number;
+  archive?: ArchiveStatus | null;
 }

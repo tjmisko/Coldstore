@@ -1,3 +1,4 @@
+import { isCollectionFileId } from "../lib/collections";
 import { formatCount, formatSize } from "../lib/format";
 import { describeBulk, type BulkActions } from "../hooks/useBulkActions";
 import { Z } from "../lib/zLayers";
@@ -33,6 +34,10 @@ export function SelectionBar({ selection, files, bulk, trashMode = false }: Sele
   const finished = job !== null && (job.state === "done" || job.state === "failed");
   const showBar = selection.count > 0 || runner.running || finished;
   const disabled = bulk.busy || runner.running;
+  // Files of a collection have no device copy, no pin and no purge.
+  const collection = selection.ids.some(isCollectionFileId);
+  const buttonBase =
+    "px-2.5 py-1 rounded-md text-ink-muted ring-1 ring-line-strong hover:bg-raised-hover hover:text-ink disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor";
 
   return (
     <>
@@ -73,12 +78,38 @@ export function SelectionBar({ selection, files, bulk, trashMode = false }: Sele
                     >
                       Restore from Trash
                     </button>
+                    {!collection && (
+                      <button
+                        onClick={() => bulk.perform("delete", selection.ids)}
+                        disabled={disabled || selection.count === 0}
+                        className="px-3 py-1 rounded-md bg-alarm-dim text-alarm ring-1 ring-alarm/40 hover:brightness-125 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                      >
+                        Delete permanently
+                      </button>
+                    )}
+                  </>
+                ) : collection ? (
+                  <>
                     <button
-                      onClick={() => bulk.perform("delete", selection.ids)}
+                      onClick={() => bulk.download(selection.ids)}
                       disabled={disabled || selection.count === 0}
-                      className="px-3 py-1 rounded-md bg-alarm-dim text-alarm ring-1 ring-alarm/40 hover:brightness-125 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                      className={buttonBase}
                     >
-                      Delete permanently
+                      Download
+                    </button>
+                    <button
+                      onClick={() => bulk.perform("tag", selection.ids)}
+                      disabled={disabled || selection.count === 0}
+                      className={buttonBase}
+                    >
+                      Tag
+                    </button>
+                    <button
+                      onClick={() => bulk.runJob("trash", selection.ids)}
+                      disabled={disabled || selection.count === 0}
+                      className="px-2.5 py-1 rounded-md text-alarm ring-1 ring-alarm/40 hover:bg-alarm-dim disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cursor"
+                    >
+                      Delete
                     </button>
                   </>
                 ) : (
@@ -203,13 +234,13 @@ export function SelectionBar({ selection, files, bulk, trashMode = false }: Sele
           need asking. */}
       {bulk.confirm && (
         <ConfirmDialog
-          title={describeBulk(bulk.confirm.operator, bulk.confirm.ids.length).title}
+          title={describeBulk(bulk.confirm.operator, bulk.confirm.ids.length, bulk.confirm.ids.some(isCollectionFileId)).title}
           confirmLabel="Yes, do it"
           destructive={["archive", "trash", "delete"].includes(bulk.confirm.operator)}
           onCancel={bulk.confirmCancel}
           onConfirm={bulk.confirmProceed}
         >
-          <p>{describeBulk(bulk.confirm.operator, bulk.confirm.ids.length).body}</p>
+          <p>{describeBulk(bulk.confirm.operator, bulk.confirm.ids.length, bulk.confirm.ids.some(isCollectionFileId)).body}</p>
         </ConfirmDialog>
       )}
     </>
