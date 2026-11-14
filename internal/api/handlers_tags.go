@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/tjmisko/coldstore/internal/archive"
 	"github.com/tjmisko/coldstore/internal/catalog"
 )
 
@@ -45,6 +46,10 @@ func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		limit = min(parsed, maxTagListLimit)
+	}
+	if folder := r.URL.Query().Get("folder"); s.collectionFolder(folder) {
+		s.listCollectionTags(w, folder, r.URL.Query().Get("prefix"), limit)
+		return
 	}
 	tags, err := s.cat.ListTags(r.URL.Query().Get("folder"), r.URL.Query().Get("prefix"), limit)
 	if err != nil {
@@ -101,6 +106,9 @@ func (s *Server) handleBulkFileTags(w http.ResponseWriter, r *http.Request) {
 		changes = []catalog.TagFileMutation{{IDs: req.IDs, Add: req.Add, Remove: req.Remove}}
 	}
 
+	if s.archive != nil && s.bulkTagsTargetCollection(w, r, changes) {
+		return
+	}
 	result, err := s.cat.ApplyTagMutations(changes, time.Now().Unix())
 	if err != nil {
 		s.writeTagError(w, "updating bulk file tags", err)
@@ -112,6 +120,10 @@ func (s *Server) handleBulkFileTags(w http.ResponseWriter, r *http.Request) {
 func (s *Server) mutateFileTags(w http.ResponseWriter, r *http.Request, removeOnly bool) {
 	id, ok := s.fileIDParam(w, r)
 	if !ok {
+		return
+	}
+	if s.archive != nil && isCollectionID(id) {
+		s.mutateCollectionFileTags(w, r, id, removeOnly)
 		return
 	}
 	if _, err := s.cat.GetFileByID(id); err != nil {
@@ -191,7 +203,7 @@ func (s *Server) writeTagError(w http.ResponseWriter, operation string, err erro
 		writeError(w, http.StatusConflict, descendants.Error())
 	case errors.Is(err, catalog.ErrNoSuchTag):
 		writeError(w, http.StatusNotFound, "tag not found")
-	case errors.Is(err, catalog.ErrNoSuchFile):
+	case errors.Is(err, catalog.ErrNoSuchFile), errors.Is(err, archive.ErrEntryNotFound):
 		writeError(w, http.StatusNotFound, "file not found")
 	default:
 		s.logger.Error(operation, "error", err)

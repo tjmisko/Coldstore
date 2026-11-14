@@ -69,6 +69,9 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if s.rejectCollectionIDs(w, req.IDs) {
+		return
+	}
 
 	switch req.Action {
 	case catalog.JobActionRestore, catalog.JobActionArchive, catalog.JobActionTrash,

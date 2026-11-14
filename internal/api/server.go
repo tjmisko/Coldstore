@@ -1,13 +1,17 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
+	"github.com/tjmisko/coldstore/internal/archive"
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
 	"github.com/tjmisko/coldstore/internal/daemon"
@@ -26,6 +30,10 @@ type Deps struct {
 	Worker  *daemon.Worker
 	Scanner *daemon.Scanner
 	Logger  *slog.Logger
+	// Archive is the open archive core, or nil when the daemon runs without
+	// one. With nil every collection route answers as if it did not exist and
+	// every legacy route behaves exactly as it did before collections.
+	Archive *archive.Service
 }
 
 type Server struct {
@@ -43,6 +51,11 @@ type Server struct {
 	scanner *daemon.Scanner
 	logger  *slog.Logger
 	mux     *http.ServeMux
+	// archive is nil when no archive core is open (Deps.Archive).
+	archive *archive.Service
+
+	httpMu     sync.Mutex
+	httpServer *http.Server
 }
 
 func NewServer(d Deps) *Server {
@@ -54,13 +67,14 @@ func NewServer(d Deps) *Server {
 		scanner: d.Scanner,
 		logger:  d.Logger,
 		mux:     http.NewServeMux(),
+		archive: d.Archive,
 	}
 	s.registerRoutes()
 	return s
 }
 
 func (s *Server) Handler() http.Handler {
-	next := s.auditMutations(s.mux)
+	next := s.auditMutations(s.bypassMuxPathCleaning(s.mux))
 	switch s.cfg.Server.AuthenticationMode() {
 	case config.AuthModeBasic:
 		if s.cfg.Server.Username == "" || s.cfg.Server.Password == "" ||
@@ -156,7 +170,28 @@ func (s *Server) ListenAndServe(addr string) error {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 16,
 	}
+	s.httpMu.Lock()
+	s.httpServer = srv
+	s.httpMu.Unlock()
 	return srv.ListenAndServe()
+}
+
+// Shutdown stops accepting connections and waits for in-flight requests until
+// ctx ends, then closes whatever is left, which cancels those requests'
+// contexts so a long upload stops instead of holding the process open. It is a
+// no-op when the server never started listening.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.httpMu.Lock()
+	srv := s.httpServer
+	s.httpMu.Unlock()
+	if srv == nil {
+		return nil
+	}
+	err := srv.Shutdown(ctx)
+	if err != nil {
+		return errors.Join(err, srv.Close())
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

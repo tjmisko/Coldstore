@@ -2,24 +2,40 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tjmisko/coldstore/internal/api"
+	"github.com/tjmisko/coldstore/internal/archive"
 	"github.com/tjmisko/coldstore/internal/catalog"
 	"github.com/tjmisko/coldstore/internal/config"
+	"github.com/tjmisko/coldstore/internal/control"
 	"github.com/tjmisko/coldstore/internal/daemon"
 	"github.com/tjmisko/coldstore/internal/diagnostic"
+	"github.com/tjmisko/coldstore/internal/index"
+	"github.com/tjmisko/coldstore/internal/journal"
+	"github.com/tjmisko/coldstore/internal/thumbnail"
 )
 
 func main() {
+	// The archive subcommands are dispatched before flag parsing: flag.Parse
+	// would stop at "import" and treat everything after it as positional.
+	if name, ok := archiveSubcommand(os.Args[1:]); ok {
+		ctx, stop := signalContext()
+		code := runArchiveCommand(ctx, name, os.Args[2:], os.Stdout, os.Stderr)
+		stop()
+		os.Exit(code)
+	}
+
 	configPath := flag.String("config", "coldstore.toml", "path to config file")
 	scanOnce := flag.Bool("scan", false, "run a single catalog scan and exit")
 	checkOnly := flag.Bool("check", false, "validate the config and the machine, print the result, and exit")
@@ -191,6 +207,22 @@ func main() {
 		return
 	}
 
+	// The process owns the signal context: the daemon, the archive's background
+	// workers and the control socket all stop on it, and the archive is closed
+	// only after the daemon's RunContext has returned.
+	ctx, stopSignals := signalContext()
+	defer stopSignals()
+
+	// The archive core is opened only when a collection is declared or a journal
+	// already exists. Any failure is fatal: a daemon that cannot say which of the
+	// archive and the journal is newer must not serve either. It is opened before
+	// the listener binds so no request can reach a half-open archive.
+	var archiveService *archive.Service
+	var controlServer *control.Server
+	if archiveConfigured(cfg) {
+		archiveService, controlServer = openArchive(ctx, cfg, cat, logger)
+	}
+
 	// ONE mover for the process. The API server and the daemon share it, and
 	// its mutex is what stops a pin arriving over HTTP from racing the quota
 	// tick's move (design section 5.2).
@@ -209,17 +241,77 @@ func main() {
 		Worker:  d.Worker(),
 		Scanner: d.Scanner(),
 		Logger:  logger,
+		Archive: archiveService,
 	})
 	go func() {
-		if err := srv.ListenAndServe(cfg.Server.ListenAddr); err != nil {
+		if err := srv.ListenAndServe(cfg.Server.ListenAddr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("API server error", "error", err)
 		}
 	}()
 
 	logger.Info("coldstore daemon starting", "config", *configPath)
-	if err := d.Run(); err != nil {
-		logger.Error("daemon exited with error", "error", err)
+	runErr := d.RunContext(ctx)
+	shutdownServing(srv, controlServer, archiveService, logger)
+	if runErr != nil {
+		logger.Error("daemon exited with error", "error", runErr)
 		os.Exit(1)
+	}
+}
+
+// openArchive opens the archive core and the control socket, or exits 1.
+func openArchive(ctx context.Context, cfg *config.Config, cat *catalog.Catalog, logger *slog.Logger) (*archive.Service, *control.Server) {
+	opts := archiveOptions(cfg, logger)
+	opts.Render = thumbnail.NewGenerator(cfg.Storage.ColdStoragePath, cat, logger).RenderTo
+	service, err := archive.Open(ctx, opts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "coldstore: %v\n", archiveOpenAdvice(err))
+		os.Exit(1)
+	}
+	service.Start(ctx)
+	server, err := control.Start(ctx, service, control.SocketPath(cfg.Storage.ColdStoragePath), logger)
+	if err != nil {
+		logger.Error("cannot start the control socket", "error", err)
+		_ = service.Close()
+		os.Exit(1)
+	}
+	return service, server
+}
+
+// archiveOpenAdvice names which side is newer or who holds the lock; every
+// other error is printed as it is.
+func archiveOpenAdvice(err error) string {
+	switch {
+	case errors.Is(err, journal.ErrFormatNewer):
+		return fmt.Sprintf("the archive on disk was written by a newer coldstore than this binary; "+
+			"refusing to open it (run `coldstore format-version` for the numbers): %v", err)
+	case errors.Is(err, index.ErrFormatNewer):
+		return fmt.Sprintf("index.db was written by a newer coldstore than this binary; "+
+			"refusing to open it: %v", err)
+	case errors.Is(err, journal.ErrLocked):
+		return fmt.Sprintf("another coldstore holds the archive (journal/LOCK): %v", err)
+	}
+	return err.Error()
+}
+
+// shutdownServing stops what serves requests, then closes the archive. The HTTP
+// server goes first so an in-flight upload finishes (or is cut) before the
+// journal and index close under it.
+func shutdownServing(srv *api.Server, controlServer *control.Server, service *archive.Service, logger *slog.Logger) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Warn("API server shutdown", "error", err)
+	}
+	if controlServer != nil {
+		if err := controlServer.Close(); err != nil {
+			logger.Warn("control socket shutdown", "error", err)
+		}
+	}
+	if service == nil {
+		return
+	}
+	if err := service.Close(); err != nil {
+		logger.Error("closing the archive", "error", err)
 	}
 }
 
@@ -320,6 +412,13 @@ func reportPreflight(w io.Writer, cfg *config.Config, configPath string, warning
 	fmt.Fprintf(w, "folders          %d declared\n", len(cfg.Folders))
 	for _, f := range cfg.Folders {
 		fmt.Fprintf(w, "  %-20s %s (seed budget %s)\n", f.Label, f.Path, f.Budget)
+	}
+
+	if len(cfg.Collections) > 0 {
+		fmt.Fprintf(w, "collections      %d declared\n", len(cfg.Collections))
+		for _, collection := range cfg.Collections {
+			fmt.Fprintf(w, "  %s\n", collection.Name)
+		}
 	}
 
 	printReadWritePaths(w, cfg)

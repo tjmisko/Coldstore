@@ -15,9 +15,17 @@ type statusResponse struct {
 	TrashedFiles         int64          `json:"trashed_files"`
 	ColdStorageFreeBytes uint64         `json:"cold_storage_free_bytes"`
 	Folders              []folderStatus `json:"folders"`
+	// Archive is null, never omitted, when the archive core is not open.
+	Archive *archiveStatus `json:"archive"`
 }
 
 type folderStatus struct {
+	// Kind is "sync" for a Syncthing folder and "collection" for an archive
+	// collection.
+	Kind string `json:"kind"`
+	// StoredBytes is the bytes of distinct blobs the archive core holds for the
+	// folder: always 0 for a sync folder in M1, which has no archive content.
+	StoredBytes int64  `json:"stored_bytes"`
 	Label       string `json:"label"`
 	DisplayName string `json:"display_name"`
 	// SyncedSizeBytes keeps its name for compatibility, but it is the folder's
@@ -96,6 +104,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		folders = append(folders, fs)
 	}
+	archiveBlock, err := s.appendCollectionStatus(&folders)
+	if err != nil {
+		s.statusError(w, "summarising the archive", err)
+		return
+	}
 
 	coldFree, err := daemon.AvailableSpaceBytes(s.cfg.Storage.ColdStoragePath)
 	if err != nil {
@@ -111,6 +124,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		TrashedFiles:         trashed,
 		ColdStorageFreeBytes: coldFree,
 		Folders:              folders,
+		Archive:              archiveBlock,
 	})
 }
 
@@ -135,6 +149,7 @@ func (s *Server) folderStatusFor(fc catalog.FolderConfigRecord) (folderStatus, e
 	}
 
 	return folderStatus{
+		Kind:            collectionKindSync,
 		Label:           fc.FolderLabel,
 		DisplayName:     fc.DisplayName,
 		SyncedSizeBytes: onDevice,
