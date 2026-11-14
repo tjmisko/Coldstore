@@ -296,11 +296,38 @@ func Open(ctx context.Context, opts Options) (*Service, error) {
 	// index transaction commits but before views.Sync finishes leaves the
 	// index current with the journal, so replay applies nothing, yet views/
 	// is missing that placement or still holds a staging link.
-	if _, err := s.views.Regenerate(ctx, c.ix); err != nil {
-		s.cancel()
-		return nil, errors.Join(fmt.Errorf("opening archive: regenerating views: %w", err), c.close())
-	}
+	//
+	// views/ is derived data and a failure here is never fatal: the archive
+	// must open so the legacy daemon sharing this process keeps running.
+	s.regenerateViews(ctx, s.views, c.ix, "opening the archive")
 	return s, nil
+}
+
+// maxViewFailureEvents caps the per-path events of one regeneration; the
+// summary event always names the full count.
+const maxViewFailureEvents = 50
+
+// regenerateViews runs views.Regenerate and surfaces every problem as a log
+// line and an event, never as an error. It reports how many paths failed.
+func (s *Service) regenerateViews(ctx context.Context, tree *views.Tree, ix *index.Index, when string) int {
+	report, err := tree.Regenerate(ctx, ix)
+	failed := len(report.Failures)
+	if err != nil {
+		s.opts.Logger.Warn("archive: regenerating views failed", "when", when, "err", err)
+		s.event("views_sync_failed", "", "", err.Error())
+		failed++
+	}
+	for i, failure := range report.Failures {
+		s.opts.Logger.Warn("archive: view path skipped", "when", when, "path", failure.Path, "err", failure.Err)
+		if i < maxViewFailureEvents {
+			s.event("views_sync_failed", "", failure.Path, fmt.Sprint(failure.Err))
+		}
+	}
+	for _, path := range report.Foreign {
+		s.opts.Logger.Warn("archive: foreign file left in views/", "when", when, "path", path)
+		s.event("views_foreign_file", "", path, "a regular file that is not a link to a blob was left in views/")
+	}
+	return failed
 }
 
 func (s *Service) declareCollections(ctx context.Context) error {
@@ -413,10 +440,7 @@ func (s *Service) catchUpIndexLocked(ctx context.Context) error {
 		return fmt.Errorf("the index is behind the journal (applied %d, journal %d), write refused", s.core.ix.AppliedSeq(), s.core.j.LastSeq())
 	}
 	// The views tree may lack the caught-up placements; Regenerate heals it.
-	if _, err := s.views.Regenerate(ctx, s.core.ix); err != nil {
-		s.opts.Logger.Warn("archive: regenerating views after an index catch-up", "err", err)
-		s.event("views_sync_failed", "", "", err.Error())
-	}
+	s.regenerateViews(ctx, s.views, s.core.ix, "an index catch-up")
 	return nil
 }
 
@@ -647,9 +671,12 @@ func (s *Service) OpenVerified(h store.Hash) (io.ReadSeekCloser, int64, error) {
 }
 
 type RebuildReport struct {
-	Records     uint64        `json:"records"`
-	Entries     int64         `json:"entries"`
-	ViewsLinked int           `json:"views_linked"`
+	Records     uint64 `json:"records"`
+	Entries     int64  `json:"entries"`
+	ViewsLinked int    `json:"views_linked"`
+	// ViewsFailed counts paths views/ could not be rebuilt for. views/ is
+	// derived data, so this never fails the rebuild.
+	ViewsFailed int           `json:"views_failed"`
 	Torn        *journal.Torn `json:"torn"`
 }
 
@@ -669,8 +696,13 @@ func RebuildIndex(ctx context.Context, opts Options) (RebuildReport, error) {
 func rebuildReport(ctx context.Context, opts Options, c *core) (RebuildReport, error) {
 	tree := views.New(opts.FS, filepath.Join(opts.Root, viewsDirName), c.st.Path)
 	regenerated, err := tree.Regenerate(ctx, c.ix)
+	viewsFailed := len(regenerated.Failures)
 	if err != nil {
-		return RebuildReport{}, fmt.Errorf("regenerating views: %w", err)
+		opts.Logger.Warn("archive: regenerating views failed during rebuild-index", "err", err)
+		viewsFailed++
+	}
+	for _, failure := range regenerated.Failures {
+		opts.Logger.Warn("archive: view path skipped during rebuild-index", "path", failure.Path, "err", failure.Err)
 	}
 	folders, err := c.ix.Folders()
 	if err != nil {
@@ -684,7 +716,7 @@ func rebuildReport(ctx context.Context, opts Options, c *core) (RebuildReport, e
 		}
 		entries += stats.Live + stats.Trashed
 	}
-	return RebuildReport{Records: c.j.LastSeq(), Entries: entries, ViewsLinked: regenerated.Linked, Torn: c.j.Torn()}, nil
+	return RebuildReport{Records: c.j.LastSeq(), Entries: entries, ViewsLinked: regenerated.Linked, ViewsFailed: viewsFailed, Torn: c.j.Torn()}, nil
 }
 
 // ScrubOffline takes the lock and runs one full scrub pass. It returns

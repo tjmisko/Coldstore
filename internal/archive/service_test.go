@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -436,6 +437,93 @@ func (c *countingReader) Close() error               { c.once.Do(c.onClose); ret
 
 // TestLockChild is the second process of the ErrLocked test; it does nothing
 // unless the parent set the environment.
+func TestPathConflicts(t *testing.T) {
+	// withConflictingJournal builds an archive whose journal holds placements
+	// "a" and "a/b" in one folder, as a daemon without the Resolve check could
+	// have written, plus one healthy placement "z.txt".
+	withConflictingJournal := func(t *testing.T) Options {
+		t.Helper()
+		opts := testOptions(t)
+		s := openService(t, opts)
+		first := mustIngest(t, s, "photos", "a", "alpha")
+		mustIngest(t, s, "photos", "z.txt", "zulu")
+		_, err := s.appendAndApply(context.Background(), []journal.Record{{
+			By: "test", Type: journal.TypePlacementSet, Folder: "photos", Path: "a/b", Item: first.Item,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return opts
+	}
+
+	t.Run("should open and link every non-conflicting placement when the index holds both a and a/b", func(t *testing.T) {
+		opts := withConflictingJournal(t)
+		if err := os.RemoveAll(filepath.Join(opts.Root, "views")); err != nil {
+			t.Fatal(err)
+		}
+		s, err := Open(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		for _, name := range []string{"a", "z.txt"} {
+			if _, err := os.Lstat(filepath.Join(opts.Root, "views", "photos", name)); err != nil {
+				t.Errorf("views/photos/%s missing: %v", name, err)
+			}
+		}
+		events, err := s.Index().Events("", "views_sync_failed", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var surfaced bool
+		for _, e := range events {
+			surfaced = surfaced || (e.Type == "views_sync_failed" && e.Path == "photos/a/b")
+		}
+		if !surfaced {
+			t.Fatalf("no views_sync_failed event for photos/a/b: %+v", events)
+		}
+	})
+
+	t.Run("should rebuild the index and report the failed view when the journal holds both a and a/b", func(t *testing.T) {
+		opts := withConflictingJournal(t)
+		if err := os.RemoveAll(filepath.Join(opts.Root, "views")); err != nil {
+			t.Fatal(err)
+		}
+		report, err := RebuildIndex(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("RebuildIndex: %v", err)
+		}
+		if report.ViewsFailed != 1 || report.ViewsLinked < 1 {
+			t.Fatalf("report = %+v", report)
+		}
+	})
+
+	t.Run("should reject with ErrPathConflict and write nothing when an arrival nests under a placed file", func(t *testing.T) {
+		s := openService(t, testOptions(t))
+		mustIngest(t, s, "photos", "a", "alpha")
+		before := s.core.j.LastSeq()
+		_, err := s.Ingest(context.Background(), "test", memArrival("photos", "a/b", "bravo"))
+		if !errors.Is(err, ingest.ErrPathConflict) {
+			t.Fatalf("err = %v, want ErrPathConflict", err)
+		}
+		if s.core.j.LastSeq() != before {
+			t.Fatal("a rejected arrival appended to the journal")
+		}
+	})
+
+	t.Run("should reject with ErrPathConflict when an arrival is the directory of a placed file", func(t *testing.T) {
+		s := openService(t, testOptions(t))
+		mustIngest(t, s, "photos", "a/b", "alpha")
+		_, err := s.Ingest(context.Background(), "test", memArrival("photos", "a", "bravo"))
+		if !errors.Is(err, ingest.ErrPathConflict) {
+			t.Fatalf("err = %v, want ErrPathConflict", err)
+		}
+	})
+}
+
 func TestLockChild(t *testing.T) {
 	root := os.Getenv("COLDSTORE_LOCKCHILD_ROOT")
 	if root == "" {
@@ -520,7 +608,7 @@ func TestServiceFaults(t *testing.T) {
 		if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 			t.Fatalf("sleeps = %v", got)
 		}
-		if status.State != "done" || status.FailedCount != 1 || len(status.Failed) != 1 || status.Failed[0].Path != "a.txt" {
+		if status.State != "failed" || !strings.Contains(status.Error, "run stopped after 1 files seen") || status.FailedCount != 1 || len(status.Failed) != 1 || status.Failed[0].Path != "a.txt" {
 			t.Fatalf("status %+v", status)
 		}
 		events, err := s.Index().Events("photos", "ingest_failed", 10)

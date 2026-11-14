@@ -273,6 +273,34 @@ func TestEntryIDs(t *testing.T) {
 	})
 }
 
+func TestPlacementPathConflict(t *testing.T) {
+	ix := openTemp(t)
+	a := hashOf("a")
+	s := (&script{}).folder("P", "collection").folder("Q", "collection").blob(a, 1).item("I", a).
+		place("P", "a", "I").place("P", "d/e/f", "I").place("P", "ab", "I").place("P", "a0", "I").place("Q", "q/r", "I")
+	mustApplyAll(t, ix, s)
+	cases := []struct {
+		name, folder, path, want string
+	}{
+		{"should report the ancestor placement when the path is nested under a placed path", "P", "a/b", "a"},
+		{"should report the deep ancestor when a placement is a parent several levels up", "P", "d/e/f/g/h", "d/e/f"},
+		{"should report the nested placement when the path is a prefix of a placed path", "P", "d", "d/e/f"},
+		{"should report nothing when only sibling names share the prefix characters", "P", "abc", ""},
+		{"should report nothing when the path is a new sibling of a placed file", "P", "d/e/g", ""},
+		{"should report nothing when the conflicting path is in another folder", "P", "q", ""},
+		{"should report nothing when the path is free", "P", "zzz/y", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, found, err := ix.PlacementPathConflict(tc.folder, tc.path)
+			must(t, err)
+			if found != (tc.want != "") || got != tc.want {
+				t.Fatalf("PlacementPathConflict(%s, %s) = %q, %v; want %q", tc.folder, tc.path, got, found, tc.want)
+			}
+		})
+	}
+}
+
 func TestQueries(t *testing.T) {
 	t.Run("should list placements of one hash in one folder when PlacementsByCurrentHash is called", func(t *testing.T) {
 		ix := openTemp(t)

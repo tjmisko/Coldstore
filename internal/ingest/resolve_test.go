@@ -72,6 +72,18 @@ func (s *fakeState) PlacementsByCurrentHash(folder string, h store.Hash) ([]inde
 	return out, nil
 }
 
+func (s *fakeState) PlacementPathConflict(folder, path string) (string, bool, error) {
+	for key := range s.placements {
+		if key[0] != folder {
+			continue
+		}
+		if strings.HasPrefix(path, key[1]+"/") || strings.HasPrefix(key[1], path+"/") {
+			return key[1], true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func (s *fakeState) Entry(id int64) (index.Entry, bool, error) {
 	for _, p := range s.placements {
 		if p.EntryID == id {
@@ -393,6 +405,51 @@ func TestNewItemID(t *testing.T) {
 		now := time.Now()
 		if NewItemID(now) == NewItemID(now) {
 			t.Fatal("two ids collided")
+		}
+	})
+}
+
+func TestResolvePathConflict(t *testing.T) {
+	h := hashOf("x")
+	arrival := func(folder, path string) Arrival { return Arrival{Folder: folder, Path: path} }
+	t.Run("should reject with ErrPathConflict when the path is nested under a placed file", func(t *testing.T) {
+		st := newFakeState("photos")
+		st.put("photos", "a", "I1", hashOf("old"), true)
+		recs, _, err := Resolve(st, arrival("photos", "a/b"), h, 1, "import", fixedID("NEW"), never)
+		if !errors.Is(err, ErrPathConflict) || len(recs) != 0 {
+			t.Fatalf("err = %v, recs = %v", err, recs)
+		}
+	})
+	t.Run("should reject with ErrPathConflict when the path is a directory prefix of a placed file", func(t *testing.T) {
+		st := newFakeState("photos")
+		st.put("photos", "a/b", "I1", hashOf("old"), true)
+		_, _, err := Resolve(st, arrival("photos", "a"), h, 1, "import", fixedID("NEW"), never)
+		if !errors.Is(err, ErrPathConflict) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("should reject with ErrPathConflict when a copy arrives at a conflicting path", func(t *testing.T) {
+		st := newFakeState("photos")
+		st.put("photos", "a", "I1", h, true)
+		_, _, err := Resolve(st, arrival("photos", "a/copy"), h, 1, "import", fixedID("NEW"), never)
+		if !errors.Is(err, ErrPathConflict) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("should accept when the conflicting path is in another folder", func(t *testing.T) {
+		st := newFakeState("photos", "books")
+		st.put("books", "a", "I1", hashOf("old"), true)
+		_, _, err := Resolve(st, arrival("photos", "a/b"), h, 1, "import", fixedID("NEW"), never)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("should accept when only a sibling shares the name prefix", func(t *testing.T) {
+		st := newFakeState("photos")
+		st.put("photos", "ab", "I1", hashOf("old"), true)
+		_, _, err := Resolve(st, arrival("photos", "a"), h, 1, "import", fixedID("NEW"), never)
+		if err != nil {
+			t.Fatal(err)
 		}
 	})
 }

@@ -83,6 +83,15 @@ func (f *fixture) place(item, path, content string) store.Hash {
 	return h
 }
 
+// placeUnsynced is place without the views.Sync, for placements the index
+// accepts but a filesystem cannot hold side by side.
+func (f *fixture) placeUnsynced(item, path, content string) {
+	f.t.Helper()
+	h := f.blob(content)
+	f.apply(journal.Record{Type: journal.TypeItemCreated, Item: journal.ItemID(item), Hash: h.String()})
+	f.apply(journal.Record{Type: journal.TypePlacementSet, Folder: "Photos", Path: path, Item: journal.ItemID(item)})
+}
+
 func (f *fixture) viewFile(parts ...string) string {
 	return filepath.Join(append([]string{f.root, "views"}, parts...)...)
 }
@@ -296,13 +305,13 @@ func TestRegenerate(t *testing.T) {
 		}
 	})
 
-	t.Run("should remove a file the index does not name when regenerating", func(t *testing.T) {
+	t.Run("should remove a stale blob link the index does not name when regenerating", func(t *testing.T) {
 		f := newFixture(t)
 		h := f.place("I1", "a.jpg", "alpha")
-		must(t, os.WriteFile(f.viewFile("Photos", "stray.txt"), []byte("x"), 0o644))
+		must(t, os.Link(f.st.Path(h), f.viewFile("Photos", "stray.txt")))
 		must(t, os.MkdirAll(f.viewFile("Ghost", "deep"), 0o755))
-		must(t, os.WriteFile(f.viewFile("Ghost", "deep", "f"), []byte("x"), 0o644))
-		must(t, os.WriteFile(f.viewFile("top.txt"), []byte("x"), 0o644))
+		must(t, os.Link(f.st.Path(h), f.viewFile("Ghost", "deep", "f")))
+		must(t, os.Link(f.st.Path(h), f.viewFile("top.txt")))
 		must(t, os.Symlink("/nonexistent", f.viewFile("Photos", "dangling")))
 		blobBefore, _ := os.ReadFile(f.st.Path(h))
 
@@ -378,6 +387,55 @@ func TestRegenerate(t *testing.T) {
 		}
 		if _, err := os.Lstat(f.viewFile("Photos", "b.jpg")); err != nil {
 			t.Fatalf("healthy link missing: %v", err)
+		}
+	})
+
+	t.Run("should leave a real file the index does not name and report it as foreign when regenerating", func(t *testing.T) {
+		f := newFixture(t)
+		f.place("I1", "a.jpg", "alpha")
+		must(t, os.MkdirAll(f.viewFile("Photos", "sub"), 0o755))
+		real := f.viewFile("Photos", "sub", "mine.txt")
+		must(t, os.WriteFile(real, []byte("irreplaceable"), 0o644))
+		report, err := f.tree.Regenerate(ctx, f.ix)
+		must(t, err)
+		if got, _ := os.ReadFile(real); string(got) != "irreplaceable" {
+			t.Fatalf("real file was touched: %q", got)
+		}
+		if report.Removed != 0 || len(report.Foreign) != 1 || report.Foreign[0] != real {
+			t.Fatalf("report = %+v", report)
+		}
+	})
+
+	t.Run("should keep going and report the path when a placement is nested under another placement", func(t *testing.T) {
+		f := newFixture(t)
+		f.place("I1", "a", "alpha")
+		f.placeUnsynced("I2", "a/b", "beta")
+		f.place("I3", "z.jpg", "gamma")
+		must(t, os.RemoveAll(filepath.Join(f.root, "views")))
+		report, err := f.tree.Regenerate(ctx, f.ix)
+		must(t, err)
+		if len(report.Failures) != 1 || report.Failures[0].Path != "Photos/a/b" || report.Failures[0].Err == nil {
+			t.Fatalf("report = %+v", report)
+		}
+		for _, name := range []string{"a", "z.jpg"} {
+			if _, err := os.Lstat(f.viewFile("Photos", name)); err != nil {
+				t.Errorf("%s missing: %v", name, err)
+			}
+		}
+	})
+
+	t.Run("should keep going and report the path when the directory is placed after its child", func(t *testing.T) {
+		f := newFixture(t)
+		must(t, os.MkdirAll(f.viewFile("Photos", "a"), 0o755)) // stale directory from an earlier tree
+		f.place("I1", "a/b", "alpha")
+		f.placeUnsynced("I2", "a", "beta")
+		report, err := f.tree.Regenerate(ctx, f.ix)
+		must(t, err)
+		if len(report.Failures) != 1 || report.Failures[0].Path != "Photos/a" {
+			t.Fatalf("report = %+v", report)
+		}
+		if _, err := os.Lstat(f.viewFile("Photos", "a", "b")); err != nil {
+			t.Fatalf("a/b missing: %v", err)
 		}
 	})
 

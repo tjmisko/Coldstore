@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -17,9 +18,27 @@ type State interface {
 	PlacementsByCurrentHash(folder string, h store.Hash) ([]index.Placement, error)
 	Entry(id int64) (index.Entry, bool, error)
 	Blob(h store.Hash) (index.BlobInfo, bool, error)
+	PlacementPathConflict(folder, path string) (string, bool, error)
 }
 
 var _ State = (*index.Index)(nil)
+
+// ErrPathConflict means the arrival's path cannot coexist with a placement in
+// the same folder: one is a directory prefix of the other ("a" and "a/b"). The
+// HTTP layer maps it to 409; the importer records it as a failure.
+var ErrPathConflict = errors.New("ingest: path conflicts with an existing placement")
+
+// checkPathFree rejects path when it clashes with a placement as file/directory.
+func checkPathFree(st State, folder, path string) error {
+	other, clash, err := st.PlacementPathConflict(folder, path)
+	if err != nil {
+		return fmt.Errorf("resolving %s/%s: %w", folder, path, err)
+	}
+	if clash {
+		return fmt.Errorf("resolving %s/%s: %w: %s/%s is placed", folder, path, ErrPathConflict, folder, other)
+	}
+	return nil
+}
 
 // Resolve is the decision table of design 4.4 as journal records, evaluated
 // top to bottom. It is pure: it reads state and returns records, it writes
@@ -145,6 +164,9 @@ func (r resolver) beside() ([]journal.Record, Result, error) {
 		return nil, Result{}, fmt.Errorf("resolving %s/%s: %w", r.a.Folder, besidePath, err)
 	}
 	if !found {
+		if err := checkPathFree(r.st, r.a.Folder, besidePath); err != nil {
+			return nil, Result{}, err
+		}
 		return r.newItem(besidePath, r.a.Path, OutcomePlacedBeside)
 	}
 	entry, ok, err := r.st.Entry(existing.EntryID)
@@ -159,6 +181,9 @@ func (r resolver) beside() ([]journal.Record, Result, error) {
 
 // atFreePath is rows 4 to 6: nothing is placed at the path.
 func (r resolver) atFreePath(pathGone func(folder, path string) bool) ([]journal.Record, Result, error) {
+	if err := checkPathFree(r.st, r.a.Folder, r.a.Path); err != nil {
+		return nil, Result{}, err
+	}
 	holders, err := r.st.PlacementsByCurrentHash(r.a.Folder, r.h)
 	if err != nil {
 		return nil, Result{}, fmt.Errorf("resolving %s/%s: %w", r.a.Folder, r.a.Path, err)

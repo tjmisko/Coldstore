@@ -154,6 +154,37 @@ func (ix *Index) PlacementAt(folder, path string) (Placement, bool, error) {
 	return p, true, nil
 }
 
+// PlacementPathConflict reports a placement in folder that cannot coexist with
+// path on a filesystem: one whose path is a directory prefix of path ("a" for
+// "a/b"), or one nested below path ("a/b" for "a"). It returns that placement's
+// path. Trashed placements count, because untrashing would revive the clash.
+// The descendant test is a range scan on (folder, path): every string with the
+// prefix "path/" sorts in ["path/", "path0"), '0' being the byte after '/'.
+func (ix *Index) PlacementPathConflict(folder, path string) (string, bool, error) {
+	segments := strings.Split(path, "/")
+	for i := 1; i < len(segments); i++ {
+		ancestor := strings.Join(segments[:i], "/")
+		_, found, err := ix.PlacementAt(folder, ancestor)
+		if err != nil {
+			return "", false, err
+		}
+		if found {
+			return ancestor, true, nil
+		}
+	}
+	var nested string
+	err := ix.read.QueryRow(`SELECT path FROM placements
+		WHERE folder = ? AND path >= ? AND path < ? ORDER BY path LIMIT 1`,
+		folder, path+"/", path+"0").Scan(&nested)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("checking path conflicts of %s/%s: %w", folder, path, err)
+	}
+	return nested, true, nil
+}
+
 func (ix *Index) queryPlacements(query string, args ...any) ([]Placement, error) {
 	rows, err := ix.read.Query(query, args...)
 	if err != nil {

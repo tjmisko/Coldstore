@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/tjmisko/coldstore/internal/crashpoint"
 	"github.com/tjmisko/coldstore/internal/fsx"
@@ -32,8 +33,21 @@ const TempSuffix = ".coldstore-view-tmp"
 // ErrBadPath is returned for a folder or path that could escape views/.
 var ErrBadPath = errors.New("views: path is not a safe relative path")
 
+// PathFailure is one path Regenerate could not bring into agreement with the
+// index. Views are derived data, so a failure never stops the rest of the pass.
+type PathFailure struct {
+	Path string // "<folder>/<path>" for an index placement, else the filesystem path
+	Err  error
+}
+
 type Report struct {
 	Linked, Removed int
+	// Failures lists every path that could not be linked, listed or removed.
+	Failures []PathFailure
+	// Foreign lists regular files in views/ that the index does not name and
+	// that are not links to a blob (link count 1). Prune leaves them alone: a
+	// person put real data there.
+	Foreign []string
 }
 
 type Tree struct {
@@ -262,7 +276,9 @@ func (t *Tree) makeParents(parts []string, dirs dirSet) error {
 	return nil
 }
 
-// Regenerate makes the whole tree agree with the index.
+// Regenerate makes the whole tree agree with the index. One bad path (a
+// file/directory clash, an unreadable directory) is recorded in the Report and
+// skipped; only a cancelled context or an unusable views root returns an error.
 func (t *Tree) Regenerate(ctx context.Context, ix *index.Index) (Report, error) {
 	var report Report
 	if err := t.fsys.MkdirAll(t.root, 0o755); err != nil {
@@ -273,22 +289,25 @@ func (t *Tree) Regenerate(ctx context.Context, ix *index.Index) (Report, error) 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		label := folder + "/" + path
 		parts, err := segments(folder, path)
 		if err != nil {
-			return err
+			report.Failures = append(report.Failures, PathFailure{Path: label, Err: err})
+			return nil
 		}
 		linked, err := t.ensureLink(parts, h, dirs)
 		if linked {
 			report.Linked++
 		}
-		return err
+		if err != nil {
+			report.Failures = append(report.Failures, PathFailure{Path: label, Err: err})
+		}
+		return nil
 	})
 	if err != nil {
 		return report, fmt.Errorf("regenerating views: %w", err)
 	}
-	removed, err := t.prune(ctx, ix, t.root, nil, dirs)
-	report.Removed = removed
-	if err != nil {
+	if err := t.prune(ctx, ix, t.root, nil, dirs, &report); err != nil {
 		return report, fmt.Errorf("regenerating views: %w", err)
 	}
 	if err := t.syncDirs(dirs); err != nil {
@@ -298,24 +317,23 @@ func (t *Tree) Regenerate(ctx context.Context, ix *index.Index) (Report, error) 
 }
 
 // prune removes files the index does not name and directories left empty.
-// rel holds the path segments of dir below the views root.
-func (t *Tree) prune(ctx context.Context, ix *index.Index, dir string, rel []string, dirs dirSet) (int, error) {
+// rel holds the path segments of dir below the views root. Only a cancelled
+// context is returned; every other failure is recorded in report.
+func (t *Tree) prune(ctx context.Context, ix *index.Index, dir string, rel []string, dirs dirSet, report *Report) error {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return err
 	}
 	entries, err := t.fsys.ReadDir(dir)
 	if err != nil {
-		return 0, fmt.Errorf("listing %s: %w", dir, err)
+		report.Failures = append(report.Failures, PathFailure{Path: dir, Err: fmt.Errorf("listing %s: %w", dir, err)})
+		return nil
 	}
-	removed := 0
 	for _, entry := range entries {
 		path := filepath.Join(dir, entry.Name())
 		childRel := append(append([]string(nil), rel...), entry.Name())
 		if entry.IsDir() {
-			n, err := t.prune(ctx, ix, path, childRel, dirs)
-			removed += n
-			if err != nil {
-				return removed, err
+			if err := t.prune(ctx, ix, path, childRel, dirs, report); err != nil {
+				return err
 			}
 			if len(childRel) > 0 {
 				t.removeIfEmpty(path, dir, dirs)
@@ -324,18 +342,43 @@ func (t *Tree) prune(ctx context.Context, ix *index.Index, dir string, rel []str
 		}
 		keep, err := t.indexNames(ix, entry, childRel)
 		if err != nil {
-			return removed, err
+			report.Failures = append(report.Failures, PathFailure{Path: path, Err: err})
+			continue
 		}
 		if keep {
 			continue
 		}
+		if t.isForeignFile(path, entry) {
+			report.Foreign = append(report.Foreign, path)
+			continue
+		}
 		if err := t.fsys.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return removed, fmt.Errorf("removing %s: %w", path, err)
+			report.Failures = append(report.Failures, PathFailure{Path: path, Err: fmt.Errorf("removing %s: %w", path, err)})
+			continue
 		}
 		dirs[dir] = struct{}{}
-		removed++
+		report.Removed++
 	}
-	return removed, nil
+	return nil
+}
+
+// isForeignFile reports whether path is a regular file with link count 1: not a
+// link to a blob (blobs always keep their own name), so real data that prune
+// must not delete. When the link count cannot be read the file is treated as
+// foreign, the safe side.
+func (t *Tree) isForeignFile(path string, entry fs.DirEntry) bool {
+	if !entry.Type().IsRegular() {
+		return false
+	}
+	info, err := t.fsys.Lstat(path)
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return true
+	}
+	return stat.Nlink <= 1
 }
 
 func (t *Tree) removeIfEmpty(path, parent string, dirs dirSet) {
