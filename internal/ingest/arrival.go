@@ -61,6 +61,10 @@ var (
 	ErrCollectionUnknown = errors.New("ingest: no such collection")
 	// ErrChangedWhileReading means a source file changed size or mtime while it was read.
 	ErrChangedWhileReading = errors.New("ingest: file changed while reading")
+	// ErrSourceRead wraps an error from opening or reading the SOURCE of an
+	// arrival (the disk being imported from, not the archive). A failing source
+	// is read once and recorded; it is never retried.
+	ErrSourceRead = errors.New("ingest: cannot read the source file")
 )
 
 const (

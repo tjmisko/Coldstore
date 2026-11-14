@@ -53,13 +53,14 @@ func startServer(t *testing.T, svc Archive, root string) *Client {
 
 // fakeArchive answers every call with a canned error.
 type fakeArchive struct {
-	importErr, scrubErr error
+	importErr, scrubErr, cancelErr error
 }
 
 func (f fakeArchive) ImportStart(string, string) (int64, error) { return 0, f.importErr }
 func (f fakeArchive) ImportStatus(int64) (archive.ImportStatus, bool) {
 	return archive.ImportStatus{}, false
 }
+func (f fakeArchive) ImportCancel(int64) error         { return f.cancelErr }
 func (f fakeArchive) ScrubStart(int64) error           { return f.scrubErr }
 func (f fakeArchive) ScrubStatus() archive.ScrubStatus { return archive.ScrubStatus{} }
 
@@ -137,6 +138,31 @@ func TestControl(t *testing.T) {
 		}
 		if _, err := client.ImportStatus(t.Context(), 999); statusCode(t, err) != 404 {
 			t.Fatalf("unknown import: %v", err)
+		}
+	})
+
+	t.Run("should answer 202, 404 and 409 when a cancel is accepted, unknown or too late", func(t *testing.T) {
+		cases := []struct {
+			name string
+			err  error
+			want int
+		}{
+			{"accepted", nil, 0},
+			{"unknown", archive.ErrImportUnknown, 404},
+			{"finished", archive.ErrImportNotRunning, 409},
+		}
+		for _, tc := range cases {
+			client := startServer(t, fakeArchive{cancelErr: tc.err}, shortDir(t))
+			err := client.CancelImport(t.Context(), 7)
+			if tc.want == 0 {
+				if err != nil {
+					t.Errorf("%s: err = %v", tc.name, err)
+				}
+				continue
+			}
+			if got := statusCode(t, err); got != tc.want {
+				t.Errorf("%s: status %d, want %d", tc.name, got, tc.want)
+			}
 		}
 	})
 

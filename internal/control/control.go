@@ -41,6 +41,7 @@ func SocketPath(root string) string { return filepath.Join(root, SocketName) }
 type Archive interface {
 	ImportStart(collection, dir string) (int64, error)
 	ImportStatus(id int64) (archive.ImportStatus, bool)
+	ImportCancel(id int64) error
 	ScrubStart(rateBytesPerSec int64) error
 	ScrubStatus() archive.ScrubStatus
 }
@@ -146,6 +147,7 @@ func newHandler(svc Archive) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /control/v1/imports", func(w http.ResponseWriter, r *http.Request) { startImport(svc, w, r) })
 	mux.HandleFunc("GET /control/v1/imports/{id}", func(w http.ResponseWriter, r *http.Request) { importStatus(svc, w, r) })
+	mux.HandleFunc("POST /control/v1/imports/{id}/cancel", func(w http.ResponseWriter, r *http.Request) { cancelImport(svc, w, r) })
 	mux.HandleFunc("POST /control/v1/scrub", func(w http.ResponseWriter, r *http.Request) { startScrub(svc, w, r) })
 	mux.HandleFunc("GET /control/v1/scrub", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, svc.ScrubStatus())
@@ -188,6 +190,25 @@ func importStatus(svc Archive, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+func cancelImport(svc Archive, w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no such import")
+		return
+	}
+	err = svc.ImportCancel(id)
+	switch {
+	case errors.Is(err, archive.ErrImportUnknown):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, archive.ErrImportNotRunning):
+		writeError(w, http.StatusConflict, err.Error())
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	default:
+		writeJSON(w, http.StatusAccepted, map[string]bool{"cancelling": true})
+	}
 }
 
 func startScrub(svc Archive, w http.ResponseWriter, r *http.Request) {
@@ -307,6 +328,12 @@ func (c *Client) ImportStatus(ctx context.Context, id int64) (archive.ImportStat
 	var status archive.ImportStatus
 	err := c.do(ctx, http.MethodGet, "/control/v1/imports/"+strconv.FormatInt(id, 10), nil, &status)
 	return status, err
+}
+
+// CancelImport asks the daemon to stop a running import. A 409 StatusError
+// means it had already finished; a 404 that the daemon does not know the id.
+func (c *Client) CancelImport(ctx context.Context, id int64) error {
+	return c.do(ctx, http.MethodPost, "/control/v1/imports/"+strconv.FormatInt(id, 10)+"/cancel", nil, nil)
 }
 
 // StartScrub asks the daemon to scrub. rateMiBPerSec 0 is unthrottled.

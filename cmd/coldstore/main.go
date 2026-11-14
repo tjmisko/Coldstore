@@ -46,6 +46,13 @@ func main() {
 	renameFolderBudget := flag.String("rename-folder-budget", "",
 		"temporary positive budget for --rename-folder-label (for example 2TB)")
 	flag.Parse()
+	// Anything left after the flags is a subcommand typed in the wrong place
+	// ("--config X import dir"). Without this check it would start a second
+	// daemon on the live catalog, so refuse before anything is opened.
+	if err := rejectPositionalArguments(flag.Args()); err != nil {
+		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
+		os.Exit(1)
+	}
 	if err := validateModeFlags(*scanOnce, *checkOnly, *statusOnly, *jsonOutput,
 		*renameFolderLabel, *renameFolderBudget); err != nil {
 		fmt.Fprintf(os.Stderr, "coldstore: %v\n", err)
@@ -151,6 +158,20 @@ func main() {
 		return
 	}
 
+	// Take the archive lock BEFORE the legacy catalog is touched, so a second
+	// process stops here instead of after it has reconciled folders and resumed
+	// jobs on a live daemon's data. archive.Open takes the same lock itself, so
+	// it is released just before that call. The kernel drops it on any exit.
+	var startupLock *journal.Lock
+	if !*scanOnce && archiveConfigured(cfg) {
+		startupLock, err = journal.AcquireLock(filepath.Join(cfg.Storage.ColdStoragePath, "journal"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "coldstore: %s\n", archiveOpenAdvice(fmt.Errorf("opening archive: %w", err)))
+			os.Exit(1)
+		}
+		defer startupLock.Release()
+	}
+
 	cat, err := catalog.Open(dbPath)
 	if err != nil {
 		logger.Error("failed to open catalog", "error", err)
@@ -220,6 +241,11 @@ func main() {
 	var archiveService *archive.Service
 	var controlServer *control.Server
 	if archiveConfigured(cfg) {
+		if startupLock != nil {
+			if err := startupLock.Release(); err != nil {
+				logger.Warn("releasing the startup archive lock", "error", err)
+			}
+		}
 		archiveService, controlServer = openArchive(ctx, cfg, cat, logger)
 	}
 
@@ -313,6 +339,16 @@ func shutdownServing(srv *api.Server, controlServer *control.Server, service *ar
 	if err := service.Close(); err != nil {
 		logger.Error("closing the archive", "error", err)
 	}
+}
+
+// rejectPositionalArguments refuses arguments left over after flag parsing.
+func rejectPositionalArguments(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("unexpected argument %q: coldstore takes no positional arguments in daemon mode; "+
+		"a subcommand must come first, e.g. `coldstore import <dir> --collection <name> --config <file>` "+
+		"(subcommands: import, scrub, rebuild-index, format-version)", args[0])
 }
 
 func validateModeFlags(scan, check, status, jsonOutput bool, renameSpec, renameBudget string) error {

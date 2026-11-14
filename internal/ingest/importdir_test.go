@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -216,3 +217,218 @@ func TestImportDir(t *testing.T) {
 		}
 	})
 }
+
+type reportLog struct {
+	mu         sync.Mutex
+	skipped    map[string]string
+	unreadable map[string]error
+}
+
+func (r *reportLog) skip(path, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.skipped == nil {
+		r.skipped = map[string]string{}
+	}
+	r.skipped[path] = reason
+}
+
+func (r *reportLog) unread(path string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.unreadable == nil {
+		r.unreadable = map[string]error{}
+	}
+	r.unreadable[path] = err
+}
+
+func collectReporting(root string, log *reportLog) []Arrival {
+	var out []Arrival
+	for a := range ImportDirReporting(root, "photos", log.skip, log.unread).Arrivals(context.Background()) {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+func TestImportDirReporting(t *testing.T) {
+	t.Run("should report an unreadable directory as unreadable and not as skipped when ReadDir fails", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("root reads everything")
+		}
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, "locked", "inside.txt"), "x")
+		writeFile(t, filepath.Join(root, "ok.txt"), "y")
+		locked := filepath.Join(root, "locked")
+		if err := os.Chmod(locked, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+		log := &reportLog{}
+
+		arrivals := collectReporting(root, log)
+
+		if len(arrivals) != 1 || arrivals[0].Path != "ok.txt" {
+			t.Fatalf("arrivals %+v", arrivals)
+		}
+		if err := log.unreadable[locked]; !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("unreadable = %v", log.unreadable)
+		}
+		if len(log.skipped) != 0 {
+			t.Fatalf("benign skips = %v", log.skipped)
+		}
+	})
+
+	t.Run("should keep walking the entries already read when the directory read fails part way", func(t *testing.T) {
+		// WalkDir calls the visitor a second time with the ReadDir error and
+		// still walks the partial listing unless the visitor returns SkipDir.
+		log := &reportLog{}
+		source := dirSource{root: "/x", collection: "photos", skipped: log.skip, unreadable: log.unread}
+		readErr := errors.New("input/output error")
+
+		got := source.visit(context.Background(), nil, "/x/dir", fakeDirEntry{name: "dir", dir: true}, readErr)
+
+		if got != nil {
+			t.Fatalf("visit returned %v; SkipDir would discard the partial listing", got)
+		}
+		if !errors.Is(log.unreadable["/x/dir"], readErr) {
+			t.Fatalf("unreadable = %v", log.unreadable)
+		}
+	})
+
+	t.Run("should report a directory as unreadable when its name is not valid UTF-8", func(t *testing.T) {
+		root := t.TempDir()
+		bad := filepath.Join(root, "bad\xffdir")
+		if err := os.Mkdir(bad, 0o755); err != nil {
+			t.Skipf("filesystem refuses the name: %v", err)
+		}
+		writeFile(t, filepath.Join(bad, "inside.txt"), "x")
+		writeFile(t, filepath.Join(root, "good.txt"), "y")
+		log := &reportLog{}
+
+		arrivals := collectReporting(root, log)
+
+		if len(arrivals) != 1 || arrivals[0].Path != "good.txt" {
+			t.Fatalf("arrivals = %+v", arrivals)
+		}
+		if log.unreadable[bad] == nil || len(log.skipped) != 0 {
+			t.Fatalf("skipped %v unreadable %v", log.skipped, log.unreadable)
+		}
+	})
+
+	t.Run("should count symlinks and FIFOs as benign skips and never as unreadable", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, "real.txt"), "x")
+		if err := os.Symlink(filepath.Join(root, "real.txt"), filepath.Join(root, "link")); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Mkfifo(filepath.Join(root, "pipe"), 0o644); err != nil {
+			t.Skipf("mkfifo: %v", err)
+		}
+		log := &reportLog{}
+
+		collectReporting(root, log)
+
+		if len(log.skipped) != 2 || len(log.unreadable) != 0 {
+			t.Fatalf("skipped %v unreadable %v", log.skipped, log.unreadable)
+		}
+	})
+
+	t.Run("should import the target when the root is a symlink to a directory", func(t *testing.T) {
+		target := t.TempDir()
+		writeFile(t, filepath.Join(target, "a.txt"), "aaa")
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+		log := &reportLog{}
+
+		arrivals := collectReporting(link, log)
+
+		if len(arrivals) != 1 || arrivals[0].Path != "a.txt" || len(log.skipped) != 0 || len(log.unreadable) != 0 {
+			t.Fatalf("arrivals %+v skipped %v unreadable %v", arrivals, log.skipped, log.unreadable)
+		}
+	})
+
+	t.Run("should report the root as unreadable when it does not exist", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "missing")
+		log := &reportLog{}
+
+		arrivals := collectReporting(root, log)
+
+		if len(arrivals) != 0 || log.unreadable[root] == nil {
+			t.Fatalf("arrivals %+v unreadable %v", arrivals, log.unreadable)
+		}
+	})
+
+	t.Run("should wrap an open failure in ErrSourceRead when the file is unreadable", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("root reads everything")
+		}
+		root := t.TempDir()
+		path := filepath.Join(root, "secret.txt")
+		writeFile(t, path, "x")
+		if err := os.Chmod(path, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		arrivals := collectReporting(root, &reportLog{})
+
+		_, err := arrivals[0].Open()
+
+		if !errors.Is(err, ErrSourceRead) || !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("should wrap a read failure in ErrSourceRead when the disk returns an I/O error", func(t *testing.T) {
+		dir := t.TempDir()
+		// Reading a directory descriptor fails with EISDIR, a stand-in for EIO.
+		f, err := os.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader := &stableFile{file: f}
+		defer reader.Close()
+
+		_, err = reader.Read(make([]byte, 8))
+
+		if !errors.Is(err, ErrSourceRead) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("should not wrap ErrChangedWhileReading in ErrSourceRead when the file grows", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "a.txt")
+		writeFile(t, path, "abc")
+		rc, err := collectReporting(root, &reportLog{})[0].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rc.Close()
+		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		_, _ = f.WriteString("more")
+		f.Close()
+
+		_, err = io.ReadAll(rc)
+
+		if !errors.Is(err, ErrChangedWhileReading) || errors.Is(err, ErrSourceRead) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+type fakeDirEntry struct {
+	name string
+	dir  bool
+}
+
+func (f fakeDirEntry) Name() string { return f.name }
+func (f fakeDirEntry) IsDir() bool  { return f.dir }
+func (f fakeDirEntry) Type() fs.FileMode {
+	if f.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (f fakeDirEntry) Info() (fs.FileInfo, error) { return nil, errors.New("not needed") }

@@ -37,6 +37,10 @@ const (
 
 	defaultConfigPath      = "coldstore.toml"
 	failuresPrinted        = 20
+	importRunning          = "running"
+	importDone             = "done"
+	importCancelled        = "cancelled"
+	cancelRequestTimeout   = 10 * time.Second
 	scrubRateUnset         = -1
 	bytesPerMiBForReports  = 1 << 20
 	daemonRequiredMessage  = "coldstore import needs the running daemon; it is the only journal writer"
@@ -193,13 +197,17 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 func followImport(ctx context.Context, client *control.Client, id int64, stdout, stderr io.Writer) int {
 	ticker := time.NewTicker(importPollInterval)
 	defer ticker.Stop()
+	// Polling and the cancel request must outlive Ctrl-C: the interrupt is
+	// handled in the select below, not by failing a half-sent request.
+	pollCtx := context.WithoutCancel(ctx)
+	interrupted := ctx.Done()
 	for {
-		status, err := client.ImportStatus(ctx, id)
+		status, err := client.ImportStatus(pollCtx, id)
 		if err != nil {
 			fmt.Fprintf(stderr, "coldstore: reading import progress (the import may still be running): %v\n", err)
 			return exitArchiveFailure
 		}
-		if status.State != "running" {
+		if status.State != importRunning {
 			return summariseImport(status, stdout, stderr)
 		}
 		fmt.Fprintf(stdout, "  seen %d  created %d  unchanged %d  other %d  failed %d  %d bytes\n",
@@ -207,15 +215,25 @@ func followImport(ctx context.Context, client *control.Client, id int64, stdout,
 			status.FailedCount, status.BytesIngested)
 		select {
 		case <-ticker.C:
-		case <-ctx.Done():
-			fmt.Fprintln(stderr, "coldstore: interrupted; the import continues in the daemon")
-			return exitArchiveFailure
+		case <-interrupted:
+			// Ctrl-C asks the daemon to stop this run, then waits for it to
+			// say so: leaving it running would hide a half-done import.
+			interrupted = nil
+			fmt.Fprintln(stderr, "coldstore: interrupted; asking the daemon to cancel the import (the file in flight finishes first)")
+			cancelCtx, stop := context.WithTimeout(pollCtx, cancelRequestTimeout)
+			err := client.CancelImport(cancelCtx, id)
+			stop()
+			var refused *control.StatusError
+			if err != nil && !(errors.As(err, &refused) && refused.Code == 409) {
+				fmt.Fprintf(stderr, "coldstore: could not cancel the import; it continues in the daemon: %v\n", err)
+				return exitArchiveFailure
+			}
 		}
 	}
 }
 
 func summariseImport(status archive.ImportStatus, stdout, stderr io.Writer) int {
-	fmt.Fprintf(stdout, "import %d %s: seen %d, created %d, unchanged %d, other %d, skipped %d, failed %d, %d bytes\n",
+	fmt.Fprintf(stdout, "import %d %s: seen %d, created %d, unchanged %d, other %d, skipped (benign) %d, failed %d, %d bytes\n",
 		status.ID, status.State, status.FilesSeen, status.FilesCreated, status.FilesUnchanged,
 		status.FilesOther, status.SkippedCount, status.FailedCount, status.BytesIngested)
 	for i, failure := range status.Failed {
@@ -225,10 +243,20 @@ func summariseImport(status archive.ImportStatus, stdout, stderr io.Writer) int 
 		}
 		fmt.Fprintf(stderr, "  failed %s: %s\n", failure.Path, failure.Error)
 	}
-	if status.Error != "" {
+	if status.UnreadableCount > 0 {
+		fmt.Fprintf(stderr, "coldstore: %d path(s) could not be read: the import is INCOMPLETE; "+
+			"fix the source and run it again (imports are idempotent)\n", status.UnreadableCount)
+	}
+	if status.ReportPath != "" {
+		fmt.Fprintf(stderr, "coldstore: every failed or unreadable path is listed in %s\n", status.ReportPath)
+	}
+	if status.State == importCancelled {
+		fmt.Fprintf(stderr, "coldstore: the import was CANCELLED after %d files; run it again to resume\n", status.FilesSeen)
+	}
+	if status.Error != "" && status.State != importCancelled {
 		fmt.Fprintf(stderr, "coldstore: the import failed: %s\n", status.Error)
 	}
-	if status.State == "done" && status.FailedCount == 0 {
+	if status.State == importDone && status.FailedCount == 0 && status.UnreadableCount == 0 {
 		return exitArchiveOK
 	}
 	return exitArchiveFailure
