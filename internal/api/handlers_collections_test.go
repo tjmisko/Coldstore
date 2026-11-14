@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tjmisko/coldstore/internal/archive"
@@ -716,6 +718,56 @@ func TestVerifiedDownload(t *testing.T) {
 		}
 	})
 
+	// lockBlobDirectory makes the blob's directory unsearchable so that stat on the
+	// blob fails with EACCES, an error that says nothing about the blob.
+	lockBlobDirectory := func(t *testing.T, service *archive.Service, hexHash string) {
+		t.Helper()
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		hash, err := store.ParseHash(hexHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Dir(service.Store().Path(hash))
+		if err := os.Chmod(dir, 0o000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	}
+
+	t.Run("should answer 500 and mark nothing bad when stat of the blob fails with EACCES", func(t *testing.T) {
+		srv, service := setupArchiveServer(t)
+		uploaded := mustPut(t, srv, "photos", "notes.txt", "0123456789")
+		hash, _ := store.ParseHash(uploaded.Hash)
+		lockBlobDirectory(t, service, uploaded.Hash)
+
+		rec := send(srv, http.MethodGet, fmt.Sprintf("/api/v1/files/%d/preview", uploaded.ID), nil, nil)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("preview = %d %s, want 500", rec.Code, rec.Body.String())
+		}
+		info, _, err := service.Index().Blob(hash)
+		if err != nil || info.Bad {
+			t.Fatalf("blob info %+v err %v: a transient stat error marked the blob bad", info, err)
+		}
+		if events, _ := service.Index().Events("", "blob_bad", 10); len(events) != 0 {
+			t.Fatalf("%d blob_bad events", len(events))
+		}
+	})
+
+	t.Run("should answer 500 and not 404 to HEAD when stat of the blob fails with EACCES", func(t *testing.T) {
+		srv, service := setupArchiveServer(t)
+		uploaded := mustPut(t, srv, "photos", "notes.txt", "0123456789")
+		lockBlobDirectory(t, service, uploaded.Hash)
+
+		rec := send(srv, http.MethodHead, "/api/v1/blobs/"+uploaded.Hash, nil, nil)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("HEAD = %d, want 500", rec.Code)
+		}
+	})
+
 	t.Run("should answer 404 when the entry does not exist", func(t *testing.T) {
 		srv, _ := setupArchiveServer(t)
 		rec := send(srv, http.MethodGet, fmt.Sprintf("/api/v1/files/%d/download", apiID(4242)), nil, nil)
@@ -776,4 +828,59 @@ func readAll(url string) (int, error) {
 	defer resp.Body.Close()
 	got, err := io.ReadAll(resp.Body)
 	return len(got), err
+}
+
+// failingReader yields some bytes, then err.
+type failingReader struct {
+	data []byte
+	err  error
+}
+
+func (r *failingReader) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, r.err
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, nil
+}
+
+func TestStreamVerifiedReadErrors(t *testing.T) {
+	const body = "0123456789"
+	run := func(t *testing.T, readErr error) (aborted bool, bad bool, badEvents int) {
+		t.Helper()
+		srv, service := setupArchiveServer(t)
+		uploaded := mustPut(t, srv, "photos", "notes.txt", body)
+		hash, _ := store.ParseHash(uploaded.Hash)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					aborted = r == http.ErrAbortHandler
+				}
+			}()
+			srv.streamVerified(httptest.NewRecorder(), &failingReader{data: []byte(body[:4]), err: readErr}, int64(len(body)), hash)
+		}()
+		info, _, err := service.Index().Blob(hash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, _ := service.Index().Events("", "blob_bad", 10)
+		return aborted, info.Bad, len(events)
+	}
+
+	t.Run("should abort and mark nothing bad when the read fails with a non-EIO error", func(t *testing.T) {
+		for _, cause := range []error{syscall.ENOMEM, syscall.EBADF, syscall.EINTR} {
+			aborted, bad, events := run(t, cause)
+			if !aborted || bad || events != 0 {
+				t.Fatalf("%v: aborted=%v bad=%v blob_bad events=%d, want abort with nothing marked", cause, aborted, bad, events)
+			}
+		}
+	})
+
+	t.Run("should abort and mark the blob bad when the read fails with EIO", func(t *testing.T) {
+		aborted, bad, events := run(t, &fs.PathError{Op: "read", Err: syscall.EIO})
+		if !aborted || !bad || events != 1 {
+			t.Fatalf("aborted=%v bad=%v blob_bad events=%d, want abort and bad", aborted, bad, events)
+		}
+	})
 }

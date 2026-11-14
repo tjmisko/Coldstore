@@ -204,9 +204,9 @@ func TestReceipt(t *testing.T) {
 			t.Fatalf("lines %+v err %v", lines, err)
 		}
 		want := []ReceiptLine{
-			{Hash: inPhotos.Hash.String(), Held: true, Verified: true, InCollection: true, Size: 5},
-			{Hash: inBooks.Hash.String(), Held: true, Verified: true, InCollection: false, Size: 5},
-			{Hash: unknown.String()},
+			{Hash: inPhotos.Hash.String(), Held: true, Verified: true, InCollection: true, Size: 5, Status: ReceiptVerified},
+			{Hash: inBooks.Hash.String(), Held: true, Verified: true, InCollection: false, Size: 5, Status: ReceiptVerified},
+			{Hash: unknown.String(), Status: ReceiptNotHeld},
 		}
 		for i := range want {
 			if lines[i] != want[i] {
@@ -241,7 +241,7 @@ func TestReceipt(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !lines[0].Held || lines[0].Verified {
+		if !lines[0].Held || lines[0].Verified || lines[0].Status != ReceiptBad {
 			t.Fatalf("line %+v", lines[0])
 		}
 		info, _, err := s.Index().Blob(a.Hash)

@@ -1,6 +1,7 @@
 // Package store is the content-addressed blob store of the archive core. A blob
 // lives at blobs/sha256/ab/cd/<hash> under the archive root, is written once,
-// is mode 0444, and is never replaced or deleted by this package.
+// is mode 0444, and is never deleted by this package. The one replacement is the
+// repair of a blob that fails verification, by bytes that hash to its name.
 package store
 
 import (
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"crypto/sha256"
 
@@ -42,16 +45,35 @@ const (
 	ReasonUnreadable   = "unreadable"
 )
 
-// CorruptError is returned by Verify, and by Put when the store already holds
-// a blob under the hash and that blob no longer verifies.
+// CorruptError is returned by Verify when the bytes of a blob are bad: they hash
+// to something else, end early, or the device reported an I/O error (EIO)
+// reading them. It is evidence about the blob and nothing else. A transient
+// failure (EMFILE, EACCES, EINTR, a cancelled context) is an ordinary error and
+// never a CorruptError, so callers may mark a blob bad only on a CorruptError.
 type CorruptError struct {
 	Hash   Hash
 	Got    Hash   // zero when the blob could not be read to the end
 	Reason string // "hash_mismatch" | "truncated" | "unreadable"
+	Err    error  // the device error behind "unreadable"; nil otherwise
 }
 
 func (e *CorruptError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("store: blob %s is corrupt: %s: %v", e.Hash, e.Reason, e.Err)
+	}
 	return fmt.Sprintf("store: blob %s is corrupt: %s", e.Hash, e.Reason)
+}
+
+func (e *CorruptError) Unwrap() error { return e.Err }
+
+// verifyIOError classifies a failure to open, stat or read a blob. Only an I/O
+// error from the device is evidence about the bytes; everything else is
+// returned as an ordinary wrapped error that is not a CorruptError.
+func verifyIOError(h Hash, step string, err error) error {
+	if errors.Is(err, syscall.EIO) {
+		return &CorruptError{Hash: h, Reason: ReasonUnreadable, Err: err}
+	}
+	return fmt.Errorf("verifying blob %s: %s: %w", h, step, err)
 }
 
 const copyBufferBytes = 1 << 20
@@ -109,12 +131,28 @@ func (d *Disk) removeStaleStaging() error {
 		return fmt.Errorf("opening store: listing tmp: %w", err)
 	}
 	for _, entry := range entries {
-		name := filepath.Join(d.tmpDir(), entry.Name())
-		if err := d.fsys.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("opening store: removing stale staging file: %w", err)
-		}
+		d.removeStaleEntry(filepath.Join(d.tmpDir(), entry.Name()), entry.IsDir())
 	}
 	return nil
+}
+
+// removeStaleEntry removes one entry of tmp/, recursing into a directory. A
+// stale entry that cannot be removed is logged and skipped: it is never a
+// reason to refuse to open the store.
+func (d *Disk) removeStaleEntry(path string, isDir bool) {
+	if isDir {
+		children, err := d.fsys.ReadDir(path)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			logger().Warn("store: skipping stale staging directory", "path", path, "err", err)
+			return
+		}
+		for _, child := range children {
+			d.removeStaleEntry(filepath.Join(path, child.Name()), child.IsDir())
+		}
+	}
+	if err := d.fsys.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		logger().Warn("store: skipping stale staging entry", "path", path, "err", err)
+	}
 }
 
 // Path is the absolute path of the blob file for h.
@@ -134,6 +172,19 @@ func (d *Disk) Has(h Hash) (size int64, ok bool, err error) {
 	return info.Size(), true, nil
 }
 
+// ModTime is the modification time of the blob file, or ErrNotFound. A blob is
+// written once, so this is when its bytes were staged.
+func (d *Disk) ModTime(h Hash) (time.Time, error) {
+	info, err := d.fsys.Stat(d.Path(h))
+	if errors.Is(err, fs.ErrNotExist) {
+		return time.Time{}, fmt.Errorf("stat blob %s: %w", h, ErrNotFound)
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("stat blob %s: %w", h, err)
+	}
+	return info.ModTime(), nil
+}
+
 // Open returns the blob for reading, or ErrNotFound.
 func (d *Disk) Open(h Hash) (io.ReadSeekCloser, error) {
 	file, err := d.fsys.Open(d.Path(h))
@@ -147,7 +198,9 @@ func (d *Disk) Open(h Hash) (io.ReadSeekCloser, error) {
 }
 
 // Verify re-hashes the blob from disk. It returns ErrNotFound when the blob is
-// absent and *CorruptError when it does not hash to h.
+// absent and *CorruptError when its bytes are bad. Any other failure (EMFILE,
+// EACCES, a cancelled context) is an ordinary error: it says nothing about
+// the blob. Cached pages are dropped first so the bytes come from the device.
 //
 // The store keeps no length beside a blob, so Verify can only call a blob
 // "truncated" when the file ends before the length its own stat promised.
@@ -168,13 +221,14 @@ func (d *Disk) verify(ctx context.Context, h Hash, wantSize int64) error {
 		return fmt.Errorf("verifying blob %s: %w", h, ErrNotFound)
 	}
 	if err != nil {
-		return &CorruptError{Hash: h, Reason: ReasonUnreadable}
+		return verifyIOError(h, "opening", err)
 	}
 	defer file.Close()
+	dropPageCache(file)
 
 	info, err := file.Stat()
 	if err != nil {
-		return &CorruptError{Hash: h, Reason: ReasonUnreadable}
+		return verifyIOError(h, "stat", err)
 	}
 	promised := info.Size()
 	if wantSize >= 0 {
@@ -186,7 +240,7 @@ func (d *Disk) verify(ctx context.Context, h Hash, wantSize int64) error {
 		if ctx.Err() != nil {
 			return fmt.Errorf("verifying blob %s: %w", h, ctx.Err())
 		}
-		return &CorruptError{Hash: h, Reason: ReasonUnreadable}
+		return verifyIOError(h, "reading", err)
 	}
 	if n < promised {
 		return &CorruptError{Hash: h, Reason: ReasonTruncated}

@@ -20,6 +20,18 @@ const (
 	ReasonMissing = "missing"
 
 	pageBlobs = 1000
+
+	// MaxErroredBlobs ends a pass with an error once this many named blobs have
+	// failed with ordinary errors: that many is a systemic fault (EMFILE storm,
+	// an unreadable shard directory), not a few unlucky blobs, and the pass must
+	// not be recorded as completed. It also keeps the page query under the
+	// index's id cap.
+	MaxErroredBlobs = 10000
+
+	// OrphanGrace is how old a blob file must be before it is reported as an
+	// orphan. Put links a blob before the journal record that names it is
+	// appended, so a younger unnamed blob is an ingest in flight.
+	OrphanGrace = 10 * time.Minute
 )
 
 type Finding struct {
@@ -29,11 +41,21 @@ type Finding struct {
 }
 
 type Report struct {
-	Checked               int
-	CheckedBytes          int64
-	Findings              []Finding
-	Stray                 []string // files under blobs/ that are not hash-named
+	Checked      int
+	CheckedBytes int64
+	Findings     []Finding
+	Stray        []string // files under blobs/ that are not hash-named
+	// Unverified lists blobs that could not be verified this pass because of an
+	// ordinary error (EMFILE, EACCES, ...). They are not flagged bad and not
+	// stamped, so the next pass retries them.
+	Unverified            []Unverified
 	StartedAt, FinishedAt time.Time
+}
+
+// Unverified is one blob scrub could not reach a verdict on.
+type Unverified struct {
+	Hash  store.Hash
+	Error string
 }
 
 type Options struct {
@@ -48,6 +70,9 @@ type runner struct {
 	ix     *index.Index
 	opts   Options
 	report Report
+	// errored holds the named blobs that failed to verify this pass. They stay
+	// unstamped, so without this set they would head every page forever.
+	errored map[store.Hash]bool
 }
 
 // Run cross-checks store and index both ways, marks bad blobs in the index,
@@ -61,7 +86,7 @@ func Run(ctx context.Context, st *store.Disk, ix *index.Index, opts Options) (Re
 	if opts.Sleep == nil {
 		opts.Sleep = time.Sleep
 	}
-	r := &runner{st: st, ix: ix, opts: opts}
+	r := &runner{st: st, ix: ix, opts: opts, errored: map[store.Hash]bool{}}
 	r.report.StartedAt = opts.Now()
 	err := r.run(ctx)
 	r.report.FinishedAt = opts.Now()
@@ -90,12 +115,18 @@ func (r *runner) checkNamedBlobs(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		page, err := r.ix.BlobsByVerifiedAge(pageBlobs)
+		// Errored blobs stay unstamped and so stay at the front of the order:
+		// ask for enough extra rows that a full page of unattempted blobs follows.
+		page, err := r.ix.BlobsByVerifiedAge(pageBlobs + len(r.errored))
 		if err != nil {
 			return fmt.Errorf("scrubbing: %w", err)
 		}
+		page = r.withoutErrored(page)
 		if len(page) == 0 {
 			return nil
+		}
+		if len(page) > pageBlobs {
+			page = page[:pageBlobs]
 		}
 		first, ok, err := r.ix.Blob(page[0])
 		if err != nil {
@@ -108,8 +139,25 @@ func (r *runner) checkNamedBlobs(ctx context.Context) error {
 			if err := r.checkNamed(ctx, h); err != nil {
 				return err
 			}
+			if len(r.errored) >= MaxErroredBlobs {
+				return fmt.Errorf("scrubbing: %d blobs failed with ordinary errors, last: %s",
+					len(r.errored), r.report.Unverified[len(r.report.Unverified)-1].Error)
+			}
 		}
 	}
+}
+
+func (r *runner) withoutErrored(page []store.Hash) []store.Hash {
+	if len(r.errored) == 0 {
+		return page
+	}
+	kept := make([]store.Hash, 0, len(page))
+	for _, h := range page {
+		if !r.errored[h] {
+			kept = append(kept, h)
+		}
+	}
+	return kept
 }
 
 func (r *runner) checkNamed(ctx context.Context, h store.Hash) error {
@@ -123,6 +171,9 @@ func (r *runner) checkNamed(ctx context.Context, h store.Hash) error {
 	if !ok {
 		return nil
 	}
+	if info.VerifiedAt != nil && !info.VerifiedAt.Before(r.report.StartedAt) {
+		return nil // a short page reaches past the unstamped blobs into ones this pass already did
+	}
 	began := r.opts.Now()
 	verifyErr := r.st.VerifySize(ctx, h, info.Size)
 	if verifyErr != nil && ctx.Err() != nil {
@@ -130,7 +181,11 @@ func (r *runner) checkNamed(ctx context.Context, h store.Hash) error {
 	}
 	reason, bad := badReason(verifyErr)
 	if verifyErr != nil && !bad {
-		return fmt.Errorf("scrubbing %s: %w", h, verifyErr)
+		// Could not verify right now: say nothing about the blob. It stays
+		// unflagged and unstamped and the next pass retries it.
+		r.errored[h] = true
+		r.noteUnverified(h, verifyErr)
+		return nil
 	}
 
 	if err := r.ix.BlobVerifiedSet(h, r.opts.Now()); err != nil {
@@ -152,8 +207,12 @@ func (r *runner) checkNamed(ctx context.Context, h store.Hash) error {
 	return nil
 }
 
+func (r *runner) noteUnverified(h store.Hash, err error) {
+	r.report.Unverified = append(r.report.Unverified, Unverified{Hash: h, Error: err.Error()})
+}
+
 // badReason classifies a Verify error: a missing blob or a *CorruptError is
-// "bad"; nil is good; anything else is a failure of scrub itself.
+// "bad"; nil is good; anything else (EMFILE, EACCES, ...) is no verdict.
 func badReason(err error) (reason string, bad bool) {
 	if err == nil {
 		return "", false
@@ -213,8 +272,21 @@ func (r *runner) checkOrphans(ctx context.Context) error {
 		if named {
 			return nil
 		}
+		if r.inGrace(h) {
+			return nil
+		}
 		return r.checkOrphan(ctx, h, size)
 	})
+}
+
+// inGrace reports whether the blob file is younger than OrphanGrace, or cannot
+// be stat'ed: a blob Put linked a moment ago may not be named by the index yet.
+func (r *runner) inGrace(h store.Hash) bool {
+	modified, err := r.st.ModTime(h)
+	if err != nil {
+		return true // gone or unreadable right now: do not accuse it
+	}
+	return r.opts.Now().Sub(modified) < OrphanGrace
 }
 
 func (r *runner) checkOrphan(ctx context.Context, h store.Hash, size int64) error {
@@ -225,7 +297,7 @@ func (r *runner) checkOrphan(ctx context.Context, h store.Hash, size int64) erro
 	}
 	reason, bad := badReason(verifyErr)
 	if verifyErr != nil && !bad {
-		return fmt.Errorf("scrubbing orphan %s: %w", h, verifyErr)
+		r.noteUnverified(h, verifyErr) // still an orphan; its bytes are unjudged
 	}
 	r.charge(size, began)
 	r.report.Findings = append(r.report.Findings, Finding{Hash: h, Kind: FindingOrphan, Reason: reason})

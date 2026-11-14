@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/tjmisko/coldstore/internal/fsx"
+	"github.com/tjmisko/coldstore/internal/fsx/fsxtest"
 	"github.com/tjmisko/coldstore/internal/index"
 	"github.com/tjmisko/coldstore/internal/journal"
 	"github.com/tjmisko/coldstore/internal/store"
@@ -117,13 +120,16 @@ func findingSet(report Report) map[string]string {
 	return out
 }
 
+// afterGrace is a clock far enough ahead that every blob file is past OrphanGrace.
+func afterGrace() time.Time { return time.Now().Add(OrphanGrace + time.Minute) }
+
 func damaged(t *testing.T) (*fixture, Report) {
 	f := newFixture(t, 20)
 	f.flipByte(f.hashes[0]) // A
 	f.truncate(f.hashes[1]) // B
 	f.remove(f.hashes[2])   // C
 	f.put("unnamed blob D", false)
-	report, err := Run(context.Background(), f.st, f.ix, Options{Sleep: noSleep})
+	report, err := Run(context.Background(), f.st, f.ix, Options{Sleep: noSleep, Now: afterGrace})
 	must(t, err)
 	return f, report
 }
@@ -216,7 +222,7 @@ func TestRunCorruption(t *testing.T) {
 		f.restore(f.hashes[0], f.contents[0])
 		f.restore(f.hashes[1], f.contents[1])
 		f.restore(f.hashes[2], f.contents[2])
-		report, err := Run(context.Background(), f.st, f.ix, Options{Sleep: noSleep})
+		report, err := Run(context.Background(), f.st, f.ix, Options{Sleep: noSleep, Now: afterGrace})
 		must(t, err)
 		got := findingSet(report)
 		if len(got) != 1 {
@@ -375,6 +381,131 @@ func TestRunRate(t *testing.T) {
 		must(t, err)
 		if slept > 1100*time.Millisecond {
 			t.Fatalf("slept %v for one readable 100 byte blob at 100 B/s", slept)
+		}
+	})
+}
+
+func TestRunOrphanGrace(t *testing.T) {
+	t.Run("should not report an orphan when its file is younger than the grace window", func(t *testing.T) {
+		f := newFixture(t, 2)
+		f.put("linked by an ingest whose journal append is pending", false)
+		report, err := Run(context.Background(), f.st, f.ix, Options{Sleep: noSleep})
+		must(t, err)
+		if len(report.Findings) != 0 {
+			t.Fatalf("findings = %v, want none for an in-flight ingest", report.Findings)
+		}
+		if events, _ := f.ix.Events("", "blob_orphan", 10); len(events) != 0 {
+			t.Fatalf("%d blob_orphan events for an in-flight ingest", len(events))
+		}
+	})
+
+	t.Run("should report an orphan when its file is older than the grace window", func(t *testing.T) {
+		f := newFixture(t, 2)
+		h := f.put("abandoned unnamed blob", false)
+		report, err := Run(context.Background(), f.st, f.ix, Options{Sleep: noSleep, Now: afterGrace})
+		must(t, err)
+		if got := findingSet(report); len(got) != 1 || got[h.String()] != "orphan:" {
+			t.Fatalf("findings = %v", got)
+		}
+	})
+}
+
+func TestRunOrdinaryErrors(t *testing.T) {
+	faultyStore := func(f *fixture, h store.Hash, cause error) *store.Disk {
+		faulty := fsxtest.NewFaulty(fsx.OS())
+		faulty.Inject(fsxtest.Fault{Op: fsxtest.OpOpen, PathContains: h.String(), Nth: 1, Err: &fs.PathError{Op: "open", Err: cause}})
+		st, err := store.Open(faulty, f.root)
+		must(t, err)
+		return st
+	}
+
+	t.Run("should not flag the blob bad or raise blob_bad when open fails with EMFILE", func(t *testing.T) {
+		f := newFixture(t, 5)
+		st := faultyStore(f, f.hashes[2], syscall.EMFILE)
+		report, err := Run(context.Background(), st, f.ix, Options{Sleep: noSleep})
+		must(t, err)
+		if len(report.Findings) != 0 {
+			t.Fatalf("findings = %v, want none", report.Findings)
+		}
+		info, _, _ := f.ix.Blob(f.hashes[2])
+		if info.Bad {
+			t.Fatal("a transient error flagged the blob bad")
+		}
+		if events, _ := f.ix.Events("", "blob_bad", 10); len(events) != 0 {
+			t.Fatalf("%d blob_bad events", len(events))
+		}
+		if len(report.Unverified) != 1 || report.Unverified[0].Hash != f.hashes[2] {
+			t.Fatalf("Unverified = %+v", report.Unverified)
+		}
+	})
+
+	t.Run("should still check every other blob when one fails with an ordinary error", func(t *testing.T) {
+		f := newFixture(t, 5)
+		st := faultyStore(f, f.hashes[0], syscall.EACCES)
+		report, err := Run(context.Background(), st, f.ix, Options{Sleep: noSleep})
+		must(t, err)
+		if report.Checked != 4 {
+			t.Fatalf("Checked = %d, want the 4 other blobs", report.Checked)
+		}
+	})
+
+	t.Run("should leave the blob unstamped and retry it when the next pass runs", func(t *testing.T) {
+		f := newFixture(t, 3)
+		st := faultyStore(f, f.hashes[1], syscall.EMFILE)
+		_, err := Run(context.Background(), st, f.ix, Options{Sleep: noSleep})
+		must(t, err)
+		info, _, _ := f.ix.Blob(f.hashes[1])
+		if info.VerifiedAt != nil {
+			t.Fatal("an unverified blob was stamped verified")
+		}
+		report, err := Run(context.Background(), f.st, f.ix, Options{Sleep: noSleep})
+		must(t, err)
+		if report.Checked != 3 || len(report.Unverified) != 0 {
+			t.Fatalf("retry report = %+v", report)
+		}
+		info, _, _ = f.ix.Blob(f.hashes[1])
+		if info.VerifiedAt == nil {
+			t.Fatal("the retried blob was not stamped")
+		}
+	})
+
+	t.Run("should still flag the blob bad when the device reports EIO", func(t *testing.T) {
+		f := newFixture(t, 3)
+		st := faultyStore(f, f.hashes[1], syscall.EIO)
+		report, err := Run(context.Background(), st, f.ix, Options{Sleep: noSleep})
+		must(t, err)
+		if got := findingSet(report); got[f.hashes[1].String()] != "bad:unreadable" {
+			t.Fatalf("findings = %v", got)
+		}
+	})
+}
+
+func TestRunManyOrdinaryErrors(t *testing.T) {
+	const blobs = pageBlobs + 10
+	inject := func(f *fixture, count int) *store.Disk {
+		faulty := fsxtest.NewFaulty(fsx.OS())
+		for _, h := range f.hashes[:count] {
+			faulty.Inject(fsxtest.Fault{Op: fsxtest.OpOpen, PathContains: h.String(), Nth: 1, Err: &fs.PathError{Op: "open", Err: syscall.EMFILE}})
+		}
+		st, err := store.Open(faulty, f.root)
+		must(t, err)
+		return st
+	}
+
+	t.Run("should attempt every named blob when more than a page of them fail with ordinary errors", func(t *testing.T) {
+		f := newFixture(t, 0)
+		for i := 0; i < blobs; i++ {
+			f.hashes = append(f.hashes, f.put(fmt.Sprintf("distinct-blob-%05d", i), true))
+		}
+		failing := pageBlobs + 5
+		st := inject(f, failing)
+		report, err := Run(context.Background(), st, f.ix, Options{Sleep: noSleep})
+		must(t, err)
+		if report.Checked != blobs-failing || len(report.Unverified) != failing {
+			t.Fatalf("checked=%d unverified=%d, want %d and %d", report.Checked, len(report.Unverified), blobs-failing, failing)
+		}
+		if report.Checked+len(report.Unverified) != blobs {
+			t.Fatal("some named blob was neither checked nor listed as unverified")
 		}
 	})
 }

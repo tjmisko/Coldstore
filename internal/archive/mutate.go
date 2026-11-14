@@ -282,11 +282,27 @@ type ReceiptLine struct {
 	Verified     bool   `json:"verified"`      // store.Verify passed during this call
 	InCollection bool   `json:"in_collection"` // a live placement in this collection has it as current
 	Size         int64  `json:"size"`
+	// Status is "not_held", "verified", "bad" (the bytes failed verification) or
+	// "error" (verification could not run right now; nothing was marked bad).
+	Status string `json:"status"`
+	// Error is the message behind Status "error".
+	Error string `json:"error,omitempty"`
 }
+
+// Receipt statuses.
+const (
+	ReceiptNotHeld  = "not_held"
+	ReceiptVerified = "verified"
+	ReceiptBad      = "bad"
+	ReceiptError    = "error"
+)
 
 // Receipt answers, for each hash and in order, whether the archive holds it,
 // whether it verifies right now, and whether it is live in the collection. A
-// verification failure marks the blob bad and records blob_bad.
+// verification failure that is evidence about the bytes (a CorruptError or a
+// missing blob) marks the blob bad and records blob_bad. Any other failure
+// (EMFILE, EACCES, ...) is reported on that hash as status "error" and marks
+// nothing.
 func (s *Service) Receipt(ctx context.Context, collection string, hashes []store.Hash) ([]ReceiptLine, error) {
 	if err := s.enter(); err != nil {
 		return nil, err
@@ -307,7 +323,7 @@ func (s *Service) Receipt(ctx context.Context, collection string, hashes []store
 }
 
 func (s *Service) receiptLine(ctx context.Context, collection string, h store.Hash) (ReceiptLine, error) {
-	line := ReceiptLine{Hash: h.String()}
+	line := ReceiptLine{Hash: h.String(), Status: ReceiptNotHeld}
 	info, held, err := s.core.ix.Blob(h)
 	if err != nil {
 		return line, err
@@ -318,11 +334,13 @@ func (s *Service) receiptLine(ctx context.Context, collection string, h store.Ha
 	line.Held, line.Size = true, info.Size
 	switch err := s.verifyBlob(ctx, h, info); {
 	case err == nil:
-		line.Verified = true
+		line.Verified, line.Status = true, ReceiptVerified
 	case ctx.Err() != nil:
 		return line, ctx.Err()
-	case !errors.Is(err, ErrBlobBad):
-		return line, err
+	case errors.Is(err, ErrBlobBad):
+		line.Status = ReceiptBad
+	default:
+		line.Status, line.Error = ReceiptError, err.Error()
 	}
 	line.InCollection, err = s.liveInCollection(collection, h)
 	return line, err

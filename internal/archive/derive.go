@@ -19,6 +19,7 @@ const (
 	derivePageSize     = 64
 	deriveMaxAttempts  = 3
 	scrubCheckInterval = time.Hour
+	scrubDoneEvent     = "scrub_done" // recorded when a pass finishes without error or unverified blobs
 	thumbSuffix        = ".thumb.jpg"
 	thumbTempMiddle    = ".tmp"
 )
@@ -185,6 +186,13 @@ func (s *Service) ScrubStart(rateBytesPerSec int64) error {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			s.opts.Logger.Warn("archive: scrub stopped", "err", err)
 		}
+		if err == nil && len(report.Unverified) == 0 {
+			// Persist the completion so a restart schedules relative to it.
+			if recErr := s.core.ix.EventRecord(s.now(), scrubDoneEvent, "", "",
+				fmt.Sprintf("checked %d blobs, %d findings, %d unverified", report.Checked, len(report.Findings), len(report.Unverified))); recErr != nil {
+				s.opts.Logger.Warn("archive: recording scrub completion", "err", recErr)
+			}
+		}
 		s.scrubMu.Lock()
 		s.scrubbing = false
 		s.scrubLast = &report
@@ -199,15 +207,13 @@ func (s *Service) ScrubStatus() ScrubStatus {
 	return ScrubStatus{Running: s.scrubbing, Checked: s.scrubDone, Total: s.scrubAll, Last: s.scrubLast}
 }
 
-// lastScrubTime is when a pass last finished: this process's last report, else
-// the oldest verified_at (a pass stamps every blob), else the zero time when a
-// blob has never been verified.
+// lastScrubTime is when a pass last completed without error: the newest
+// scrub_done event (recorded by this process or an earlier one), else the oldest
+// verified_at (a pass stamps every blob), else the zero time when a blob has
+// never been verified.
 func (s *Service) lastScrubTime() (time.Time, bool) {
-	s.scrubMu.Lock()
-	last := s.scrubLast
-	s.scrubMu.Unlock()
-	if last != nil {
-		return last.FinishedAt, true
+	if events, err := s.core.ix.Events("", scrubDoneEvent, 1); err == nil && len(events) > 0 {
+		return events[0].At, true
 	}
 	hashes, err := s.core.ix.BlobsByVerifiedAge(1)
 	if err != nil || len(hashes) == 0 {
@@ -220,8 +226,19 @@ func (s *Service) lastScrubTime() (time.Time, bool) {
 	return *info.VerifiedAt, true
 }
 
-// scrubIfDue starts a pass when the last one is older than ScrubInterval.
+func (s *Service) importActive() bool {
+	s.importMu.Lock()
+	defer s.importMu.Unlock()
+	return s.importBusy
+}
+
+// scrubIfDue starts a pass when the last completed one is older than
+// ScrubInterval. It never starts one while an import run is active: the import
+// is reading the same disk, and half its blobs are not yet named.
 func (s *Service) scrubIfDue() {
+	if s.importActive() {
+		return
+	}
 	last, any := s.lastScrubTime()
 	if !any || s.now().Sub(last) < s.opts.ScrubInterval {
 		return

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"strconv"
@@ -64,7 +65,15 @@ func (s *Server) handleHeadBlob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "blob not held")
 		return
 	}
-	if _, onDisk, err := s.archive.Store().Has(hash); err != nil || !onDisk {
+	_, onDisk, err := s.archive.Store().Has(hash)
+	if err != nil {
+		// Only a missing file means "not held"; any other stat failure says
+		// nothing about the blob, so the uploader must not be told to re-send.
+		s.logger.Error("checking blob on disk", "hash", hash.String(), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to check blob")
+		return
+	}
+	if !onDisk {
 		writeError(w, http.StatusNotFound, "blob not held")
 		return
 	}
@@ -330,6 +339,12 @@ func (s *Server) resolveCollectionBytes(w http.ResponseWriter, id int64) (*catal
 	}
 	blobPath := s.archive.Store().Path(entry.Hash)
 	if _, err := os.Stat(blobPath); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			// EMFILE, EACCES, ...: nothing is known about the blob. Mark nothing.
+			s.logger.Error("checking blob file", "hash", entry.Hash.String(), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to read file")
+			return nil, "", false
+		}
 		s.markBlobBad(entry.Hash, "missing")
 		writeError(w, http.StatusNotFound, "blob file is missing")
 		return nil, "", false
@@ -417,6 +432,10 @@ func (s *Server) streamVerified(w http.ResponseWriter, blob io.Reader, size int6
 		}
 		if err != nil {
 			s.logger.Warn("reading blob for download", "hash", want.String(), "error", err)
+			if !errors.Is(err, syscall.EIO) {
+				// Not device evidence: say nothing about the blob, just abort.
+				panic(http.ErrAbortHandler)
+			}
 			failure = "unreadable"
 		}
 	}

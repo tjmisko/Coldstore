@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/tjmisko/coldstore/internal/fsx"
+	"github.com/tjmisko/coldstore/internal/fsx/fsxtest"
 )
 
 func openTestStore(t *testing.T) (*Disk, string) {
@@ -161,20 +163,77 @@ func TestPut(t *testing.T) {
 		}
 	})
 
-	t.Run("should return CorruptError and not replace the blob when the held copy is damaged", func(t *testing.T) {
-		disk, _ := openTestStore(t)
+	t.Run("should replace the blob and report a repair when the held copy is damaged", func(t *testing.T) {
+		disk, root := openTestStore(t)
 		content := []byte("will be damaged, 0123456789")
 		h := mustPut(t, disk, content)
 		damage(t, disk.Path(h), func(b []byte) []byte { b[3] ^= 0xff; return b })
 
-		_, _, err := disk.Put(context.Background(), bytes.NewReader(content), nil)
-		var corrupt *CorruptError
-		if !errors.As(err, &corrupt) || corrupt.Reason != ReasonHashMismatch {
-			t.Fatalf("err = %v, want CorruptError hash_mismatch", err)
+		res, err := disk.PutDetailed(context.Background(), bytes.NewReader(content), nil)
+		if err != nil || res.Hash != h || res.Size != int64(len(content)) {
+			t.Fatalf("PutDetailed = %+v, %v", res, err)
 		}
-		got, readErr := os.ReadFile(disk.Path(h))
-		if readErr != nil || bytes.Equal(got, content) {
-			t.Errorf("damaged blob was replaced (%v)", readErr)
+		if !res.Repaired || res.RepairedReason != ReasonHashMismatch {
+			t.Errorf("repair not reported: %+v", res)
+		}
+		if err := disk.Verify(context.Background(), h); err != nil {
+			t.Errorf("repaired blob does not verify: %v", err)
+		}
+		info, err := os.Stat(disk.Path(h))
+		if err != nil || info.Mode().Perm() != 0o444 {
+			t.Errorf("repaired blob mode = %v (%v), want 0444", info.Mode().Perm(), err)
+		}
+		if names := listDir(t, filepath.Join(root, "tmp")); len(names) != 0 {
+			t.Errorf("tmp not empty: %v", names)
+		}
+	})
+
+	t.Run("should repair a truncated blob when the same bytes are Put again", func(t *testing.T) {
+		disk, _ := openTestStore(t)
+		content := bytes.Repeat([]byte("truncate me "), 50)
+		h := mustPut(t, disk, content)
+		damage(t, disk.Path(h), func(b []byte) []byte { return b[:len(b)/3] })
+		res, err := disk.PutDetailed(context.Background(), bytes.NewReader(content), nil)
+		if err != nil || !res.Repaired {
+			t.Fatalf("PutDetailed = %+v, %v", res, err)
+		}
+		if err := disk.Verify(context.Background(), h); err != nil {
+			t.Errorf("Verify: %v", err)
+		}
+	})
+
+	t.Run("should not report a repair when the held copy verifies", func(t *testing.T) {
+		disk, _ := openTestStore(t)
+		content := []byte("healthy")
+		mustPut(t, disk, content)
+		res, err := disk.PutDetailed(context.Background(), bytes.NewReader(content), nil)
+		if err != nil || res.Repaired {
+			t.Fatalf("PutDetailed = %+v, %v", res, err)
+		}
+	})
+
+	t.Run("should not replace the blob when verifying the held copy fails with an ordinary error", func(t *testing.T) {
+		root := t.TempDir()
+		real, err := Open(fsx.OS(), root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := []byte("held, damaged, and unreadable right now")
+		h := mustPut(t, real, content)
+		damage(t, real.Path(h), func(b []byte) []byte { b[0] ^= 0xff; return b })
+		before, _ := os.ReadFile(real.Path(h))
+		disk, err := Open(&failingOpenFS{FS: fsx.OS(), err: &fs.PathError{Op: "open", Err: syscall.EMFILE}, only: real.Path(h)}, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, err = disk.Put(context.Background(), bytes.NewReader(content), nil)
+		var corrupt *CorruptError
+		if err == nil || errors.As(err, &corrupt) || !errors.Is(err, syscall.EMFILE) {
+			t.Fatalf("err = %v, want a plain EMFILE error", err)
+		}
+		after, _ := os.ReadFile(real.Path(h))
+		if !bytes.Equal(before, after) {
+			t.Errorf("blob was replaced on an ordinary error")
 		}
 	})
 
@@ -260,6 +319,44 @@ func TestOpenConstructor(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(root, "blobs", "sha256")); err != nil {
 			t.Errorf("blobs/sha256 not created: %v", err)
+		}
+	})
+
+	t.Run("should remove a stale non-empty staging directory when the store is opened", func(t *testing.T) {
+		root := t.TempDir()
+		nested := filepath.Join(root, "tmp", "stale-dir", "inner")
+		if err := os.MkdirAll(nested, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(nested, "junk"), []byte("junk"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(fsx.OS(), root); err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		if names := listDir(t, filepath.Join(root, "tmp")); len(names) != 0 {
+			t.Errorf("stale entries remain: %v", names)
+		}
+	})
+
+	t.Run("should open and skip an entry that cannot be removed when tmp holds one", func(t *testing.T) {
+		root := t.TempDir()
+		tmp := filepath.Join(root, "tmp")
+		if err := os.MkdirAll(tmp, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"put-stuck", "put-fine"} {
+			if err := os.WriteFile(filepath.Join(tmp, name), []byte("junk"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		faulty := fsxtest.NewFaulty(fsx.OS())
+		faulty.Inject(fsxtest.Fault{Op: fsxtest.OpRemove, PathContains: "put-stuck", Nth: 1, Err: syscall.EBUSY})
+		if _, err := Open(faulty, root); err != nil {
+			t.Fatalf("Open must not fail on a stale entry: %v", err)
+		}
+		if names := listDir(t, tmp); len(names) != 1 || names[0] != "put-stuck" {
+			t.Errorf("tmp = %v, want only put-stuck left", names)
 		}
 	})
 }
@@ -454,14 +551,14 @@ func TestVerifyCorruption(t *testing.T) {
 		}
 	})
 
-	t.Run("should report unreadable when the blob cannot be read", func(t *testing.T) {
+	t.Run("should report unreadable with the cause when the device returns EIO", func(t *testing.T) {
 		root := t.TempDir()
 		real, err := Open(fsx.OS(), root)
 		if err != nil {
 			t.Fatal(err)
 		}
 		h := mustPut(t, real, content)
-		disk, err := Open(&failingOpenFS{FS: fsx.OS()}, root)
+		disk, err := Open(&failingOpenFS{FS: fsx.OS(), err: &fs.PathError{Op: "open", Err: syscall.EIO}}, root)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -470,6 +567,108 @@ func TestVerifyCorruption(t *testing.T) {
 		if !errors.As(err, &corrupt) || corrupt.Reason != ReasonUnreadable {
 			t.Fatalf("err = %v", err)
 		}
+		if !errors.Is(err, syscall.EIO) {
+			t.Errorf("the cause was dropped: %v", err)
+		}
+	})
+
+	for name, cause := range map[string]error{
+		"EMFILE": syscall.EMFILE, "ENFILE": syscall.ENFILE, "EACCES": syscall.EACCES,
+		"EPERM": syscall.EPERM, "EINTR": syscall.EINTR, "EAGAIN": syscall.EAGAIN,
+	} {
+		t.Run("should return an ordinary error and not a CorruptError when open fails with "+name, func(t *testing.T) {
+			root := t.TempDir()
+			real, err := Open(fsx.OS(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := mustPut(t, real, content)
+			disk, err := Open(&failingOpenFS{FS: fsx.OS(), err: &fs.PathError{Op: "open", Err: cause}, only: real.Path(h)}, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = disk.Verify(context.Background(), h)
+			var corrupt *CorruptError
+			if err == nil || errors.As(err, &corrupt) || errors.Is(err, ErrNotFound) || !errors.Is(err, cause) {
+				t.Fatalf("err = %v, want a plain error wrapping %v", err, cause)
+			}
+		})
+	}
+
+	t.Run("should return an ordinary error when a read fails with EINTR mid-blob", func(t *testing.T) {
+		root := t.TempDir()
+		real, err := Open(fsx.OS(), root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := mustPut(t, real, content)
+		faulty := fsxtest.NewFaulty(fsx.OS())
+		faulty.Inject(fsxtest.Fault{Op: fsxtest.OpRead, PathContains: h.String(), Nth: 1, Err: syscall.EINTR})
+		disk, err := Open(faulty, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = disk.Verify(context.Background(), h)
+		var corrupt *CorruptError
+		if err == nil || errors.As(err, &corrupt) || !errors.Is(err, syscall.EINTR) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("should report unreadable when a read fails with EIO mid-blob", func(t *testing.T) {
+		root := t.TempDir()
+		real, err := Open(fsx.OS(), root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h := mustPut(t, real, content)
+		faulty := fsxtest.NewFaulty(fsx.OS())
+		faulty.Inject(fsxtest.Fault{Op: fsxtest.OpRead, PathContains: h.String(), Nth: 1, Err: syscall.EIO})
+		disk, err := Open(faulty, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = disk.Verify(context.Background(), h)
+		var corrupt *CorruptError
+		if !errors.As(err, &corrupt) || corrupt.Reason != ReasonUnreadable || !errors.Is(err, syscall.EIO) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("should return the context error and not a CorruptError when the context is cancelled", func(t *testing.T) {
+		disk, _ := openTestStore(t)
+		h := mustPut(t, disk, content)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := disk.Verify(ctx, h)
+		var corrupt *CorruptError
+		if !errors.Is(err, context.Canceled) || errors.As(err, &corrupt) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("should drop cached pages before re-reading when verifying", func(t *testing.T) {
+		disk, _ := openTestStore(t)
+		h := mustPut(t, disk, content)
+		var dropped int
+		saved := dropPageCache
+		dropPageCache = func(fsx.File) { dropped++ }
+		defer func() { dropPageCache = saved }()
+		if err := disk.Verify(context.Background(), h); err != nil {
+			t.Fatal(err)
+		}
+		if dropped != 1 {
+			t.Errorf("dropPageCache called %d times by Verify, want 1", dropped)
+		}
+		dropped = 0
+		mustPut(t, disk, []byte("another blob"))
+		if dropped != 1 {
+			t.Errorf("dropPageCache called %d times by Put's re-verify, want 1", dropped)
+		}
+	})
+
+	t.Run("should not fail when the file cannot be advised", func(t *testing.T) {
+		dropPageCache(nil) // best effort: must not panic on a file with no descriptor
 	})
 
 	t.Run("should still verify every other blob when one is damaged", func(t *testing.T) {
@@ -579,9 +778,17 @@ type overstatingInfo struct {
 
 func (i overstatingInfo) Size() int64 { return i.FileInfo.Size() + i.extra }
 
-// failingOpenFS fails every Open (read-only) with EIO.
-type failingOpenFS struct{ fsx.FS }
+// failingOpenFS fails Open (read-only) with err, for the path only when only is
+// set and for every path otherwise.
+type failingOpenFS struct {
+	fsx.FS
+	err  error
+	only string
+}
 
 func (f *failingOpenFS) Open(name string) (fsx.File, error) {
-	return nil, errors.New("input/output error")
+	if f.only != "" && name != f.only {
+		return f.FS.Open(name)
+	}
+	return nil, f.err
 }
