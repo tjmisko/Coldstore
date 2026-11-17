@@ -174,7 +174,14 @@ func startImport(svc Archive, w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	default:
-		writeJSON(w, http.StatusAccepted, map[string]int64{"id": id})
+		// The answer names the run, not just its id: ids are held in memory and
+		// start again at 1 after a restart, so an id alone does not say which
+		// import a later status belongs to.
+		run := ImportRun{ID: id}
+		if status, found := svc.ImportStatus(id); found {
+			run.Collection, run.Dir, run.StartedAt = status.Collection, status.Dir, status.StartedAt
+		}
+		writeJSON(w, http.StatusAccepted, run)
 	}
 }
 
@@ -314,13 +321,40 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	return nil
 }
 
-// StartImport asks the daemon to import dir into collection and returns the run id.
+// ImportRun identifies one import the daemon started. The id alone is not an
+// identity: the daemon keeps runs in memory and numbers them from 1 again after
+// a restart, so a different import can later answer to the same id. Collection,
+// the resolved Dir and StartedAt together pin the run a client asked for.
+type ImportRun struct {
+	ID         int64     `json:"id"`
+	Collection string    `json:"collection"`
+	Dir        string    `json:"dir"`
+	StartedAt  time.Time `json:"started_at"`
+}
+
+// Matches reports whether status describes this very run. A run with no start
+// time (an older daemon that answered with the id only) matches nothing: a
+// client that cannot tell runs apart must not report one as finished.
+func (r ImportRun) Matches(status archive.ImportStatus) bool {
+	return !r.StartedAt.IsZero() &&
+		status.ID == r.ID &&
+		status.Collection == r.Collection &&
+		status.Dir == r.Dir &&
+		status.StartedAt.Equal(r.StartedAt)
+}
+
+// StartImportRun asks the daemon to import dir into collection and returns the
+// identity of the run it started.
+func (c *Client) StartImportRun(ctx context.Context, collection, dir string) (ImportRun, error) {
+	var run ImportRun
+	err := c.do(ctx, http.MethodPost, "/control/v1/imports", importRequest{Collection: collection, Dir: dir}, &run)
+	return run, err
+}
+
+// StartImport is StartImportRun for callers that only need the id.
 func (c *Client) StartImport(ctx context.Context, collection, dir string) (int64, error) {
-	var answer struct {
-		ID int64 `json:"id"`
-	}
-	err := c.do(ctx, http.MethodPost, "/control/v1/imports", importRequest{Collection: collection, Dir: dir}, &answer)
-	return answer.ID, err
+	run, err := c.StartImportRun(ctx, collection, dir)
+	return run.ID, err
 }
 
 // ImportStatus reads the progress of an import run.

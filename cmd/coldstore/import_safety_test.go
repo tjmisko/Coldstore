@@ -124,17 +124,30 @@ func TestSummariseImport(t *testing.T) {
 	})
 }
 
+// followedRun is the run every followImport test starts; fakes answer as it
+// unless a test is about a daemon that answers as something else.
+var followedRun = control.ImportRun{
+	ID: 1, Collection: "photos", Dir: "/srv/source",
+	StartedAt: time.Date(2026, 11, 16, 21, 0, 0, 0, time.UTC),
+}
+
+func statusOf(run control.ImportRun, state string) archive.ImportStatus {
+	return archive.ImportStatus{ID: run.ID, Collection: run.Collection, Dir: run.Dir, StartedAt: run.StartedAt, State: state}
+}
+
 // slowImportArchive is a control.Archive whose one import runs until cancelled.
 type slowImportArchive struct {
 	cancelled atomic.Bool
 }
 
 func (a *slowImportArchive) ImportStart(string, string) (int64, error) { return 1, nil }
-func (a *slowImportArchive) ImportStatus(id int64) (archive.ImportStatus, bool) {
+func (a *slowImportArchive) ImportStatus(int64) (archive.ImportStatus, bool) {
 	if a.cancelled.Load() {
-		return archive.ImportStatus{ID: id, State: "cancelled", FilesSeen: 5}, true
+		status := statusOf(followedRun, "cancelled")
+		status.FilesSeen = 5
+		return status, true
 	}
-	return archive.ImportStatus{ID: id, State: "running"}, true
+	return statusOf(followedRun, "running"), true
 }
 func (a *slowImportArchive) ImportCancel(int64) error         { a.cancelled.Store(true); return nil }
 func (a *slowImportArchive) ScrubStart(int64) error           { return nil }
@@ -156,13 +169,94 @@ func TestFollowImportInterrupt(t *testing.T) {
 		time.AfterFunc(30*time.Millisecond, interrupt)
 		var out, errOut bytes.Buffer
 
-		code := followImport(ctx, control.NewClient(control.SocketPath(root)), 1, &out, &errOut)
+		code := followImport(ctx, control.NewClient(control.SocketPath(root)), followedRun, &out, &errOut)
 
 		if !fake.cancelled.Load() {
 			t.Fatal("Ctrl-C never reached the daemon as a cancel")
 		}
 		if code != 1 || !strings.Contains(errOut.String(), "CANCELLED") {
 			t.Fatalf("exit %d stderr %q", code, errOut.String())
+		}
+	})
+}
+
+// cannedImportArchive answers every status request with one fixed answer.
+type cannedImportArchive struct {
+	status archive.ImportStatus
+	found  bool
+}
+
+func (a cannedImportArchive) ImportStart(string, string) (int64, error) { return a.status.ID, nil }
+func (a cannedImportArchive) ImportStatus(int64) (archive.ImportStatus, bool) {
+	return a.status, a.found
+}
+func (a cannedImportArchive) ImportCancel(int64) error         { return nil }
+func (a cannedImportArchive) ScrubStart(int64) error           { return nil }
+func (a cannedImportArchive) ScrubStatus() archive.ScrubStatus { return archive.ScrubStatus{} }
+
+func followCanned(t *testing.T, fake cannedImportArchive, run control.ImportRun) (int, string, string) {
+	t.Helper()
+	root := shortDir(t)
+	server, err := control.Start(t.Context(), fake, control.SocketPath(root), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	var out, errOut bytes.Buffer
+	code := followImport(t.Context(), control.NewClient(control.SocketPath(root)), run, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+// The daemon numbers imports from 1 in memory, so after a restart another
+// import answers to an id a client is still polling. Each case below is a clean
+// "done" that belongs to a different run; reporting any of them as this
+// command's result would pass an import that never finished.
+func TestFollowImportIdentity(t *testing.T) {
+	done := func(change func(*archive.ImportStatus)) archive.ImportStatus {
+		status := statusOf(followedRun, "done")
+		status.FilesSeen, status.FilesCreated = 9, 9
+		if change != nil {
+			change(&status)
+		}
+		return status
+	}
+
+	t.Run("should exit 0 when the finished run is the one that was started", func(t *testing.T) {
+		code, out, errOut := followCanned(t, cannedImportArchive{status: done(nil), found: true}, followedRun)
+		if code != 0 || !strings.Contains(out, "import 1 done") {
+			t.Fatalf("exit %d stdout %q stderr %q", code, out, errOut)
+		}
+	})
+
+	strangers := map[string]func(*archive.ImportStatus){
+		"started at a different time":         func(s *archive.ImportStatus) { s.StartedAt = s.StartedAt.Add(time.Second) },
+		"imports a different directory":       func(s *archive.ImportStatus) { s.Dir = "/srv/other" },
+		"imports into a different collection": func(s *archive.ImportStatus) { s.Collection = "other" },
+		"reports no start time at all":        func(s *archive.ImportStatus) { s.StartedAt = time.Time{} },
+	}
+	for name, change := range strangers {
+		t.Run("should exit 1 and call the outcome unknown when the run under the same id "+name, func(t *testing.T) {
+			code, out, errOut := followCanned(t, cannedImportArchive{status: done(change), found: true}, followedRun)
+			if code != 1 || !strings.Contains(errOut, "UNKNOWN") {
+				t.Fatalf("exit %d stderr %q", code, errOut)
+			}
+			if strings.Contains(out, "done") {
+				t.Fatalf("another run's result was printed as this one's: %q", out)
+			}
+		})
+	}
+
+	t.Run("should exit 1 when the daemon that started the import answered with an id and nothing else", func(t *testing.T) {
+		code, _, errOut := followCanned(t, cannedImportArchive{status: done(nil), found: true}, control.ImportRun{ID: 1})
+		if code != 1 || !strings.Contains(errOut, "UNKNOWN") {
+			t.Fatalf("exit %d stderr %q", code, errOut)
+		}
+	})
+
+	t.Run("should exit 1 and say the import did not finish when the daemon no longer knows the id", func(t *testing.T) {
+		code, _, errOut := followCanned(t, cannedImportArchive{found: false}, followedRun)
+		if code != 1 || !strings.Contains(errOut, "did NOT finish") {
+			t.Fatalf("exit %d stderr %q", code, errOut)
 		}
 	})
 }

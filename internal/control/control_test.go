@@ -84,9 +84,16 @@ func TestControl(t *testing.T) {
 			}
 		}
 
-		id, err := client.StartImport(t.Context(), "photos", source)
+		run, err := client.StartImportRun(t.Context(), "photos", source)
 		if err != nil {
-			t.Fatalf("StartImport: %v", err)
+			t.Fatalf("StartImportRun: %v", err)
+		}
+		id := run.ID
+		if run.Collection != "photos" || run.Dir == "" || run.StartedAt.IsZero() {
+			t.Fatalf("the start answer does not identify the run: %+v", run)
+		}
+		if first, err := client.ImportStatus(t.Context(), id); err != nil || !run.Matches(first) {
+			t.Fatalf("the started run does not match its own status: run %+v status %+v err %v", run, first, err)
 		}
 		var status archive.ImportStatus
 		deadline := time.Now().Add(20 * time.Second)
