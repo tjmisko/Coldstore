@@ -238,12 +238,14 @@ func TestJobsEndpointShouldRejectAnEmptySelection(t *testing.T) {
 func TestJobsEndpointShouldRejectAnUnknownAction(t *testing.T) {
 	env := newTestEnv(t)
 
-	w := do(t, env, "POST", "/api/v1/jobs", map[string]any{"action": "delete", "ids": []int64{1}})
+	// "delete" was the example here until permanent delete became a real job
+	// action; the name must be one the endpoint will never grow.
+	w := do(t, env, "POST", "/api/v1/jobs", map[string]any{"action": "shred", "ids": []int64{1}})
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "unknown action") ||
-		!strings.Contains(w.Body.String(), "delete") {
+		!strings.Contains(w.Body.String(), "shred") {
 		t.Errorf("body = %s, want it to name the action", w.Body.String())
 	}
 }
