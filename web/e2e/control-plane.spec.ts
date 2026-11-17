@@ -108,7 +108,7 @@ test("selects a contiguous range with shift-click and reports the count", async 
   await expect(tiles.nth(4)).toHaveAttribute("data-selected", "false");
 });
 
-test("restores a selection as a job and repaints the rows as synced and pinned", async ({ page }) => {
+test("restores a selection as a job, drops the rows from the archived filter and shows them synced and pinned", async ({ page }) => {
   await openFolder(page, "CameraRoll");
   await openView(page, "files");
   await applyFilter(page, "archived");
@@ -130,6 +130,17 @@ test("restores a selection as a job and repaints the rows as synced and pinned",
   await page.locator("[data-selection-bar]").getByRole("button", { name: "Restore", exact: true }).click();
 
   await expect(page.locator("[data-job-summary]")).toContainText("Restored 2 of 2");
+
+  // The list is still filtered to "archived", and a restored file is no longer
+  // archived: the rows leave. They used to be repainted in place, which showed
+  // synced files under a filter that says archived.
+  for (const file of [first, second]) {
+    await expect(page.locator(`tr[data-file-id="${file.id}"]`)).toHaveCount(0);
+  }
+
+  // A restore pins what it brings back with pin_source=restore, which is the
+  // auto-pinned filter: both rows must be there, synced.
+  await applyFilter(page, "pinned-auto");
   for (const file of [first, second]) {
     const row = page.locator(`tr[data-file-id="${file.id}"]`);
     await expect(row).toContainText("synced");

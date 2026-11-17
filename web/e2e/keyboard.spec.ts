@@ -168,8 +168,21 @@ test("toggles the folder sidebar and steps folders with the requested keys", asy
 
   await page.keyboard.press("F1");
   await expect(sidebar).toBeVisible();
+
+  // The keys step through the sidebar in the order it is drawn, so the
+  // neighbour is read from the sidebar rather than named here. This used to
+  // say "Backups", which was true only while the sidebar listed folders in
+  // config order; it now lists them by label and the next one is "Documents".
+  const labels = (await sidebar.locator("[data-folder-nav]").evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute("data-folder-nav")),
+  )).filter((label): label is string => label !== null && label !== "all");
+  const at = labels.indexOf("CameraRoll");
+  expect(at, "CameraRoll is not in the sidebar").toBeGreaterThanOrEqual(0);
+  expect(labels.length).toBeGreaterThan(1);
+  const below = labels[(at + 1) % labels.length];
+
   await page.keyboard.press("Control+ArrowDown");
-  await expect(page.getByRole("heading", { name: "Backups", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: below, level: 2 })).toBeVisible();
   await page.keyboard.press("Control+ArrowUp");
   await expect(page.getByRole("heading", { name: "CameraRoll", level: 2 })).toBeVisible();
 });
