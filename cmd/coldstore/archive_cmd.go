@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -181,7 +182,7 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 
 	client := control.NewClient(control.SocketPath(cfg.Storage.ColdStoragePath))
-	id, err := client.StartImport(ctx, *collection, dir)
+	run, err := client.StartImportRun(ctx, *collection, dir)
 	if errors.Is(err, control.ErrDaemonNotRunning) {
 		fmt.Fprintf(stderr, "coldstore: %s\n", daemonRequiredMessage)
 		return exitArchiveFailure
@@ -190,11 +191,16 @@ func runImport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "coldstore: starting the import: %v\n", err)
 		return exitArchiveFailure
 	}
-	fmt.Fprintf(stdout, "import %d started: %s -> %s\n", id, dir, *collection)
-	return followImport(ctx, client, id, stdout, stderr)
+	fmt.Fprintf(stdout, "import %d started: %s -> %s\n", run.ID, dir, *collection)
+	return followImport(ctx, client, run, stdout, stderr)
 }
 
-func followImport(ctx context.Context, client *control.Client, id int64, stdout, stderr io.Writer) int {
+// followImport polls run until it finishes and returns the exit code. Every
+// answer is checked against the run that was started: a daemon that restarted
+// numbers its imports from 1 again, so the same id can come to mean another
+// import, and reporting that one's "done" would pass an import nobody finished.
+func followImport(ctx context.Context, client *control.Client, run control.ImportRun, stdout, stderr io.Writer) int {
+	id := run.ID
 	ticker := time.NewTicker(importPollInterval)
 	defer ticker.Stop()
 	// Polling and the cancel request must outlive Ctrl-C: the interrupt is
@@ -203,8 +209,20 @@ func followImport(ctx context.Context, client *control.Client, id int64, stdout,
 	interrupted := ctx.Done()
 	for {
 		status, err := client.ImportStatus(pollCtx, id)
+		var refusal *control.StatusError
+		if errors.As(err, &refusal) && refusal.Code == http.StatusNotFound {
+			fmt.Fprintf(stderr, "coldstore: the daemon no longer knows import %d (it restarted): "+
+				"the import did NOT finish; run it again (imports are idempotent)\n", id)
+			return exitArchiveFailure
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "coldstore: reading import progress (the import may still be running): %v\n", err)
+			return exitArchiveFailure
+		}
+		if !run.Matches(status) {
+			fmt.Fprintf(stderr, "coldstore: import %d is no longer the import this command started "+
+				"(the daemon restarted and reused the number, or it is too old to say which run this is): "+
+				"the outcome is UNKNOWN; run it again (imports are idempotent)\n", id)
 			return exitArchiveFailure
 		}
 		if status.State != importRunning {
